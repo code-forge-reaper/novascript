@@ -2,7 +2,7 @@
 /**
  * NovaScript/flux V3
  *  from the same guy that made
- * "https://github.com/cross-sniper/blodvm"
+ * "https://github.com/cross-sniper/bloodvm"
  **/
 import fs from "fs"
 
