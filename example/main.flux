@@ -1,2 +1,10 @@
-print("PI = "+M_PI)
-print("sqrt of PI = "+M_SQRT(M_PI))
+var x = 39
+var y number = 40
+var rect = {
+	size: {
+		width: 30
+	}
+}
+
+print("%i + %i = %i", x, y, x+y)
+print(rect)
