@@ -213,7 +213,7 @@ export class Interpreter {
                     tokens.push({ type: "boolean", value: id === "true" });
                 } else if ([
                     "var", "if", "else", "end", "jmp", "func", "label",
-                    "return", "import", "namespace", "while", "forEach", "for",
+                    "return", "import", "as", "namespace", "while", "forEach", "for",
                     "do", "in", "try", "errored"
                 ].includes(id)) {
                     tokens.push({ type: "keyword", value: id });
@@ -509,7 +509,14 @@ export class Interpreter {
             const fileToken = this.expectType("string");
             const filename = fileToken.value;
             this.consumeToken();
-            return { type: "ImportStmt", filename };
+            let alias = null;
+            if(this.getNextToken() && this.getNextToken().value === "as") {
+                this.consumeToken();
+                const aliasToken = this.expectType("identifier");
+                alias = aliasToken.value;
+                this.consumeToken();
+            }
+            return { type: "ImportStmt", filename, alias };
         }
 
         // --- Expression statement (fallback) ---
@@ -868,7 +875,8 @@ export class Interpreter {
 
                     const handler = env.get("js-import-handler");
                     const result = handler(filePath);
-                    this.globals.define(filePath, result);
+                    let name = stmt.alias || filePath
+                    this.globals.define(name, result);
                     break;
                 }
 
@@ -897,8 +905,9 @@ export class Interpreter {
                 // Use filename (minus extension) as variable name
                 const pathObj = path.parse(filePath);
                 const moduleName = pathObj.name; // e.g., "math" from "math.nova"
-
-                this.globals.define(moduleName, namespace);
+                let name = stmt.alias || moduleName
+                this.globals.define(name, namespace);
+                //this.globals.define(moduleName, namespace);
                 break;
             }
 
