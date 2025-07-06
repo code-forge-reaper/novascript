@@ -1,0 +1,103 @@
+%YAML 1.2
+---
+name: NovaScript
+file_extensions:
+  - nova
+scope: source.nova
+
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: numbers
+    - include: function_definitions
+    - include: namespace_definition
+    - include: macros
+    - include: keywords
+    - include: builtins
+    - include: function_calls
+    - include: operators
+    - include: types
+    - match: \b[a-zA-Z_]\w*\b
+      scope: variable.other.nova
+
+  comments:
+    - match: '//.*$'
+      scope: comment.line.double-slash.nova
+    - match: '/\*'
+      scope: comment.block.nova
+      push:
+        - meta_scope: comment.block.nova
+        - match: '.*\*/'
+          pop: true
+        - match: '.+'
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.nova
+      push: double_quoted_string
+
+  double_quoted_string:
+    - meta_scope: string.quoted.double.nova
+    - match: '\\.'
+      scope: constant.character.escape.nova
+    - match: '"'
+      scope: punctuation.definition.string.end.nova
+      pop: true
+
+  numbers:
+    - match: \b-?\d+(\.\d+)?\b
+      scope: constant.numeric.nova
+
+  keywords:
+    # Declarations
+    - match: \b(var|func|def|label|jmp|return|import)\b
+      scope: keyword.declaration.nova
+
+    # Control flow
+    - match: \b(for|forEach|while|do|in|end|else|if|try|errored)\b
+      scope: keyword.control.flow.nova
+
+    # Types
+    - match: \b(string|number|boolean|void)\b
+      scope: storage.type.nova
+
+  macros:
+    - match: \bdef\b\s+(\w+)
+      captures:
+        1: entity.name.function.macro.nova
+      scope: keyword.declaration.nova
+
+  namespace_definition:
+    - match: \bnamespace\b\s+(\w+)
+      captures:
+        1: entity.name.namespace.nova
+      scope: keyword.declaration.nova
+
+  function_definitions:
+    - match: \bfunc\b\s+(\w+)
+      captures:
+        1: entity.name.function.definition.nova
+      scope: keyword.declaration.nova
+
+  function_calls:
+    - match: \b[a-zA-Z_]\w*(?=\()
+      scope: entity.name.function.nova
+
+  builtins:
+    - match: \b(true|false|print)\b
+      scope: constant.language.nova
+
+  types:
+    - match: \btype\b\s+(\w+)
+      captures:
+        1: entity.name.type.nova
+      scope: storage.type.nova
+
+  operators:
+    - match: \.\.\.
+      scope: keyword.operator.variadic.nova
+    - match: ==|!=|<=|>=|\+=|-=|\*=|/=|&&|\|\||[=+\-*/<>!]
+      scope: keyword.operator.nova
+    - match: '[\(\)\[\]\{\}\.,:;]'
+      scope: punctuation.separator.nova
