@@ -1,0 +1,5 @@
+func x(x) // surprisingly, this function works :lol:
+	return x * 35
+end
+
+

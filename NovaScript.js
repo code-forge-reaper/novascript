@@ -5,6 +5,7 @@
  * "https://github.com/cross-sniper/bloodvm"
  **/
 import fs from "fs"
+import path from "path"
 
 /* A special exception used to implement returning values from functions */
 class ReturnException extends Error {
@@ -16,7 +17,7 @@ class ReturnException extends Error {
 
 /* Helper function for type checking */
 function checkType(expected, value) {
-    switch(expected) {
+    switch (expected) {
         case "number":
             if (typeof value !== "number") throw new Error(`Type mismatch: expected number, got ${typeof value}`);
             break;
@@ -67,6 +68,8 @@ class Environment {
 export class Interpreter {
     constructor(source) {
         this.source = source;
+        this.importedFiles = new Set();
+
         // Tokenize the source code into an array of tokens.
         this.tokens = this.tokenize(source);
         this.current = 0;
@@ -74,9 +77,11 @@ export class Interpreter {
         this.globals = new Environment();
         // Storage for NovaScript function definitions.
         this.functions = {};
-        // Storage for macro definitions.
-        this.macros = {};
         this.globals.define('print', console.log)
+        this.globals.define('object', {
+            keys: Object.keys,
+            values: Object.values
+        })
 
     }
 
@@ -166,7 +171,7 @@ export class Interpreter {
                     tokens.push({ type: "boolean", value: id === "true" });
                 } else if ([
                     "var", "if", "else", "end", "jmp", "func", "label",
-                    "return", "def", "import", "while", "forEach", "for",
+                    "return", "import","namespace", "while", "forEach", "for",
                     "do", "in", "try", "errored"
                 ].includes(id)) {
                     tokens.push({ type: "keyword", value: id });
@@ -392,6 +397,18 @@ export class Interpreter {
             return { type: "IfStmt", condition, thenBlock, elseBlock };
         }
 
+        // --- namespace ---
+        if (token.type === "keyword" && token.value === "namespace") {
+            this.consumeToken();
+            const nameToken = this.expectType("identifier");
+            const name = nameToken.value;
+            this.consumeToken();
+            const body = this.parseBlockUntil(["end"]);
+            this.expectToken("end");
+            this.consumeToken();
+            return { type: "NamespaceStmt", name, body };
+        }
+
         // --- Jump statement ---
         if (token.type === "keyword" && token.value === "jmp") {
             this.consumeToken();
@@ -432,35 +449,6 @@ export class Interpreter {
             this.expectToken("end");
             this.consumeToken();
             return { type: "FuncDecl", name, parameters, body };
-        }
-
-        // --- Macro definition ---
-        if (token.type === "keyword" && token.value === "def") {
-            this.consumeToken();
-            const nameToken = this.expectType("identifier");
-            const name = nameToken.value;
-            this.consumeToken();
-            this.expectToken("(");
-            this.consumeToken();
-            const parameters = [];
-            if (this.getNextToken() && this.getNextToken().value !== ")") {
-                while (true) {
-                    const paramToken = this.expectType("identifier");
-                    parameters.push(paramToken.value);
-                    this.consumeToken();
-                    if (this.getNextToken() && this.getNextToken().value === ",") {
-                        this.consumeToken();
-                    } else {
-                        break;
-                    }
-                }
-            }
-            this.expectToken(")");
-            this.consumeToken();
-            const body = this.parseBlockUntil(["end"]);
-            this.expectToken("end");
-            this.consumeToken();
-            return { type: "MacroDecl", name, parameters, body };
         }
 
         // --- Return statement ---
@@ -663,7 +651,15 @@ export class Interpreter {
         }
         else if (token.type === "identifier") {
             this.consumeToken();
-            if (this.getNextToken() && this.getNextToken().value === "(") {
+            if (this.getNextToken() && this.getNextToken().value === "["){
+                // array access
+                this.consumeToken();
+                const index = this.parseExpression();
+                this.expectToken("]");
+                this.consumeToken();
+                node = { type: "ArrayAccess", name: token.value, index };
+            }
+            else if (this.getNextToken() && this.getNextToken().value === "(") {
                 this.consumeToken();
                 const args = [];
                 if (this.getNextToken() && this.getNextToken().value !== ")") {
@@ -694,11 +690,39 @@ export class Interpreter {
         }
 
         while (this.getNextToken() && this.getNextToken().value === ".") {
-            this.consumeToken();
+            this.consumeToken();                             // consume "."
             const propToken = this.expectType("identifier");
-            this.consumeToken();
-            node = { type: "PropertyAccess", object: node, property: propToken.value };
+            const propName = propToken.value;
+            this.consumeToken();                             // consume identifier
+
+            // method-call?
+            if (this.getNextToken() && this.getNextToken().value === "(") {
+                this.consumeToken();                           // consume "("
+                const args = [];
+                while (this.getNextToken() && this.getNextToken().value !== ")") {
+                    args.push(this.parseExpression());
+                    if (this.getNextToken().value === ",") this.consumeToken();
+                    else break;
+                }
+                this.expectToken(")");
+                this.consumeToken();                           // consume ")"
+
+                node = {
+                    type: "MethodCall",
+                    object: node,        // the `x` part of `x.foo(...)`
+                    method: propName,    // the `"foo"`
+                    arguments: args
+                };
+            } else {
+                // plain property access
+                node = {
+                    type: "PropertyAccess",
+                    object: node,
+                    property: propName
+                };
+            }
         }
+
         return node;
     }
 
@@ -783,6 +807,53 @@ export class Interpreter {
                 }
                 break;
             }
+            case "ImportStmt": {
+                const filePath = stmt.filename;
+
+                if (this.importedFiles.has(filePath)) break;
+                this.importedFiles.add(filePath);
+
+                const fullPath = path.resolve(filePath);
+                const code = fs.readFileSync(fullPath, "utf8");
+
+                // Evaluate in isolated environment
+                const importedInterpreter = new Interpreter(code);
+                const importedEnv = new Environment();
+                importedInterpreter.globals = importedEnv;
+
+                importedInterpreter.functions = this.functions;
+                importedInterpreter.importedFiles = this.importedFiles;
+
+                importedInterpreter.interpret();
+
+                // Create namespace object
+                const namespace = {};
+                for (const key in importedEnv.values) {
+                    namespace[key] = importedEnv.values[key];
+                }
+
+                // Use filename (minus extension) as variable name
+                const pathObj = path.parse(filePath);
+                const moduleName = pathObj.name; // e.g., "math" from "math.nova"
+
+                this.globals.define(moduleName, namespace);
+                break;
+            }
+
+            case "NamespaceStmt":{
+                const nenv = new Environment(env);
+                this.executeBlock(stmt.body, nenv);
+
+                const namespace = {};
+                for (const key in nenv.values) {
+                    namespace[key] = nenv.values[key];
+                }
+
+                env.define(stmt.name, namespace);
+                break;
+            }
+
+
             case "ReturnStmt": {
                 const value = stmt.expression ? this.evaluateExpr(stmt.expression, env) : undefined;
                 throw new ReturnException(value);
@@ -870,6 +941,26 @@ export class Interpreter {
                 const args = expr.arguments.map(arg => this.evaluateExpr(arg, env));
                 return func(...args);
             }
+            case "MethodCall": {
+                // get the object (e.g. x)
+                const obj = this.evaluateExpr(expr.object, env);
+                // look up the method (e.g. x["foo"])
+                const fn = obj[expr.method];
+                if (typeof fn !== "function") {
+                    throw new Error(`${expr.method} is not a function`);
+                }
+                // evaluate arguments
+                const argVals = expr.arguments.map(arg => this.evaluateExpr(arg, env));
+                // call it with obj as `this`, if you want that semantics:
+                return fn.apply(obj, argVals);
+            }
+            case "ArrayAccess": {
+                const arr = env.get(expr.name)
+                const index = this.evaluateExpr(expr.index, env);
+                //console.log(arr, expr.index, index, arr[index]);
+                return arr[index];
+            }
+
             case "PropertyAccess": {
                 const obj = this.evaluateExpr(expr.object, env);
                 return obj[expr.property];

@@ -1,12 +1,10 @@
-import {Interpreter} from "./NovaScript.js"
-import fs from "fs"
-const filename = process.argv[2] || "main.flux";
-
-const source = fs.readFileSync(filename, "utf-8");
-const runtime = new Interpreter(source)
-
-runtime.globals.define("M_SQRT",Math.sqrt)
-runtime.globals.define("M_PI",Math.PI)
-
-//console.log(runtime.parseBlock())
-runtime.interpret()
+#!/usr/bin/env node
+import { Interpreter } from './nova.js'; // assuming your interpreter is saved as nova.js
+import fs from 'fs';
+const arg = process.argv[2]||"main.nova"
+const code = fs.readFileSync(arg).toString()
+const interpreter = new Interpreter(code);
+interpreter.globals.define("isTesting", ()=>{
+	return process.env.TESTING === "true"
+})
+interpreter.interpret();
