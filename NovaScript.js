@@ -11,7 +11,7 @@ function initGlobals(globals) {
     const runtimeVersion = {
         major: 0,
         minor: 2,
-        patch: 5
+        patch: 7
     }
     globals.define('Runtime', {
         dump: {
@@ -91,6 +91,15 @@ class Environment {
             throw new Error(`Undefined variable ${name}`);
         }
     }
+    has(name) {
+        if (name in this.values) {
+            return true;
+        } else if (this.parent) {
+            return this.parent.has(name);
+        } else {
+            return false;
+        }
+    }
     get(name) {
         if (name in this.values) {
             return this.values[name];
@@ -115,8 +124,8 @@ export class Interpreter {
         // Storage for NovaScript function definitions.
         this.functions = {};
         initGlobals(this.globals);
-
     }
+    currentEnv = null;
 
 
     // ----------------------
@@ -772,11 +781,19 @@ export class Interpreter {
     }
 
     executeBlock(statements, env) {
+        const previousEnv = this.currentEnv;
+        this.currentEnv = env;
+
         for (const stmt of statements) {
             this.executeStmt(stmt, env);
         }
+
+        this.currentEnv = previousEnv;
     }
 
+    getCurrentContext() {
+        return this.currentEnv;
+    }
     executeStmt(stmt, env) {
         switch (stmt.type) {
             case "VarDecl": {
@@ -841,7 +858,19 @@ export class Interpreter {
                 break;
             }
             case "ImportStmt": {
-                const filePath = stmt.filename;
+                if(stmt.filename.startsWith("js:")) {
+                    let filePath = stmt.filename;
+                    filePath = filePath.substring(3);
+                    if(!env.has("js-import-handler"))
+                    {
+                        throw new Error("js-import-handler is not defined, your runtime should define it, interpreter.globals.define('js-import-handler', handler)");
+                    }
+
+                    const handler = env.get("js-import-handler");
+                    const result = handler(filePath);
+                    this.globals.define(filePath, result);
+                    break;
+                }
 
                 if (this.importedFiles.has(filePath)) break;
                 this.importedFiles.add(filePath);
@@ -877,14 +906,11 @@ export class Interpreter {
                 const nenv = new Environment(env);
                 this.executeBlock(stmt.body, nenv);
 
-                const namespace = {};
-                for (const key in nenv.values) {
-                    namespace[key] = nenv.values[key];
-                }
-
-                env.define(stmt.name, namespace);
+                // Store the actual env, not a plain object
+                env.define(stmt.name, nenv);
                 break;
             }
+
 
 
             case "ReturnStmt": {
@@ -924,7 +950,13 @@ export class Interpreter {
                 throw new Error(`Unknown statement type: ${stmt.type}`);
         }
     }
-
+    expandProp(obj, env)
+    {
+        if(obj.type == "PropertyAccess"){
+            return this.expandProp(obj.object, env)
+        }
+        return obj
+    }
     evaluateExpr(expr, env) {
         switch (expr.type) {
             case "Literal":
@@ -935,6 +967,7 @@ export class Interpreter {
                 if (expr.target.type !== "Identifier") {
                     throw new Error("Can only assign to variables");
                 }
+
                 const value = this.evaluateExpr(expr.value, env);
                 env.assign(expr.target.name, value);
                 return value;
@@ -975,29 +1008,33 @@ export class Interpreter {
                 return func(...args);
             }
             case "MethodCall": {
-                // get the object (e.g. x)
                 const obj = this.evaluateExpr(expr.object, env);
-                // look up the method (e.g. x["foo"])
-                const fn = obj[expr.method];
+                const fn = (obj instanceof Environment) ? obj.get(expr.method) : obj[expr.method];
+                
                 if (typeof fn !== "function") {
                     throw new Error(`${expr.method} is not a function`);
                 }
-                // evaluate arguments
+
                 const argVals = expr.arguments.map(arg => this.evaluateExpr(arg, env));
-                // call it with obj as `this`, if you want that semantics:
                 return fn.apply(obj, argVals);
             }
+
             case "ArrayAccess": {
                 const arr = env.get(expr.name)
                 const index = this.evaluateExpr(expr.index, env);
                 //console.log(arr, expr.index, index, arr[index]);
                 return arr[index];
             }
-
             case "PropertyAccess": {
                 const obj = this.evaluateExpr(expr.object, env);
+                
+                if (obj instanceof Environment) {
+                    return obj.get(expr.property);
+                }
+                
                 return obj[expr.property];
             }
+
             case "ArrayLiteral": {
                 return expr.elements.map(element => this.evaluateExpr(element, env));
             }
