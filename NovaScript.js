@@ -6,6 +6,43 @@
  **/
 import fs from "fs"
 import path from "path"
+function initGlobals(globals) {
+    globals.define('print', console.log)
+    const runtimeVersion = {
+        major: 0,
+        minor: 2,
+        patch: 5
+    }
+    globals.define('Runtime', {
+        dump: {
+            keys: Object.keys,
+            values: Object.values
+        },
+        version: runtimeVersion,
+        versionString: `v${runtimeVersion.major}.${runtimeVersion.minor}.${runtimeVersion.patch}`,
+        exit: function (code = 0) {
+            process.exit(code)
+        },
+        versionAtLeast: function (major, minor, patch) {
+            return runtimeVersion.major >= major && runtimeVersion.minor >= minor && runtimeVersion.patch >= patch
+        },
+        fs: { // instead of exposing the entire fs module, we expose just enough to not cause havoc
+            read: function (path) {
+                return fs.readFileSync(path, 'utf8')
+            },
+            write: function (path, contents) {
+                fs.writeFileSync(path, contents, 'utf8')
+            },
+            exists: function (path) {
+                return fs.existsSync(path)
+            }
+        },
+        time: {
+            now: () => Date.now(),
+            hrtime: () => process.hrtime.bigint().toString()
+        }
+    })
+}
 
 /* A special exception used to implement returning values from functions */
 class ReturnException extends Error {
@@ -77,11 +114,7 @@ export class Interpreter {
         this.globals = new Environment();
         // Storage for NovaScript function definitions.
         this.functions = {};
-        this.globals.define('print', console.log)
-        this.globals.define('object', {
-            keys: Object.keys,
-            values: Object.values
-        })
+        initGlobals(this.globals);
 
     }
 
@@ -171,7 +204,7 @@ export class Interpreter {
                     tokens.push({ type: "boolean", value: id === "true" });
                 } else if ([
                     "var", "if", "else", "end", "jmp", "func", "label",
-                    "return", "import","namespace", "while", "forEach", "for",
+                    "return", "import", "namespace", "while", "forEach", "for",
                     "do", "in", "try", "errored"
                 ].includes(id)) {
                     tokens.push({ type: "keyword", value: id });
@@ -651,7 +684,7 @@ export class Interpreter {
         }
         else if (token.type === "identifier") {
             this.consumeToken();
-            if (this.getNextToken() && this.getNextToken().value === "["){
+            if (this.getNextToken() && this.getNextToken().value === "[") {
                 // array access
                 this.consumeToken();
                 const index = this.parseExpression();
@@ -840,7 +873,7 @@ export class Interpreter {
                 break;
             }
 
-            case "NamespaceStmt":{
+            case "NamespaceStmt": {
                 const nenv = new Environment(env);
                 this.executeBlock(stmt.body, nenv);
 
