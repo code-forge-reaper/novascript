@@ -12,7 +12,6 @@ contexts:
     - include: numbers
     - include: function_definitions
     - include: namespace_definition
-    - include: macros
     - include: keywords
     - include: builtins
     - include: function_calls
@@ -53,6 +52,12 @@ contexts:
     # Declarations
     - match: \b(var|func|def|label|jmp|return|import)\b
       scope: keyword.declaration.nova
+      # import "some module" as alias
+    - match: \bas\b\s+(\w+)
+      captures:
+        1: entity.name.label.nova
+      scope: keyword.declaration.nova
+
 
     # Control flow
     - match: \b(for|forEach|while|do|in|end|else|if|try|errored)\b
@@ -61,12 +66,6 @@ contexts:
     # Types
     - match: \b(string|number|boolean|void)\b
       scope: storage.type.nova
-
-  macros:
-    - match: \bdef\b\s+(\w+)
-      captures:
-        1: entity.name.function.macro.nova
-      scope: keyword.declaration.nova
 
   namespace_definition:
     - match: \bnamespace\b\s+(\w+)
@@ -85,7 +84,7 @@ contexts:
       scope: entity.name.function.nova
 
   builtins:
-    - match: \b(true|false|print)\b
+    - match: \b(true|false)\b
       scope: constant.language.nova
 
   types:
