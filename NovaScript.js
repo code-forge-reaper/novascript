@@ -11,8 +11,9 @@ function initGlobals(globals) {
     const runtimeVersion = {
         major: 0,
         minor: 2,
-        patch: 7
+        patch: 9
     }
+    const args = process.argv.slice(2)
     globals.define('Runtime', {
         dump: {
             keys: Object.keys,
@@ -20,6 +21,14 @@ function initGlobals(globals) {
         },
         version: runtimeVersion,
         versionString: `v${runtimeVersion.major}.${runtimeVersion.minor}.${runtimeVersion.patch}`,
+        currentDirectory: process.cwd,
+        regex: (strPatt)=>{
+            return new RegExp(strPatt)
+        },
+        args: (id=undefined)=>{
+            if(id) return args[id]
+            return args
+        },
         exit: function (code = 0) {
             process.exit(code)
         },
@@ -37,8 +46,13 @@ function initGlobals(globals) {
                 return fs.existsSync(path)
             }
         },
+        URI: {
+            decode: (str)=> decodeURIComponent(str),
+            encode: (str)=> encodeURIComponent(str)
+        },
         time: {
             now: () => Date.now(),
+            str: () => new Date(),
             hrtime: () => process.hrtime.bigint().toString()
         }
     })
