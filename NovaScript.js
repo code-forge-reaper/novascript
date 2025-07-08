@@ -10,10 +10,11 @@ function initGlobals(globals) {
     globals.define('print', console.log)
     const runtimeVersion = {
         major: 0,
-        minor: 2,
-        patch: 9
+        minor: 3,
+        patch: 0
     }
     const args = process.argv.slice(2)
+    globals.define("json", JSON) // don't know why js wants json to be upcased
     globals.define('Runtime', {
         dump: {
             keys: Object.keys,
@@ -22,19 +23,30 @@ function initGlobals(globals) {
         version: runtimeVersion,
         versionString: `v${runtimeVersion.major}.${runtimeVersion.minor}.${runtimeVersion.patch}`,
         currentDirectory: process.cwd,
-        regex: (strPatt)=>{
+        regex: (strPatt) => {
             return new RegExp(strPatt)
         },
-        args: (id=undefined)=>{
-            if(id) return args[id]
+        args: (id = undefined) => {
+            if (id) return args[id]
             return args
         },
         exit: function (code = 0) {
             process.exit(code)
         },
-        versionAtLeast: function (major, minor, patch) {
-            return runtimeVersion.major >= major && runtimeVersion.minor >= minor && runtimeVersion.patch >= patch
+        versionAtLeast: function (maj, min, pat) {
+            if (runtimeVersion.major > maj) return true
+            if (runtimeVersion.major < maj) return false
+
+            if (runtimeVersion.minor > min) return true
+            if (runtimeVersion.minor < min) return false
+
+            return runtimeVersion.patch >= pat
         },
+        env: (key = undefined) => {
+            if (key) return process.env[key]
+            return process.env
+        },
+
         fs: { // instead of exposing the entire fs module, we expose just enough to not cause havoc
             read: function (path) {
                 return fs.readFileSync(path, 'utf8')
@@ -47,8 +59,8 @@ function initGlobals(globals) {
             }
         },
         URI: {
-            decode: (str)=> decodeURIComponent(str),
-            encode: (str)=> encodeURIComponent(str)
+            decode: (str) => decodeURIComponent(str),
+            encode: (str) => encodeURIComponent(str)
         },
         time: {
             now: () => Date.now(),
@@ -524,7 +536,7 @@ export class Interpreter {
             const filename = fileToken.value;
             this.consumeToken();
             let alias = null;
-            if(this.getNextToken() && this.getNextToken().value === "as") {
+            if (this.getNextToken() && this.getNextToken().value === "as") {
                 this.consumeToken();
                 const aliasToken = this.expectType("identifier");
                 alias = aliasToken.value;
@@ -879,11 +891,10 @@ export class Interpreter {
                 break;
             }
             case "ImportStmt": {
-                if(stmt.filename.startsWith("js:")) {
+                if (stmt.filename.startsWith("js:")) {
                     let filePath = stmt.filename;
                     filePath = filePath.substring(3);
-                    if(!env.has("js-import-handler"))
-                    {
+                    if (!env.has("js-import-handler")) {
                         throw new Error("js-import-handler is not defined, your runtime should define it, interpreter.globals.define('js-import-handler', handler)");
                     }
 
@@ -973,9 +984,8 @@ export class Interpreter {
                 throw new Error(`Unknown statement type: ${stmt.type}`);
         }
     }
-    expandProp(obj, env)
-    {
-        if(obj.type == "PropertyAccess"){
+    expandProp(obj, env) {
+        if (obj.type == "PropertyAccess") {
             return this.expandProp(obj.object, env)
         }
         return obj
