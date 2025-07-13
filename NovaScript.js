@@ -9,7 +9,7 @@ function initGlobals(globals) {
     const runtimeVersion = {
         major: 0,
         minor: 3,
-        patch: 0
+        patch: 2
     }
     const args = process.argv.slice(2)
     globals.define("json", JSON) // don't know why js wants json to be upcased
