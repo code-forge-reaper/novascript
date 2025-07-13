@@ -1,10 +1,27 @@
 func x(x) // surprisingly, this function works :lol:
 	return x * 35
 end
-
+var xp = {
+	val: 24,
+	valx:{
+		y:24
+	}
+}
+print(xp)
+xp.valx.y = 22
+xp.val =5
+print(xp)
 namespace test1
 	namespace test2
 	var x = 0
+
 	end
+	print(test2.x)
+
 end
 print(test1)
+try
+	test1.test2.x = 35
+errored msg
+	print("expected error",msg)
+end

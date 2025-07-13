@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 /**
- * NovaScript/flux V3
- *  from the same guy that made
- * "https://github.com/cross-sniper/bloodvm"
+ * NovaScript 
  **/
 import fs from "fs"
 import path from "path"
@@ -984,12 +982,41 @@ export class Interpreter {
                 throw new Error(`Unknown statement type: ${stmt.type}`);
         }
     }
-    expandProp(obj, env) {
-        if (obj.type == "PropertyAccess") {
-            return this.expandProp(obj.object, env)
+
+    expandPropTarget(expr, env) {
+        let current = expr;
+
+        // Walk down the left side to resolve the full object chain
+        const chain = [];
+
+        while (current.type === "PropertyAccess") {
+            chain.unshift(current.property); // collect property names in reverse
+            current = current.object;
         }
-        return obj
+
+        if (current.type !== "Identifier") {
+            throw new Error("Invalid base for property access: " + current.type);
+        }
+
+        // Resolve the base object from the environment
+        let obj = env.get(current.name);
+
+        // Walk through all but the last key to get to the parent
+        for (let i = 0; i < chain.length - 1; i++) {
+            const key = chain[i];
+            if (obj == null || typeof obj !== 'object') {
+                throw new Error("Cannot access property '" + key + "' on non-object");
+            }
+            obj = obj[key];
+        }
+
+        return {
+            obj,
+            key: chain[chain.length - 1] // the last key is what we’re assigning to
+        };
     }
+
+
     evaluateExpr(expr, env) {
         switch (expr.type) {
             case "Literal":
@@ -997,14 +1024,20 @@ export class Interpreter {
             case "Identifier":
                 return env.get(expr.name);
             case "AssignmentExpr": {
-                if (expr.target.type !== "Identifier") {
-                    throw new Error("Can only assign to variables");
+                const value = this.evaluateExpr(expr.value, env);
+
+                if (expr.target.type === "PropertyAccess") {
+                    const { obj, key } = this.expandPropTarget(expr.target, env);
+                    obj[key] = value;
+                } else if (expr.target.type === "Identifier") {
+                    env.assign(expr.target.name, value);
+                } else {
+                    throw new Error("Unsupported assignment target: " + expr.target.type);
                 }
 
-                const value = this.evaluateExpr(expr.value, env);
-                env.assign(expr.target.name, value);
                 return value;
             }
+
             case "BinaryExpr": {
                 const left = this.evaluateExpr(expr.left, env);
                 const right = this.evaluateExpr(expr.right, env);
