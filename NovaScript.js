@@ -75,6 +75,13 @@ class ReturnException extends Error {
         this.value = value;
     }
 }
+/* Special exceptions to implement break/continue */
+class BreakException extends Error {
+    constructor() { super("Break"); }
+}
+class ContinueException extends Error {
+    constructor() { super("Continue"); }
+}
 
 /* Helper function for type checking */
 function checkType(expected, value) {
@@ -236,7 +243,7 @@ export class Interpreter {
                 if (id === "true" || id === "false") {
                     tokens.push({ type: "boolean", value: id === "true" });
                 } else if ([
-                    "var", "if", "else", "end", "jmp", "func", "label",
+                    "var", "if", "else", "end", "break", "continue", "jmp", "func", "label",
                     "return", "import", "as", "namespace", "while", "forEach", "for",
                     "do", "in", "try", "errored"
                 ].includes(id)) {
@@ -447,6 +454,18 @@ export class Interpreter {
             this.consumeToken();
             return { type: "WhileStmt", condition, body };
         }
+
+        // --- Break statement ---
+        if (token.type === "keyword" && token.value === "break") {
+            this.consumeToken();
+            return { type: "BreakStmt" };
+        }
+        // --- Continue statement ---
+        if (token.type === "keyword" && token.value === "continue") {
+            this.consumeToken();
+            return { type: "ContinueStmt" };
+        }
+
 
         // --- If statement ---
         if (token.type === "keyword" && token.value === "if") {
@@ -839,6 +858,11 @@ export class Interpreter {
                 this.evaluateExpr(stmt.expression, env);
                 break;
             }
+            case "BreakStmt":
+                throw new BreakException();
+
+            case "ContinueStmt":
+                throw new ContinueException();
 
             case "TryStmt": {
                 try {
@@ -861,33 +885,50 @@ export class Interpreter {
             }
             case "WhileStmt": {
                 while (this.evaluateExpr(stmt.condition, env)) {
-                    this.executeBlock(stmt.body, new Environment(env));
+                    try {
+                        this.executeBlock(stmt.body, new Environment(env));
+                    }
+                    catch (e) {
+                        if (e instanceof BreakException)  { break; }
+                        if (e instanceof ContinueException) { continue; }
+                        throw e;
+                    }
                 }
                 break;
             }
             case "ForEachStmt": {
                 const list = this.evaluateExpr(stmt.list, env);
-                if (!Array.isArray(list)) {
-                    throw new Error("forEach expects an array");
-                }
                 for (const item of list) {
                     const loopEnv = new Environment(env);
                     loopEnv.define(stmt.variable, item);
-                    this.executeBlock(stmt.body, loopEnv);
+                    try {
+                        this.executeBlock(stmt.body, loopEnv);
+                    }
+                    catch (e) {
+                        if (e instanceof BreakException)  { break; }
+                        if (e instanceof ContinueException) { continue; }
+                        throw e;
+                    }
                 }
                 break;
             }
+
             case "ForStmt": {
-                const start = this.evaluateExpr(stmt.start, env);
-                const end = this.evaluateExpr(stmt.end, env);
-                const step = stmt.step ? this.evaluateExpr(stmt.step, env) : 1;
                 for (let i = start; i <= end; i += step) {
                     const loopEnv = new Environment(env);
                     loopEnv.define(stmt.variable, i);
-                    this.executeBlock(stmt.body, loopEnv);
+                    try {
+                        this.executeBlock(stmt.body, loopEnv);
+                    }
+                    catch (e) {
+                        if (e instanceof BreakException)  { break; }
+                        if (e instanceof ContinueException) { continue; }
+                        throw e;
+                    }
                 }
                 break;
             }
+
             case "ImportStmt": {
                 if (stmt.filename.startsWith("js:")) {
                     let filePath = stmt.filename;
