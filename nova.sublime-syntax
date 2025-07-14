@@ -87,11 +87,11 @@ contexts:
     - match: \b(true|false)\b
       scope: constant.language.nova
 
-  types:
-    - match: \btype\b\s+(\w+)
+  types: # the "keyword.declaration.nova" is just here because i don't know what else to label it as
+    - match: \b(switch|case|default)\b
       captures:
-        1: entity.name.type.nova
-      scope: storage.type.nova
+        1: keyword.declaration.nova
+      scope: keyword.declaration.nova
 
   operators:
     - match: \.\.\.
