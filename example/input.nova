@@ -1,0 +1,22 @@
+import "js:readline-sync" as r
+import "js:process"
+var stdout = process.stdout
+// this language is so old, i forgot i had added default parameters
+func input(prompt="> ")
+	stdout.write(prompt) // probably not a good idea to write directly, but i have no clue how to make console.log not add a new line
+	return r.question()
+end
+
+var name string = input("Enter your name: ")
+
+while true
+	print("what do you want to do?")
+	var action = input()
+
+	if action == "quit"
+		break
+	end
+
+	print("unknown action %s", action)
+
+end

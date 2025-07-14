@@ -1,6 +1,0 @@
-import "js:readline"
-
-var name string = ""
-print("Enter your name: ")
-name = readLine()
-print("Hello, " + name)
