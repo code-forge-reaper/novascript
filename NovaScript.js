@@ -25,7 +25,7 @@ function initGlobals(globals) {
     const runtimeVersion = {
         major: 0,
         minor: 3,
-        patch: 7
+        patch: 8
     }
     const args = process.argv.slice(2)
     globals.define("json", JSON) // don't know why js wants json to be upcased
@@ -164,6 +164,12 @@ class Environment {
 }
 
 export class Interpreter {
+    keywords = [
+                    "var", "if", "else", "end", "break", "continue", "func",
+                    "return", "import", "as", "namespace", "while", "forEach", "for",
+                    "do", "in", "try", "errored",
+                    "switch", "case", "default"
+                ]
     constructor(source) {
         this.source = source;
         this.importedFiles = new Set();
@@ -263,11 +269,7 @@ export class Interpreter {
                 }
                 if (id === "true" || id === "false") {
                     tokens.push({ type: "boolean", value: id === "true" });
-                } else if ([
-                    "var", "if", "else", "end", "break", "continue", "func",
-                    "return", "import", "as", "namespace", "while", "forEach", "for",
-                    "do", "in", "try", "errored"
-                ].includes(id)) {
+                } else if (this.keywords.includes(id)) {
                     tokens.push({ type: "keyword", value: id });
                 } else {
                     tokens.push({ type: "identifier", value: id });
@@ -406,6 +408,37 @@ export class Interpreter {
             this.consumeToken();
             const initializer = this.parseExpression();
             return { type: "VarDecl", name, typeAnnotation, initializer, modifier };
+        }
+
+        // --- Switch statement ---
+        if (token.type === "keyword" && token.value === "switch") {
+            this.consumeToken();
+            const expression = this.parseExpression();
+            const cases = [];
+            while (this.getNextToken().type === "keyword" && this.getNextToken().value === "case") {
+                this.consumeToken();
+                const caseExpr = this.parseExpression();
+                this.expectToken("do");
+                this.consumeToken();
+                const body = this.parseBlockUntil(["end"]);
+                this.expectToken("end");
+                this.consumeToken();
+                cases.push({ caseExpr, body });
+            }
+            if (this.getNextToken().type === "keyword" && this.getNextToken().value === "default") {
+                this.consumeToken();
+                this.expectToken("do");
+                this.consumeToken();
+                const body = this.parseBlockUntil(["end"]);
+                this.expectToken("end");
+                this.consumeToken();
+                cases.push({ caseExpr: null, body });
+            }
+
+            this.expectToken("end");
+            this.consumeToken();
+
+            return { type: "SwitchStmt", expression, cases };
         }
 
 
@@ -997,7 +1030,28 @@ export class Interpreter {
                 env.define(stmt.name, nenv);
                 break;
             }
+            case "SwitchStmt": {
+                const value = this.evaluateExpr(stmt.expression, env);
+                let matched = false;
 
+                for (const c of stmt.cases) {
+                    // Default case
+                    if (c.caseExpr === null) {
+                        if (!matched) {
+                            this.executeBlock(c.body, new Environment(env));
+                            break;
+                        }
+                    } else {
+                        const caseVal = this.evaluateExpr(c.caseExpr, env);
+                        if (value === caseVal) {
+                            this.executeBlock(c.body, new Environment(env));
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
 
 
             case "ReturnStmt": {
@@ -1031,7 +1085,7 @@ export class Interpreter {
             }
 
             default:
-                throw new Error(`Unknown statement type: ${stmt.type}`);
+                throw new Error(`Unknown statement type: ${stmt.type}\n${JSON.stringify(stmt, null, 2)}`);
         }
     }
 
@@ -1070,6 +1124,7 @@ export class Interpreter {
 
 
     evaluateExpr(expr, env) {
+        //console.log(expr)
         switch (expr.type) {
             case "Literal":
                 return expr.value;
