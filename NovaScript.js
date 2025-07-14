@@ -4,15 +4,36 @@
  **/
 import fs from "fs"
 import path from "path"
+// this will propagate to nova, since it uses js strings as well
+/*
+String.prototype.isNumber = function () {
+    return !isNaN(this) && !isNaN(parseFloat(this));
+};
+*/
+
+Object.defineProperty(String.prototype, 'isNumber', {
+    value: function () {
+        return !isNaN(this) && !isNaN(parseFloat(this));
+    },
+    writable: false,
+    configurable: false,
+    enumerable: false
+});
+
 function initGlobals(globals) {
     globals.define('print', console.log)
     const runtimeVersion = {
         major: 0,
         minor: 3,
-        patch: 6
+        patch: 7
     }
     const args = process.argv.slice(2)
     globals.define("json", JSON) // don't know why js wants json to be upcased
+    globals.define("parse", {
+        int: parseInt,
+        float: parseFloat,
+        str: String
+    })
     globals.define('Runtime', {
         dump: {
             keys: Object.keys,
