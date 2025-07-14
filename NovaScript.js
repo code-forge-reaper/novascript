@@ -9,7 +9,7 @@ function initGlobals(globals) {
     const runtimeVersion = {
         major: 0,
         minor: 3,
-        patch: 4
+        patch: 6
     }
     const args = process.argv.slice(2)
     globals.define("json", JSON) // don't know why js wants json to be upcased
@@ -243,7 +243,7 @@ export class Interpreter {
                 if (id === "true" || id === "false") {
                     tokens.push({ type: "boolean", value: id === "true" });
                 } else if ([
-                    "var", "if", "else", "end", "break", "continue", "jmp", "func", "label",
+                    "var", "if", "else", "end", "break", "continue", "func",
                     "return", "import", "as", "namespace", "while", "forEach", "for",
                     "do", "in", "try", "errored"
                 ].includes(id)) {
@@ -493,14 +493,7 @@ export class Interpreter {
             this.consumeToken();
             return { type: "NamespaceStmt", name, body };
         }
-
-        // --- Jump statement ---
-        if (token.type === "keyword" && token.value === "jmp") {
-            this.consumeToken();
-            const expression = this.parseExpression();
-            return { type: "JmpStmt", expression };
-        }
-
+        
         // --- Function declaration ---
         if (token.type === "keyword" && token.value === "func") {
             this.consumeToken();
@@ -1015,10 +1008,7 @@ export class Interpreter {
                 env.define(stmt.name, func);
                 break;
             }
-            case "JmpStmt": {
-                this.evaluateExpr(stmt.expression, env);
-                break;
-            }
+
             default:
                 throw new Error(`Unknown statement type: ${stmt.type}`);
         }
