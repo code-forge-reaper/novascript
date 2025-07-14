@@ -1005,8 +1005,8 @@ export class Interpreter {
             }
 
             case "ImportStmt": {
+                let filePath = stmt.filename;
                 if (stmt.filename.startsWith("js:")) {
-                    let filePath = stmt.filename;
                     filePath = filePath.substring(3);
                     if (!env.has("js-import-handler")) {
                         throw new Error("js-import-handler is not defined, your runtime should define it, interpreter.globals.define('js-import-handler', handler)");
@@ -1018,6 +1018,7 @@ export class Interpreter {
                     this.globals.define(name, result);
                     break;
                 }
+                filePath+=".nova";
 
                 if (this.importedFiles.has(filePath)) break;
                 this.importedFiles.add(filePath);
@@ -1027,7 +1028,7 @@ export class Interpreter {
 
                 // Evaluate in isolated environment
                 const importedInterpreter = new Interpreter(code);
-                const importedEnv = new Environment();
+                const importedEnv = new Environment(this.currentEnv);
                 importedInterpreter.globals = importedEnv;
 
                 importedInterpreter.functions = this.functions;
