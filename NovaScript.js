@@ -24,8 +24,8 @@ function initGlobals(globals) {
     globals.define('print', console.log)
     const runtimeVersion = {
         major: 0,
-        minor: 3,
-        patch: 9
+        minor: 4,
+        patch: 0
     }
     const args = process.argv.slice(2)
     globals.define("json", JSON) // don't know why js wants json to be upcased
@@ -34,6 +34,7 @@ function initGlobals(globals) {
         float: parseFloat,
         str: String
     })
+    globals.define("void", undefined)
     globals.define('Runtime', {
         dump: {
             keys: Object.keys,
