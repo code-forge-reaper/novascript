@@ -580,6 +580,11 @@ export class Interpreter {
                     if (this.getNextToken()?.value === "=") {
                         this.consumeToken();
                         defaultExpr = this.parseExpression();
+                        if(paramType){
+                            throw new Error("cannot have both type and default value, as that prevents type infering");
+                        }
+                        paramType = defaultExpr.value.type;
+
                     }
 
                     parameters.push({ name: paramName, type: paramType, default: defaultExpr });
