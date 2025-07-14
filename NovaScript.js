@@ -25,7 +25,7 @@ function initGlobals(globals) {
     const runtimeVersion = {
         major: 0,
         minor: 3,
-        patch: 8
+        patch: 9
     }
     const args = process.argv.slice(2)
     globals.define("json", JSON) // don't know why js wants json to be upcased
@@ -165,11 +165,11 @@ class Environment {
 
 export class Interpreter {
     keywords = [
-                    "var", "if", "else", "end", "break", "continue", "func",
-                    "return", "import", "as", "namespace", "while", "forEach", "for",
-                    "do", "in", "try", "errored",
-                    "switch", "case", "default"
-                ]
+        "var", "if", "else", "end", "break", "continue", "func",
+        "return", "import", "as", "namespace", "while", "forEach", "for",
+        "do", "in", "try", "errored",
+        "switch", "case", "default"
+    ]
     constructor(source) {
         this.source = source;
         this.importedFiles = new Set();
@@ -548,7 +548,6 @@ export class Interpreter {
             return { type: "NamespaceStmt", name, body };
         }
         
-        // --- Function declaration ---
         if (token.type === "keyword" && token.value === "func") {
             this.consumeToken();
             const nameToken = this.expectType("identifier");
@@ -556,31 +555,55 @@ export class Interpreter {
             this.consumeToken();
             this.expectToken("(");
             this.consumeToken();
+
             const parameters = [];
             if (this.getNextToken() && this.getNextToken().value !== ")") {
                 while (true) {
                     const paramToken = this.expectType("identifier");
                     const paramName = paramToken.value;
                     this.consumeToken();
+
+                    let paramType = null;
                     let defaultExpr = undefined;
-                    if (this.getNextToken() && this.getNextToken().value === "=") {
+
+                    // optional type annotation
+                    if (this.getNextToken()?.type === "identifier") {
+                        const typeToken = this.getNextToken();
+                        // simple heuristic: if it's a known type name, treat it as a type
+                        if (["string", "number", "bool"].includes(typeToken.value)) {
+                            paramType = typeToken.value;
+                            this.consumeToken();
+                        }
+                    }
+
+                    // optional default value
+                    if (this.getNextToken()?.value === "=") {
                         this.consumeToken();
                         defaultExpr = this.parseExpression();
                     }
-                    parameters.push({ name: paramName, default: defaultExpr });
-                    if (this.getNextToken() && this.getNextToken().value === ",") {
+
+                    parameters.push({ name: paramName, type: paramType, default: defaultExpr });
+
+                    if (this.getNextToken()?.value === ",") {
                         this.consumeToken();
                     } else {
                         break;
                     }
                 }
             }
+
             this.expectToken(")");
             this.consumeToken();
             const body = this.parseBlockUntil(["end"]);
             this.expectToken("end");
             this.consumeToken();
-            return { type: "FuncDecl", name, parameters, body };
+
+            return {
+                type: "FuncDecl",
+                name,
+                parameters,
+                body
+            };
         }
 
         // --- Return statement ---
@@ -936,7 +959,7 @@ export class Interpreter {
                         this.executeBlock(stmt.body, new Environment(env));
                     }
                     catch (e) {
-                        if (e instanceof BreakException)  { break; }
+                        if (e instanceof BreakException) { break; }
                         if (e instanceof ContinueException) { continue; }
                         throw e;
                     }
@@ -952,7 +975,7 @@ export class Interpreter {
                         this.executeBlock(stmt.body, loopEnv);
                     }
                     catch (e) {
-                        if (e instanceof BreakException)  { break; }
+                        if (e instanceof BreakException) { break; }
                         if (e instanceof ContinueException) { continue; }
                         throw e;
                     }
@@ -968,7 +991,7 @@ export class Interpreter {
                         this.executeBlock(stmt.body, loopEnv);
                     }
                     catch (e) {
-                        if (e instanceof BreakException)  { break; }
+                        if (e instanceof BreakException) { break; }
                         if (e instanceof ContinueException) { continue; }
                         throw e;
                     }
@@ -1062,14 +1085,34 @@ export class Interpreter {
             case "FuncDecl": {
                 const func = (...args) => {
                     const funcEnv = new Environment(env);
+
                     for (let i = 0; i < stmt.parameters.length; i++) {
                         const param = stmt.parameters[i];
                         let argVal = args[i];
+
+                        // apply default if missing
                         if (argVal === undefined && param.default !== undefined) {
                             argVal = this.evaluateExpr(param.default, env);
                         }
+
+                        // soft type check
+                        if (param.type) {
+                            const type = param.type;
+                            const actualType = typeof argVal;
+
+                            if (type === "number" && actualType !== "number") {
+                                throw new Error(`Type mismatch in function '${stmt.name}': parameter '${param.name}' expected number, got ${actualType}`);
+                            } else if (type === "string" && actualType !== "string") {
+                                throw new Error(`Type mismatch in function '${stmt.name}': parameter '${param.name}' expected string, got ${actualType}`);
+                            } else if (type === "bool" && actualType !== "boolean") {
+                                throw new Error(`Type mismatch in function '${stmt.name}': parameter '${param.name}' expected bool, got ${actualType}`);
+                            }
+                            // more types? add here
+                        }
+
                         funcEnv.define(param.name, argVal);
                     }
+
                     try {
                         this.executeBlock(stmt.body, funcEnv);
                     } catch (e) {
@@ -1080,6 +1123,7 @@ export class Interpreter {
                         }
                     }
                 };
+
                 env.define(stmt.name, func);
                 break;
             }
