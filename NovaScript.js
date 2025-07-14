@@ -1028,7 +1028,7 @@ export class Interpreter {
 
                 // Evaluate in isolated environment
                 const importedInterpreter = new Interpreter(code);
-                const importedEnv = new Environment(this.currentEnv);
+                const importedEnv = new Environment(this.globals);
                 importedInterpreter.globals = importedEnv;
 
                 importedInterpreter.functions = this.functions;
