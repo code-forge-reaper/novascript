@@ -1016,7 +1016,8 @@ export class Interpreter {
                     const handler = env.get("js-import-handler");
                     const result = handler(filePath);
                     let name = stmt.alias || filePath
-                    this.globals.define(name, result);
+                    //this.globals.define(name, result);
+                    env.define(name, result);
                     break;
                 }
                 filePath+=".nova";
@@ -1048,7 +1049,8 @@ export class Interpreter {
                 const pathObj = path.parse(filePath);
                 const moduleName = pathObj.name; // e.g., "math" from "math.nova"
                 let name = stmt.alias || moduleName
-                this.globals.define(name, namespace);
+                //this.globals.define(name, namespace);
+                env.define(name, namespace);
                 //this.globals.define(moduleName, namespace);
                 break;
             }
