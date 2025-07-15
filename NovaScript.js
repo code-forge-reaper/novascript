@@ -25,7 +25,7 @@ function initGlobals(globals) {
     const runtimeVersion = {
         major: 0,
         minor: 4,
-        patch: 0
+        patch: 1
     }
     const args = process.argv.slice(2)
     globals.define("json", JSON) // don't know why js wants json to be upcased
@@ -1021,6 +1021,7 @@ export class Interpreter {
                 }
                 filePath+=".nova";
 
+
                 if (this.importedFiles.has(filePath)) break;
                 this.importedFiles.add(filePath);
 
@@ -1140,6 +1141,22 @@ export class Interpreter {
         }
     }
 
+    expandArrayTarget(expr, env) {
+        // expr: { type: "ArrayAccess", name: "roomsVisited", index: {...} }
+
+        const arrayName = expr.name;
+        const indexExpr = expr.index;
+
+        const arr = env.get(arrayName);
+        const index = this.evaluateExpr(indexExpr, env);
+
+        if (!Array.isArray(arr) && typeof arr !== "object") {
+            throw new Error(`Cannot index into non-array: ${typeof arr}`);
+        }
+
+        return { arr, index };
+    }
+
     expandPropTarget(expr, env) {
         let current = expr;
 
@@ -1183,14 +1200,25 @@ export class Interpreter {
                 return env.get(expr.name);
             case "AssignmentExpr": {
                 const value = this.evaluateExpr(expr.value, env);
-
-                if (expr.target.type === "PropertyAccess") {
+                /*
+                ArrayAccess({
+                  "type": "ArrayAccess",
+                  "name": "roomsVisited",
+                  "index": {
+                    "type": "Identifier",
+                    "name": "name"
+                  }
+                })*/
+                if(expr.target.type == "ArrayAccess"){
+                    const { arr, index } = this.expandArrayTarget(expr.target, env);
+                    arr[index] = value;
+                }else if (expr.target.type === "PropertyAccess") {
                     const { obj, key } = this.expandPropTarget(expr.target, env);
                     obj[key] = value;
                 } else if (expr.target.type === "Identifier") {
                     env.assign(expr.target.name, value);
                 } else {
-                    throw new Error("Unsupported assignment target: " + expr.target.type);
+                    throw new Error("Unsupported assignment target: "+`${expr.target.type}(${JSON.stringify(expr.target, null, 2)})`);
                 }
 
                 return value;
