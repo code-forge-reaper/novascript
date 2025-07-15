@@ -25,8 +25,9 @@ function initGlobals(globals) {
     const runtimeVersion = {
         major: 0,
         minor: 4,
-        patch: 2
+        patch: 3
     }
+    globals.define("isArray", Array.isArray)
     const args = process.argv.slice(2)
     globals.define("json", JSON) // don't know why js wants json to be upcased
     globals.define("parse", {
