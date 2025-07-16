@@ -25,7 +25,7 @@ function initGlobals(globals) {
     const runtimeVersion = {
         major: 0,
         minor: 4,
-        patch: 4
+        patch: 6
     }
     globals.define("isArray", Array.isArray)
     const args = process.argv.slice(2)
@@ -170,7 +170,7 @@ export class Interpreter {
         "var", "if", "else", "end", "break", "continue", "func",
         "return", "import", "as", "namespace", "while", "forEach", "for",
         "do", "in", "try", "errored",
-        "switch", "case", "default"
+        "switch", "case", "default", "using"
     ]
     constructor(filePath) {
         const source = fs.readFileSync(filePath,"utf8")
@@ -445,6 +445,15 @@ export class Interpreter {
             return { type: "SwitchStmt", expression, cases };
         }
 
+        // --- using statement ---
+        if (token.type === "keyword" && token.value === "using") {
+            //this should take everything from a namespace or module, and push them into the current context
+            this.consumeToken();
+            const nameToken = this.expectType("identifier");
+            this.consumeToken();
+
+            return { type: "UsingStmt", name:nameToken.value };
+        }
 
         // --- Try/Catch statement ---
         if (token.type === "keyword" && token.value === "try") {
@@ -1138,6 +1147,13 @@ export class Interpreter {
                 env.define(stmt.name, func);
                 break;
             }
+
+            case "UsingStmt":{
+                const namespace = env.get(stmt.name)
+                for(const [key,value] of Object.entries(namespace)){
+                    env.define(key,value)
+                }
+            } break
 
             default:
                 throw new Error(`Unknown statement type: ${stmt.type}\n${JSON.stringify(stmt, null, 2)}`);
