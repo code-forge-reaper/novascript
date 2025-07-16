@@ -25,7 +25,7 @@ function initGlobals(globals) {
     const runtimeVersion = {
         major: 0,
         minor: 4,
-        patch: 6
+        patch: 7
     }
     globals.define("isArray", Array.isArray)
     const args = process.argv.slice(2)
@@ -1002,6 +1002,9 @@ export class Interpreter {
             }
 
             case "ForStmt": {
+                const start = this.evaluateExpr(stmt.start, env);
+                const end = this.evaluateExpr(stmt.end, env);
+                const step = stmt.step ? this.evaluateExpr(stmt.step, env) : 1;
                 for (let i = start; i <= end; i += step) {
                     const loopEnv = new Environment(env);
                     loopEnv.define(stmt.variable, i);
@@ -1060,6 +1063,8 @@ export class Interpreter {
                 const moduleName = pathObj.name; // e.g., "math" from "math.nova"
                 let name = stmt.alias || moduleName
                 //this.globals.define(name, namespace);
+                //console.log("imported", name, "from", filePath);
+
                 env.define(name, namespace);
                 //this.globals.define(moduleName, namespace);
                 break;
