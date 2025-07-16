@@ -25,7 +25,7 @@ function initGlobals(globals) {
     const runtimeVersion = {
         major: 0,
         minor: 4,
-        patch: 3
+        patch: 4
     }
     globals.define("isArray", Array.isArray)
     const args = process.argv.slice(2)
@@ -172,8 +172,10 @@ export class Interpreter {
         "do", "in", "try", "errored",
         "switch", "case", "default"
     ]
-    constructor(source) {
+    constructor(filePath) {
+        const source = fs.readFileSync(filePath,"utf8")
         this.source = source;
+        this.file = filePath
         this.importedFiles = new Set();
 
         // Tokenize the source code into an array of tokens.
@@ -1022,16 +1024,14 @@ export class Interpreter {
                     break;
                 }
                 filePath+=".nova";
-
+                const fileDir = path.dirname(this.file)
 
                 if (this.importedFiles.has(filePath)) break;
                 this.importedFiles.add(filePath);
 
-                const fullPath = path.resolve(filePath);
-                const code = fs.readFileSync(fullPath, "utf8");
-
+                const fullPath = path.resolve(fileDir,filePath);
                 // Evaluate in isolated environment
-                const importedInterpreter = new Interpreter(code);
+                const importedInterpreter = new Interpreter(fullPath);
                 const importedEnv = new Environment(this.globals);
                 importedInterpreter.globals = importedEnv;
 
