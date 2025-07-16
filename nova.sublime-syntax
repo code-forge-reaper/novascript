@@ -68,7 +68,7 @@ contexts:
       scope: storage.type.nova
 
   namespace_definition:
-    - match: \bnamespace\b\s+(\w+)
+    - match: \b(namespace|using)\b\s+(\w+)
       captures:
         1: entity.name.namespace.nova
       scope: keyword.declaration.nova
