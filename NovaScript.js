@@ -25,7 +25,7 @@ function initGlobals(globals) {
     const runtimeVersion = {
         major: 0,
         minor: 4,
-        patch: 7
+        patch: 8
     }
     globals.define("isArray", Array.isArray)
     const args = process.argv.slice(2)
@@ -35,6 +35,7 @@ function initGlobals(globals) {
         float: parseFloat,
         str: String
     })
+    globals.define("math", Math)
     globals.define("void", undefined)
     globals.define('Runtime', {
         dump: {
@@ -47,10 +48,7 @@ function initGlobals(globals) {
         regex: (strPatt) => {
             return new RegExp(strPatt)
         },
-        args: (id = undefined) => {
-            if (id) return args[id]
-            return args
-        },
+        args,
         exit: function (code = 0) {
             process.exit(code)
         },
@@ -186,6 +184,7 @@ export class Interpreter {
         // Storage for NovaScript function definitions.
         this.functions = {};
         initGlobals(this.globals);
+        this.globals.define("__SCRIPT_PATH__", path.dirname(this.file));
     }
     currentEnv = null;
 
@@ -302,7 +301,7 @@ export class Interpreter {
             }
 
             // Single-character operators/punctuation.
-            if ("#+-*/(),{}[]:".includes(char)) {
+            if ("#+-*%/(),{}[]:".includes(char)) {
                 tokens.push({ type: "operator", value: char });
                 i++;
                 continue;
@@ -596,7 +595,11 @@ export class Interpreter {
                         if(paramType){
                             throw new Error("cannot have both type and default value, as that prevents type infering");
                         }
-                        paramType = defaultExpr.value.type;
+                        //console.log(defaultExpr);
+                        if(!defaultExpr.value)
+                            paramType = defaultExpr.type;
+                        else
+                            paramType = defaultExpr.value.type;
 
                     }
 
@@ -749,7 +752,7 @@ export class Interpreter {
         while (
             this.getNextToken() &&
             this.getNextToken().type === "operator" &&
-            (this.getNextToken().value === "*" || this.getNextToken().value === "/")
+            (this.getNextToken().value === "*" || this.getNextToken().value === "/" || this.getNextToken().value === "%")
         ) {
             const operator = this.consumeToken().value;
             const right = this.parseUnary();
@@ -1253,6 +1256,7 @@ export class Interpreter {
                 const right = this.evaluateExpr(expr.right, env);
                 switch (expr.operator) {
                     case "+": return left + right;
+                    case "%": return left % right;
                     case "-": return left - right;
                     case "*": return left * right;
                     case "/": return left / right;
