@@ -20,6 +20,15 @@ Object.defineProperty(String.prototype, 'isNumber', {
     enumerable: false
 });
 
+Object.defineProperty(String.prototype, 'isBoolean', {
+    value: function () {
+        return this === "true" || this === "false";
+    },
+    writable: false,
+    configurable: false,
+    enumerable: false
+})
+
 function initGlobals(globals) {
     globals.define('print', console.log)
     const runtimeVersion = {
@@ -33,7 +42,8 @@ function initGlobals(globals) {
     globals.define("parse", {
         int: parseInt,
         float: parseFloat,
-        str: String
+        str: String,
+        bool: Boolean
     })
     globals.define("math", Math)
     globals.define("void", undefined)
