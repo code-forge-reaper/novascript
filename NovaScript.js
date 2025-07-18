@@ -1251,7 +1251,7 @@ export class Interpreter {
                     arr[index] = value;
                 }else if (expr.target.type === "PropertyAccess") {
                     const { obj, key } = this.expandPropTarget(expr.target, env);
-                    if(obj instanceof Enviorment){
+                    if(obj instanceof Environment){
                         throw new Error("Cannot assign to environment");
                     }
                     obj[key] = value;
