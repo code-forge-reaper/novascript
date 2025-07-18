@@ -34,7 +34,7 @@ function initGlobals(globals) {
     const runtimeVersion = {
         major: 0,
         minor: 4,
-        patch: 8
+        patch: 9
     }
     globals.define("isArray", Array.isArray)
     const args = process.argv.slice(2)
@@ -1251,6 +1251,9 @@ export class Interpreter {
                     arr[index] = value;
                 }else if (expr.target.type === "PropertyAccess") {
                     const { obj, key } = this.expandPropTarget(expr.target, env);
+                    if(obj instanceof Enviorment){
+                        throw new Error("Cannot assign to environment");
+                    }
                     obj[key] = value;
                 } else if (expr.target.type === "Identifier") {
                     env.assign(expr.target.name, value);
