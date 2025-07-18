@@ -4,6 +4,7 @@
  **/
 import fs from "fs"
 import path from "path"
+import util from "util"
 // this will propagate to nova, since it uses js strings as well
 /*
 String.prototype.isNumber = function () {
@@ -34,7 +35,7 @@ function initGlobals(globals) {
     const runtimeVersion = {
         major: 0,
         minor: 5,
-        patch: 0
+        patch: 1
     }
     globals.define("isArray", Array.isArray)
     const args = process.argv.slice(2)
@@ -75,7 +76,14 @@ function initGlobals(globals) {
             if (key) return process.env[key]
             return process.env
         },
-
+        throw: (reason=undefined, ...rest) => {
+            if(rest){
+                // there might be formating
+                let s = util.format(reason, ...rest)
+                reason = s
+            }
+            throw new Error(reason)
+        },
         fs: { // instead of exposing the entire fs module, we expose just enough to not cause havoc
             read: function (path) {
                 return fs.readFileSync(path, 'utf8')
