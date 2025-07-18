@@ -33,8 +33,8 @@ function initGlobals(globals) {
     globals.define('print', console.log)
     const runtimeVersion = {
         major: 0,
-        minor: 4,
-        patch: 9
+        minor: 5,
+        patch: 0
     }
     globals.define("isArray", Array.isArray)
     const args = process.argv.slice(2)
@@ -641,7 +641,7 @@ export class Interpreter {
         if (token.type === "keyword" && token.value === "return") {
             this.consumeToken();
             let expression = null;
-            if (this.getNextToken() && this.getNextToken().value !== "\n") {
+            if (this.getNextToken() && !this.keywords.includes(this.getNextToken().value)) {
                 expression = this.parseExpression();
             }
             return { type: "ReturnStmt", expression };
