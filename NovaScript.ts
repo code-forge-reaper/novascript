@@ -2,52 +2,185 @@
 /**
  * NovaScript 
  **/
-import fs from "fs"
-import path from "path"
-import util from "util"
-// this will propagate to nova, since it uses js strings as well
-/*
-String.prototype.isNumber = function () {
-    return !isNaN(this) && !isNaN(parseFloat(this));
-};
-*/
+import fs from "fs";
+import path from "path";
+import util from "util";
 
-Object.defineProperty(String.prototype, 'isNumber', {
-    value: function () {
-        return !isNaN(this) && !isNaN(parseFloat(this));
-    },
-    writable: false,
-    configurable: false,
-    enumerable: false
-});
+interface Token {
+    type: string;
+    value: any;
+}
 
-Object.defineProperty(String.prototype, 'isBoolean', {
-    value: function () {
-        return this === "true" || this === "false";
-    },
-    writable: false,
-    configurable: false,
-    enumerable: false
-})
+interface RuntimeVersion {
+    major: number;
+    minor: number;
+    patch: number;
+}
 
-function initGlobals(globals) {
-    globals.define('print', console.log)
-    const runtimeVersion = {
+interface Statement {
+    type: string;
+    [key: string]: any;
+}
+
+interface Expression {
+    type: string;
+    [key: string]: any;
+}
+
+interface Parameter {
+    name: string;
+    type: string | null;
+    default?: Expression;
+}
+
+interface Case {
+    caseExpr: any;
+    body: Statement[];
+}
+
+interface FunctionCall extends Expression {
+    type: "FuncCall";
+    name: string;
+    arguments: Expression[];
+}
+
+interface MethodCall extends Expression {
+    type: "MethodCall";
+    object: Expression;
+    method: string;
+    arguments: Expression[];
+}
+
+interface PropertyAccess extends Expression {
+    type: "PropertyAccess";
+    object: Expression;
+    property: string;
+}
+
+interface ArrayAccess extends Expression {
+    type: "ArrayAccess";
+    name: string;
+    index: Expression;
+}
+
+interface Literal extends Expression {
+    type: "Literal";
+    value: any;
+}
+
+/* A special exception used to implement returning values from functions */
+class ReturnException extends Error {
+    value: any;
+    constructor(value: any) {
+        super("Return");
+        this.value = value;
+    }
+}
+
+/* Special exceptions to implement break/continue */
+class BreakException extends Error {
+    constructor() { super("Break"); }
+}
+
+class ContinueException extends Error {
+    constructor() { super("Continue"); }
+}
+
+/* A simple environment for variable scoping */
+class Environment {
+    values: Record<string, any>;
+    parent: Environment | null;
+
+    constructor(parent: Environment | null = null) {
+        this.values = {};
+        this.parent = parent;
+    }
+
+    define(name: string, value: any): void {
+        this.values[name] = value;
+    }
+
+    assign(name: string, value: any): void {
+        if (name in this.values) {
+            this.values[name] = value;
+        } else if (this.parent) {
+            this.parent.assign(name, value);
+        } else {
+            throw new Error(`Undefined variable ${name}`);
+        }
+    }
+
+    has(name: string): boolean {
+        if (name in this.values) {
+            return true;
+        } else if (this.parent) {
+            return this.parent.has(name);
+        } else {
+            return false;
+        }
+    }
+
+    get(name: string): any {
+        if (name in this.values) {
+            return this.values[name];
+        } else if (this.parent) {
+            return this.parent.get(name);
+        } else {
+            throw new Error(`Undefined variable ${name}`);
+        }
+    }
+}
+
+function initGlobals(globals: Environment): void {
+    globals.define('print', console.log);
+    const runtimeVersion: RuntimeVersion = {
         major: 0,
         minor: 5,
-        patch: 1
-    }
-    globals.define("isArray", Array.isArray)
-    const args = process.argv.slice(2)
-    globals.define("json", JSON) // don't know why js wants json to be upcased
+        patch: 2
+    };
+    
+    globals.define("isArray", Array.isArray);
+    globals.define("new", (className: any, ...args: any[]) => new className(...args));
+    
+    globals.define("Logger", {
+        info: (...args: any[]) => console.log("[info %s| at: %i:%i:%i]:", globals.get("Runtime").versionString,
+            new Date().getHours(),
+            new Date().getMinutes(),
+            new Date().getSeconds(),
+            ...args
+        ),
+        warn: (...args: any[]) => console.warn("[warn %s| at: %i:%i:%i]:", globals.get("Runtime").versionString,
+            new Date().getHours(),
+            new Date().getMinutes(),
+            new Date().getSeconds(),
+            ...args
+        ),
+        error: (...args: any[]) => console.error("[error %s| at: %i:%i:%i]:", globals.get("Runtime").versionString,
+            new Date().getHours(),
+            new Date().getMinutes(),
+            new Date().getSeconds(),
+            ...args
+        )
+    });
+    
+    globals.define("is", {
+        string: (str: any) => typeof str === "string",
+        number: (num: any) => typeof num === "number",
+        boolean: (bool: any) => typeof bool === "boolean",
+    });
+    
+    const args = process.argv.slice(2);
+    globals.define("json", JSON);
     globals.define("parse", {
         int: parseInt,
         float: parseFloat,
         str: String,
         bool: Boolean
-    })
-    globals.define("math", Math)
-    globals.define("void", undefined)
+    });
+    
+    globals.define("math", Math);
+    globals.define("void", undefined);
+    
     globals.define('Runtime', {
         dump: {
             keys: Object.keys,
@@ -56,74 +189,56 @@ function initGlobals(globals) {
         version: runtimeVersion,
         versionString: `v${runtimeVersion.major}.${runtimeVersion.minor}.${runtimeVersion.patch}`,
         currentDirectory: process.cwd,
-        regex: (strPatt) => {
-            return new RegExp(strPatt)
-        },
+        regex: (strPatt: string, options: string = "") => new RegExp(strPatt, options),
         args,
-        exit: function (code = 0) {
-            process.exit(code)
+        exit: function (code: number = 0) {
+            process.exit(code);
         },
-        versionAtLeast: function (maj, min, pat) {
-            if (runtimeVersion.major > maj) return true
-            if (runtimeVersion.major < maj) return false
+        versionAtLeast: function (maj: number, min: number, pat: number): boolean {
+            if (runtimeVersion.major > maj) return true;
+            if (runtimeVersion.major < maj) return false;
 
-            if (runtimeVersion.minor > min) return true
-            if (runtimeVersion.minor < min) return false
+            if (runtimeVersion.minor > min) return true;
+            if (runtimeVersion.minor < min) return false;
 
-            return runtimeVersion.patch >= pat
+            return runtimeVersion.patch >= pat;
         },
-        env: (key = undefined) => {
-            if (key) return process.env[key]
-            return process.env
+        env: (key?: string): any => {
+            if (key) return process.env[key];
+            return process.env;
         },
-        throw: (reason=undefined, ...rest) => {
-            if(rest){
-                // there might be formating
-                let s = util.format(reason, ...rest)
-                reason = s
+        throw: (reason?: any, ...rest: any[]) => {
+            if (rest) {
+                let s = util.format(reason, ...rest);
+                reason = s;
             }
-            throw new Error(reason)
+            throw new Error(reason);
         },
-        fs: { // instead of exposing the entire fs module, we expose just enough to not cause havoc
-            read: function (path) {
-                return fs.readFileSync(path, 'utf8')
+        fs: {
+            read: function (path: string) {
+                return fs.readFileSync(path, 'utf8');
             },
-            write: function (path, contents) {
-                fs.writeFileSync(path, contents, 'utf8')
+            write: function (path: string, contents: string) {
+                fs.writeFileSync(path, contents, 'utf8');
             },
-            exists: function (path) {
-                return fs.existsSync(path)
+            exists: function (path: string) {
+                return fs.existsSync(path);
             }
         },
         URI: {
-            decode: (str) => decodeURIComponent(str),
-            encode: (str) => encodeURIComponent(str)
+            decode: (str: string) => decodeURIComponent(str),
+            encode: (str: string) => encodeURIComponent(str)
         },
         time: {
             now: () => Date.now(),
             str: () => new Date(),
             hrtime: () => process.hrtime.bigint().toString()
         }
-    })
-}
-
-/* A special exception used to implement returning values from functions */
-class ReturnException extends Error {
-    constructor(value) {
-        super("Return");
-        this.value = value;
-    }
-}
-/* Special exceptions to implement break/continue */
-class BreakException extends Error {
-    constructor() { super("Break"); }
-}
-class ContinueException extends Error {
-    constructor() { super("Continue"); }
+    });
 }
 
 /* Helper function for type checking */
-function checkType(expected, value) {
+function checkType(expected: string, value: any): any {
     switch (expected) {
         case "number":
             if (typeof value !== "number") throw new Error(`Type mismatch: expected number, got ${typeof value}`);
@@ -143,75 +258,42 @@ function checkType(expected, value) {
     return value;
 }
 
-/* A simple environment for variable scoping */
-class Environment {
-    constructor(parent = null) {
-        this.values = {};
-        this.parent = parent;
-    }
-    define(name, value) {
-        this.values[name] = value;
-    }
-    assign(name, value) {
-        if (name in this.values) {
-            this.values[name] = value;
-        } else if (this.parent) {
-            this.parent.assign(name, value);
-        } else {
-            throw new Error(`Undefined variable ${name}`);
-        }
-    }
-    has(name) {
-        if (name in this.values) {
-            return true;
-        } else if (this.parent) {
-            return this.parent.has(name);
-        } else {
-            return false;
-        }
-    }
-    get(name) {
-        if (name in this.values) {
-            return this.values[name];
-        } else if (this.parent) {
-            return this.parent.get(name);
-        } else {
-            throw new Error(`Undefined variable ${name}`);
-        }
-    }
-}
-
 export class Interpreter {
-    keywords = [
+    keywords: string[] = [
         "var", "if", "else", "end", "break", "continue", "func",
         "return", "import", "as", "namespace", "while", "forEach", "for",
         "do", "in", "try", "errored",
         "switch", "case", "default", "using"
-    ]
-    constructor(filePath) {
-        const source = fs.readFileSync(filePath,"utf8")
+    ];
+    
+    source: string;
+    file: string;
+    tokens: Token[];
+    current: number;
+    globals: Environment;
+    functions: Record<string, Function>;
+    importedFiles: Set<string>;
+    currentEnv: Environment | null = null;
+
+    constructor(filePath: string) {
+        const source = fs.readFileSync(filePath, "utf8");
         this.source = source;
-        this.file = filePath
+        this.file = filePath;
         this.importedFiles = new Set();
 
-        // Tokenize the source code into an array of tokens.
         this.tokens = this.tokenize(source);
         this.current = 0;
-        // Global environment for variables and platform functions.
         this.globals = new Environment();
-        // Storage for NovaScript function definitions.
         this.functions = {};
         initGlobals(this.globals);
         this.globals.define("__SCRIPT_PATH__", path.dirname(this.file));
     }
-    currentEnv = null;
-
 
     // ----------------------
-    // Tokenization (with comment support, booleans, logical operators, etc.)
+    // Tokenization
     // ----------------------
-    tokenize(source) {
-        const tokens = [];
+    tokenize(source: string): Token[] {
+        const tokens: Token[] = [];
         let i = 0;
         const length = source.length;
 
@@ -270,7 +352,16 @@ export class Interpreter {
                 while (i < length && source[i] !== '"') {
                     if (source[i] === "\\" && i + 1 < length) {
                         i++;
-                        str += source[i];
+                        switch (source[i]) {
+                            case "n": str += "\n"; break;
+                            case "t": str += "\t"; break;
+                            case "r": str += "\r"; break;
+                            case "\\": str += "\\"; break;
+                            case "\"": str += "\""; break;
+                            default:
+                                str += source[i];
+                                break;
+                        }
                     } else {
                         str += source[i];
                     }
@@ -333,15 +424,15 @@ export class Interpreter {
     // ----------------------
     // Token Parser Helpers
     // ----------------------
-    getNextToken() {
+    getNextToken(): Token | null {
         return this.tokens[this.current] || null;
     }
 
-    consumeToken() {
+    consumeToken(): Token {
         return this.tokens[this.current++];
     }
 
-    expectType(type) {
+    expectType(type: string): Token {
         const token = this.getNextToken();
         if (!token || token.type !== type) {
             throw new Error(`Expected token type ${type}, got ${token ? token.type : "EOF"}`);
@@ -349,7 +440,7 @@ export class Interpreter {
         return token;
     }
 
-    expectToken(value) {
+    expectToken(value: string): Token {
         const token = this.getNextToken();
         if (!token || token.value !== value) {
             throw new Error(`Expected token '${value}', got ${token ? token.value : "EOF"}`);
@@ -360,10 +451,11 @@ export class Interpreter {
     // ----------------------
     // Parsing Helpers
     // ----------------------
-    parseBlockUntil(terminators = []) {
-        const statements = [];
+    parseBlockUntil(terminators: string[] = []): Statement[] {
+        const statements: Statement[] = [];
         while (this.current < this.tokens.length) {
             const token = this.getNextToken();
+            if (!token) throw new Error("Unexpected end of input");
             if (
                 (token.type === "keyword" && terminators.includes(token.value)) ||
                 (token.type === "operator" && terminators.includes(token.value))
@@ -375,15 +467,16 @@ export class Interpreter {
         return statements;
     }
 
-    parseBlock() {
+    parseBlock(): Statement[] {
         return this.parseBlockUntil();
     }
 
     // ----------------------
     // Parsing Statements and Expressions
     // ----------------------
-    parseStatement() {
+    parseStatement(): Statement {
         const token = this.getNextToken();
+        if (!token) throw new Error("Unexpected end of input");
 
         // --- Label statement ---
         if (token.type === "keyword" && token.value === "label") {
@@ -401,8 +494,8 @@ export class Interpreter {
             const name = nameToken.value;
             this.consumeToken();
 
-            // Optional type annotation (must be one of the allowed types)
-            let typeAnnotation = null;
+            // Optional type annotation
+            let typeAnnotation: string | null = null;
             if (
                 this.getNextToken() &&
                 this.getNextToken().type === "identifier" &&
@@ -413,7 +506,7 @@ export class Interpreter {
             }
 
             // Optional modifier (e.g., #global)
-            let modifier = null;
+            let modifier: string | null = null;
             if (
                 this.getNextToken() &&
                 this.getNextToken().type === "operator" &&
@@ -435,8 +528,8 @@ export class Interpreter {
         if (token.type === "keyword" && token.value === "switch") {
             this.consumeToken();
             const expression = this.parseExpression();
-            const cases = [];
-            while (this.getNextToken().type === "keyword" && this.getNextToken().value === "case") {
+            const cases: Case[] = [];
+            while (this.getNextToken()?.type === "keyword" && this.getNextToken().value === "case") {
                 this.consumeToken();
                 const caseExpr = this.parseExpression();
                 this.expectToken("do");
@@ -446,7 +539,7 @@ export class Interpreter {
                 this.consumeToken();
                 cases.push({ caseExpr, body });
             }
-            if (this.getNextToken().type === "keyword" && this.getNextToken().value === "default") {
+            if (this.getNextToken()?.type === "keyword" && this.getNextToken().value === "default") {
                 this.consumeToken();
                 this.expectToken("do");
                 this.consumeToken();
@@ -464,12 +557,11 @@ export class Interpreter {
 
         // --- using statement ---
         if (token.type === "keyword" && token.value === "using") {
-            //this should take everything from a namespace or module, and push them into the current context
             this.consumeToken();
             const nameToken = this.expectType("identifier");
             this.consumeToken();
 
-            return { type: "UsingStmt", name:nameToken.value };
+            return { type: "UsingStmt", name: nameToken.value };
         }
 
         // --- Try/Catch statement ---
@@ -516,8 +608,8 @@ export class Interpreter {
             this.expectToken(",");
             this.consumeToken();
             const endExpr = this.parseExpression();
-            let stepExpr = undefined;
-            if (this.getNextToken() && this.getNextToken().value === ",") {
+            let stepExpr: Expression | undefined;
+            if (this.getNextToken()?.value === ",") {
                 this.consumeToken();
                 stepExpr = this.parseExpression();
             }
@@ -550,14 +642,13 @@ export class Interpreter {
             return { type: "ContinueStmt" };
         }
 
-
         // --- If statement ---
         if (token.type === "keyword" && token.value === "if") {
             this.consumeToken();
             const condition = this.parseExpression();
             const thenBlock = this.parseBlockUntil(["else", "end"]);
-            let elseBlock = null;
-            if (this.getNextToken() && this.getNextToken().type === "keyword" && this.getNextToken().value === "else") {
+            let elseBlock: Statement[] | null = null;
+            if (this.getNextToken()?.type === "keyword" && this.getNextToken().value === "else") {
                 this.consumeToken();
                 elseBlock = this.parseBlockUntil(["end"]);
             }
@@ -586,20 +677,19 @@ export class Interpreter {
             this.expectToken("(");
             this.consumeToken();
 
-            const parameters = [];
+            const parameters: Parameter[] = [];
             if (this.getNextToken() && this.getNextToken().value !== ")") {
                 while (true) {
                     const paramToken = this.expectType("identifier");
                     const paramName = paramToken.value;
                     this.consumeToken();
 
-                    let paramType = null;
-                    let defaultExpr = undefined;
+                    let paramType: string | null = null;
+                    let defaultExpr: Expression | undefined;
 
                     // optional type annotation
                     if (this.getNextToken()?.type === "identifier") {
                         const typeToken = this.getNextToken();
-                        // simple heuristic: if it's a known type name, treat it as a type
                         if (["string", "number", "bool"].includes(typeToken.value)) {
                             paramType = typeToken.value;
                             this.consumeToken();
@@ -610,15 +700,13 @@ export class Interpreter {
                     if (this.getNextToken()?.value === "=") {
                         this.consumeToken();
                         defaultExpr = this.parseExpression();
-                        if(paramType){
+                        if (paramType) {
                             throw new Error("cannot have both type and default value, as that prevents type infering");
                         }
-                        //console.log(defaultExpr);
-                        if(!defaultExpr.value)
+                        if (!defaultExpr.value)
                             paramType = defaultExpr.type;
                         else
                             paramType = defaultExpr.value.type;
-
                     }
 
                     parameters.push({ name: paramName, type: paramType, default: defaultExpr });
@@ -648,7 +736,7 @@ export class Interpreter {
         // --- Return statement ---
         if (token.type === "keyword" && token.value === "return") {
             this.consumeToken();
-            let expression = null;
+            let expression: Expression | null = null;
             if (this.getNextToken() && !this.keywords.includes(this.getNextToken().value)) {
                 expression = this.parseExpression();
             }
@@ -661,7 +749,7 @@ export class Interpreter {
             const fileToken = this.expectType("string");
             const filename = fileToken.value;
             this.consumeToken();
-            let alias = null;
+            let alias: string | null = null;
             if (this.getNextToken() && this.getNextToken().value === "as") {
                 this.consumeToken();
                 const aliasToken = this.expectType("identifier");
@@ -677,11 +765,11 @@ export class Interpreter {
     }
 
     // --- Expression Parsing (Recursive Descent) ---
-    parseExpression() {
+    parseExpression(): Expression {
         return this.parseAssignment();
     }
 
-    parseAssignment() {
+    parseAssignment(): Expression {
         let expr = this.parseLogicalOr();
         if (
             this.getNextToken() &&
@@ -695,7 +783,7 @@ export class Interpreter {
         return expr;
     }
 
-    parseLogicalOr() {
+    parseLogicalOr(): Expression {
         let expr = this.parseLogicalAnd();
         while (
             this.getNextToken() &&
@@ -709,7 +797,7 @@ export class Interpreter {
         return expr;
     }
 
-    parseLogicalAnd() {
+    parseLogicalAnd(): Expression {
         let expr = this.parseEquality();
         while (
             this.getNextToken() &&
@@ -723,7 +811,7 @@ export class Interpreter {
         return expr;
     }
 
-    parseEquality() {
+    parseEquality(): Expression {
         let expr = this.parseComparison();
         while (
             this.getNextToken() &&
@@ -737,7 +825,7 @@ export class Interpreter {
         return expr;
     }
 
-    parseComparison() {
+    parseComparison(): Expression {
         let expr = this.parseTerm();
         while (
             this.getNextToken() &&
@@ -751,7 +839,7 @@ export class Interpreter {
         return expr;
     }
 
-    parseTerm() {
+    parseTerm(): Expression {
         let expr = this.parseFactor();
         while (
             this.getNextToken() &&
@@ -765,7 +853,7 @@ export class Interpreter {
         return expr;
     }
 
-    parseFactor() {
+    parseFactor(): Expression {
         let expr = this.parseUnary();
         while (
             this.getNextToken() &&
@@ -779,7 +867,7 @@ export class Interpreter {
         return expr;
     }
 
-    parseUnary() {
+    parseUnary(): Expression {
         if (
             this.getNextToken() &&
             this.getNextToken().type === "operator" &&
@@ -792,8 +880,8 @@ export class Interpreter {
         return this.parsePrimary();
     }
 
-    parsePrimary() {
-        let node;
+    parsePrimary(): Expression {
+        let node: Expression;
         const token = this.getNextToken();
         if (!token) {
             throw new Error("Unexpected end of input");
@@ -809,7 +897,7 @@ export class Interpreter {
         }
         else if (token.value === "[") {
             this.consumeToken();
-            const elements = [];
+            const elements: Expression[] = [];
             if (this.getNextToken() && this.getNextToken().value !== "]") {
                 while (true) {
                     elements.push(this.parseExpression());
@@ -826,7 +914,7 @@ export class Interpreter {
         }
         else if (token.value === "{") {
             this.consumeToken();
-            const properties = [];
+            const properties: { key: string; value: Expression }[] = [];
             if (this.getNextToken() && this.getNextToken().value !== "}") {
                 while (true) {
                     let keyToken = this.getNextToken();
@@ -862,7 +950,7 @@ export class Interpreter {
             }
             else if (this.getNextToken() && this.getNextToken().value === "(") {
                 this.consumeToken();
-                const args = [];
+                const args: Expression[] = [];
                 if (this.getNextToken() && this.getNextToken().value !== ")") {
                     while (true) {
                         args.push(this.parseExpression());
@@ -899,7 +987,7 @@ export class Interpreter {
             // method-call?
             if (this.getNextToken() && this.getNextToken().value === "(") {
                 this.consumeToken();                           // consume "("
-                const args = [];
+                const args: Expression[] = [];
                 while (this.getNextToken() && this.getNextToken().value !== ")") {
                     args.push(this.parseExpression());
                     if (this.getNextToken().value === ",") this.consumeToken();
@@ -910,8 +998,8 @@ export class Interpreter {
 
                 node = {
                     type: "MethodCall",
-                    object: node,        // the `x` part of `x.foo(...)`
-                    method: propName,    // the `"foo"`
+                    object: node,
+                    method: propName,
                     arguments: args
                 };
             } else {
@@ -930,7 +1018,7 @@ export class Interpreter {
     // ----------------------
     // Evaluation / Execution
     // ----------------------
-    interpret() {
+    interpret(): void {
         const statements = this.parseBlock();
         try {
             this.executeBlock(statements, this.globals);
@@ -939,7 +1027,7 @@ export class Interpreter {
         }
     }
 
-    executeBlock(statements, env) {
+    executeBlock(statements: Statement[], env: Environment): void {
         const previousEnv = this.currentEnv;
         this.currentEnv = env;
 
@@ -950,10 +1038,11 @@ export class Interpreter {
         this.currentEnv = previousEnv;
     }
 
-    getCurrentContext() {
+    getCurrentContext(): Environment | null {
         return this.currentEnv;
     }
-    executeStmt(stmt, env) {
+
+    executeStmt(stmt: Statement, env: Environment): void {
         switch (stmt.type) {
             case "VarDecl": {
                 const value = this.evaluateExpr(stmt.initializer, env);
@@ -1049,21 +1138,19 @@ export class Interpreter {
                         throw new Error("js-import-handler is not defined, your runtime should define it, interpreter.globals.define('js-import-handler', handler)");
                     }
 
-                    const handler = env.get("js-import-handler");
+                    const handler = env.get("js-import-handler") as (path: string) => any;
                     const result = handler(filePath);
-                    let name = stmt.alias || filePath
-                    //this.globals.define(name, result);
+                    let name = stmt.alias || filePath;
                     env.define(name, result);
                     break;
                 }
-                filePath+=".nova";
-                const fileDir = path.dirname(this.file)
+                filePath += ".nova";
+                const fileDir = path.dirname(this.file);
 
                 if (this.importedFiles.has(filePath)) break;
                 this.importedFiles.add(filePath);
 
-                const fullPath = path.resolve(fileDir,filePath);
-                // Evaluate in isolated environment
+                const fullPath = path.resolve(fileDir, filePath);
                 const importedInterpreter = new Interpreter(fullPath);
                 const importedEnv = new Environment(this.globals);
                 importedInterpreter.globals = importedEnv;
@@ -1073,29 +1160,22 @@ export class Interpreter {
 
                 importedInterpreter.interpret();
 
-                // Create namespace object
-                const namespace = {};
+                const namespace: Record<string, any> = {};
                 for (const key in importedEnv.values) {
                     namespace[key] = importedEnv.values[key];
                 }
 
-                // Use filename (minus extension) as variable name
                 const pathObj = path.parse(filePath);
-                const moduleName = pathObj.name; // e.g., "math" from "math.nova"
-                let name = stmt.alias || moduleName
-                //this.globals.define(name, namespace);
-                //console.log("imported", name, "from", filePath);
+                const moduleName = pathObj.name;
+                let name = stmt.alias || moduleName;
 
                 env.define(name, namespace);
-                //this.globals.define(moduleName, namespace);
                 break;
             }
 
             case "NamespaceStmt": {
                 const nenv = new Environment(env);
                 this.executeBlock(stmt.body, nenv);
-
-                // Store the actual env, not a plain object
                 env.define(stmt.name, nenv);
                 break;
             }
@@ -1122,14 +1202,13 @@ export class Interpreter {
                 break;
             }
 
-
             case "ReturnStmt": {
                 const value = stmt.expression ? this.evaluateExpr(stmt.expression, env) : undefined;
                 throw new ReturnException(value);
             }
 
             case "FuncDecl": {
-                const func = (...args) => {
+                const func = (...args: any[]) => {
                     const funcEnv = new Environment(env);
 
                     for (let i = 0; i < stmt.parameters.length; i++) {
@@ -1153,7 +1232,6 @@ export class Interpreter {
                             } else if (type === "bool" && actualType !== "boolean") {
                                 throw new Error(`Type mismatch in function '${stmt.name}': parameter '${param.name}' expected bool, got ${actualType}`);
                             }
-                            // more types? add here
                         }
 
                         funcEnv.define(param.name, argVal);
@@ -1174,21 +1252,26 @@ export class Interpreter {
                 break;
             }
 
-            case "UsingStmt":{
-                const namespace = env.get(stmt.name)
-                for(const [key,value] of Object.entries(namespace)){
-                    env.define(key,value)
+            case "UsingStmt": {
+                const namespace = env.get(stmt.name);
+                if (namespace instanceof Environment) {
+                    for (const [key, value] of Object.entries(namespace.values)) {
+                        env.define(key, value);
+                    }
+                } else if (typeof namespace === 'object' && namespace !== null) {
+                    for (const [key, value] of Object.entries(namespace)) {
+                        env.define(key, value);
+                    }
                 }
-            } break
+                break;
+            }
 
             default:
                 throw new Error(`Unknown statement type: ${stmt.type}\n${JSON.stringify(stmt, null, 2)}`);
         }
     }
 
-    expandArrayTarget(expr, env) {
-        // expr: { type: "ArrayAccess", name: "roomsVisited", index: {...} }
-
+    expandArrayTarget(expr: ArrayAccess, env: Environment): { arr: any, index: any } {
         const arrayName = expr.name;
         const indexExpr = expr.index;
 
@@ -1202,14 +1285,12 @@ export class Interpreter {
         return { arr, index };
     }
 
-    expandPropTarget(expr, env) {
-        let current = expr;
-
-        // Walk down the left side to resolve the full object chain
-        const chain = [];
+    expandPropTarget(expr: PropertyAccess, env: Environment): { obj: any, key: string } {
+        let current: any = expr;
+        const chain: string[] = [];
 
         while (current.type === "PropertyAccess") {
-            chain.unshift(current.property); // collect property names in reverse
+            chain.unshift(current.property);
             current = current.object;
         }
 
@@ -1217,10 +1298,8 @@ export class Interpreter {
             throw new Error("Invalid base for property access: " + current.type);
         }
 
-        // Resolve the base object from the environment
         let obj = env.get(current.name);
 
-        // Walk through all but the last key to get to the parent
         for (let i = 0; i < chain.length - 1; i++) {
             const key = chain[i];
             if (obj == null || typeof obj !== 'object') {
@@ -1231,13 +1310,11 @@ export class Interpreter {
 
         return {
             obj,
-            key: chain[chain.length - 1] // the last key is what we’re assigning to
+            key: chain[chain.length - 1]
         };
     }
 
-
-    evaluateExpr(expr, env) {
-        //console.log(expr)
+    evaluateExpr(expr: Expression, env: Environment): any {
         switch (expr.type) {
             case "Literal":
                 return expr.value;
@@ -1245,28 +1322,19 @@ export class Interpreter {
                 return env.get(expr.name);
             case "AssignmentExpr": {
                 const value = this.evaluateExpr(expr.value, env);
-                /*
-                ArrayAccess({
-                  "type": "ArrayAccess",
-                  "name": "roomsVisited",
-                  "index": {
-                    "type": "Identifier",
-                    "name": "name"
-                  }
-                })*/
-                if(expr.target.type == "ArrayAccess"){
-                    const { arr, index } = this.expandArrayTarget(expr.target, env);
+                if (expr.target.type == "ArrayAccess") {
+                    const { arr, index } = this.expandArrayTarget(expr.target as ArrayAccess, env);
                     arr[index] = value;
-                }else if (expr.target.type === "PropertyAccess") {
-                    const { obj, key } = this.expandPropTarget(expr.target, env);
-                    if(obj instanceof Environment){
+                } else if (expr.target.type === "PropertyAccess") {
+                    const { obj, key } = this.expandPropTarget(expr.target as PropertyAccess, env);
+                    if (obj instanceof Environment) {
                         throw new Error("Cannot assign to environment");
                     }
                     obj[key] = value;
                 } else if (expr.target.type === "Identifier") {
                     env.assign(expr.target.name, value);
                 } else {
-                    throw new Error("Unsupported assignment target: "+`${expr.target.type}(${JSON.stringify(expr.target, null, 2)})`);
+                    throw new Error("Unsupported assignment target: " + `${expr.target.type}(${JSON.stringify(expr.target, null, 2)})`);
                 }
 
                 return value;
@@ -1321,9 +1389,8 @@ export class Interpreter {
             }
 
             case "ArrayAccess": {
-                const arr = env.get(expr.name)
+                const arr = env.get(expr.name);
                 const index = this.evaluateExpr(expr.index, env);
-                //console.log(arr, expr.index, index, arr[index]);
                 return arr[index];
             }
             case "PropertyAccess": {
@@ -1340,7 +1407,7 @@ export class Interpreter {
                 return expr.elements.map(element => this.evaluateExpr(element, env));
             }
             case "ObjectLiteral": {
-                const obj = {};
+                const obj: Record<string, any> = {};
                 for (const prop of expr.properties) {
                     obj[prop.key] = this.evaluateExpr(prop.value, env);
                 }
