@@ -491,6 +491,10 @@ export class Interpreter {
     parseBlock(): Statement[] {
         return this.parseBlockUntil();
     }
+    consumeExpected(type: string): Token {
+        this.expectType(type);
+        return this.consumeToken();
+    }
 
     // ----------------------
     // Parsing Statements and Expressions
@@ -509,8 +513,6 @@ export class Interpreter {
         }
         // --- Defer statement ---
         if (token.type === "keyword" && token.value === "defer") {
-            this.consumeToken();
-            this.expectToken("do")
             this.consumeToken();
             const body = this.parseBlockUntil(["end"]);
             this.expectToken("end");

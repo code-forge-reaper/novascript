@@ -1,13 +1,13 @@
 func text()
 	var x = 10
-	defer do
+	defer
 		print("defered x = ", x)
 		x = 20
 		print("defered x = ", x)
 	end
 	print(x)
 end
-defer do
+defer
 	print("hi")
 end
 text()
