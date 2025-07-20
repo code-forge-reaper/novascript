@@ -60,12 +60,16 @@ contexts:
 
 
     # Control flow
-    - match: \b(for|forEach|while|do|in|end|else|if|try|errored)\b
+    - match: \b(for|forEach|while|do|in|end|else|if|try|errored|defer)\b
       scope: keyword.control.flow.nova
 
     # Types
     - match: \b(string|number|boolean|void)\b
       scope: storage.type.nova
+
+    # builtin
+    - match: \b(undefined|null|NaN)\b
+      scope: constant.language.nova
 
   namespace_definition:
     - match: \b(namespace|using)\b\s+(\w+)

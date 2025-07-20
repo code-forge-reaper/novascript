@@ -67,6 +67,10 @@ interface Literal extends Expression {
     type: "Literal";
     value: any;
 }
+interface DeferStmt extends Statement {
+    type: "DeferStmt";
+    body: Statement[];
+}
 
 /* A special exception used to implement returning values from functions */
 class ReturnException extends Error {
@@ -90,10 +94,23 @@ class ContinueException extends Error {
 class Environment {
     values: Record<string, any>;
     parent: Environment | null;
+    deferred: Statement[];  // Add this line
 
     constructor(parent: Environment | null = null) {
         this.values = {};
         this.parent = parent;
+        this.deferred = [];
+    }
+
+    addDeferred(stmt: Statement) {
+        this.deferred.push(stmt);
+    }
+
+    executeDeferred(interpreter: Interpreter): void {
+        while (this.deferred.length > 0) {
+            const stmt = this.deferred.pop()!;
+            interpreter.executeStmt(stmt, this);
+        }
     }
 
     define(name: string, value: any): void {
@@ -136,7 +153,7 @@ function initGlobals(globals: Environment): void {
     const runtimeVersion: RuntimeVersion = {
         major: 0,
         minor: 5,
-        patch: 2
+        patch: 3
     };
     
     globals.define("isArray", Array.isArray);
@@ -179,7 +196,11 @@ function initGlobals(globals: Environment): void {
     });
     
     globals.define("math", Math);
-    globals.define("void", undefined);
+    // globals.define("void", undefined);
+    //globals.define("void", null)
+    globals.define("null", null);
+    globals.define("undefined", undefined);
+    globals.define("NaN", NaN);
     
     globals.define('Runtime', {
         dump: {
@@ -262,7 +283,7 @@ export class Interpreter {
     keywords: string[] = [
         "var", "if", "else", "end", "break", "continue", "func",
         "return", "import", "as", "namespace", "while", "forEach", "for",
-        "do", "in", "try", "errored",
+        "do", "in", "try", "errored", "defer",
         "switch", "case", "default", "using"
     ];
     
@@ -486,7 +507,16 @@ export class Interpreter {
             this.consumeToken();
             return { type: "LabelStmt", name };
         }
-
+        // --- Defer statement ---
+        if (token.type === "keyword" && token.value === "defer") {
+            this.consumeToken();
+            this.expectToken("do")
+            this.consumeToken();
+            const body = this.parseBlockUntil(["end"]);
+            this.expectToken("end");
+            this.consumeToken();
+            return { type: "DeferStmt", body };
+        }
         // --- Variable declaration with optional type annotation ---
         if (token.type === "keyword" && token.value === "var") {
             this.consumeToken();
@@ -1023,18 +1053,24 @@ export class Interpreter {
         try {
             this.executeBlock(statements, this.globals);
         } catch (err) {
+            // Ensure deferred statements still execute
+            this.globals.executeDeferred(this);
             console.error("Uncaught error:", err);
         }
     }
-
     executeBlock(statements: Statement[], env: Environment): void {
         const previousEnv = this.currentEnv;
         this.currentEnv = env;
 
-        for (const stmt of statements) {
-            this.executeStmt(stmt, env);
+        try {
+            for (const stmt of statements) {
+                this.executeStmt(stmt, env);
+            }
+        } finally {
+            // Execute deferred statements in reverse order
+            env.executeDeferred(this);
+            this.currentEnv = previousEnv;
         }
-
         this.currentEnv = previousEnv;
     }
 
@@ -1050,6 +1086,11 @@ export class Interpreter {
                     checkType(stmt.typeAnnotation, value);
                 }
                 env.define(stmt.name, value);
+                break;
+            }
+            case "DeferStmt": {
+                // Add statements to be executed when the block exits
+                stmt.body.forEach(e=>env.addDeferred(e));
                 break;
             }
             case "ExpressionStmt": {
