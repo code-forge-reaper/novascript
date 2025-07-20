@@ -153,7 +153,7 @@ function initGlobals(globals: Environment): void {
     const runtimeVersion: RuntimeVersion = {
         major: 0,
         minor: 5,
-        patch: 3
+        patch: 4
     };
     
     globals.define("isArray", Array.isArray);
@@ -281,7 +281,7 @@ function checkType(expected: string, value: any): any {
 
 export class Interpreter {
     keywords: string[] = [
-        "var", "if", "else", "end", "break", "continue", "func",
+        "var", "if", "else", "elseif", "end", "break", "continue", "func",
         "return", "import", "as", "namespace", "while", "forEach", "for",
         "do", "in", "try", "errored", "defer",
         "switch", "case", "default", "using"
@@ -674,19 +674,38 @@ export class Interpreter {
             return { type: "ContinueStmt" };
         }
 
-        // --- If statement ---
         if (token.type === "keyword" && token.value === "if") {
             this.consumeToken();
             const condition = this.parseExpression();
-            const thenBlock = this.parseBlockUntil(["else", "end"]);
+            const thenBlock = this.parseBlockUntil(["else", "elseif", "end"]);
+            
+            const elseIfBlocks: { condition: Expression, body: Statement[] }[] = [];
             let elseBlock: Statement[] | null = null;
+            
+            // Parse elseif chains
+            while (this.getNextToken()?.type === "keyword" && this.getNextToken().value === "elseif") {
+                this.consumeToken(); // consume 'elseif'
+                const elseifCondition = this.parseExpression();
+                const elseifBody = this.parseBlockUntil(["else", "elseif", "end"]);
+                elseIfBlocks.push({ condition: elseifCondition, body: elseifBody });
+            }
+            
+            // Parse else block if present
             if (this.getNextToken()?.type === "keyword" && this.getNextToken().value === "else") {
                 this.consumeToken();
                 elseBlock = this.parseBlockUntil(["end"]);
             }
+            
             this.expectToken("end");
             this.consumeToken();
-            return { type: "IfStmt", condition, thenBlock, elseBlock };
+            
+            return { 
+                type: "IfStmt", 
+                condition, 
+                thenBlock, 
+                elseBlock,
+                elseIf: elseIfBlocks.length > 0 ? elseIfBlocks : null
+            };
         }
 
         // --- namespace ---
@@ -1122,7 +1141,30 @@ export class Interpreter {
                 const condition = this.evaluateExpr(stmt.condition, env);
                 if (condition) {
                     this.executeBlock(stmt.thenBlock, new Environment(env));
-                } else if (stmt.elseBlock) {
+                } 
+                // Handle elseif
+                else if (stmt.elseIf) {
+                    let matched = false;
+                    // Create a new environment for the elseif chain
+                    const elseifEnv = new Environment(env);
+                    
+                    // Evaluate elseif conditions in order
+                    for (const elseifBlock of stmt.elseIf) {
+                        const elseifCondition = this.evaluateExpr(elseifBlock.condition, elseifEnv);
+                        if (elseifCondition) {
+                            this.executeBlock(elseifBlock.body, elseifEnv);
+                            matched = true;
+                            break;
+                        }
+                    }
+                    
+                    // If no elseif matched, execute else block if it exists
+                    if (!matched && stmt.elseBlock) {
+                        this.executeBlock(stmt.elseBlock, new Environment(env));
+                    }
+                }
+                // Original else handling
+                else if (stmt.elseBlock) {
                     this.executeBlock(stmt.elseBlock, new Environment(env));
                 }
                 break;
