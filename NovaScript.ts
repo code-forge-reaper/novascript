@@ -1090,7 +1090,10 @@ export class Interpreter {
             }
             case "DeferStmt": {
                 // Add statements to be executed when the block exits
-                stmt.body.forEach(e=>env.addDeferred(e));
+                const stack:Statement[] = []
+                stmt.body.forEach(e=>stack.push(e));
+                stack.reverse().forEach(e=>env.addDeferred(e))
+
                 break;
             }
             case "ExpressionStmt": {
