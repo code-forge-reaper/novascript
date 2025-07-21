@@ -8,7 +8,11 @@ import util from "util";
 
 interface Token {
     type: string;
+    // @ts-ignore
     value: any;
+    file: string
+    line: number
+    column: number
 }
 
 interface RuntimeVersion {
@@ -17,17 +21,18 @@ interface RuntimeVersion {
     patch: number;
 }
 
-interface Statement {
+// Statement and Expression now extend Token to carry location information
+interface Statement extends Token {
     type: string;
     [key: string]: any;
 }
 
-interface Expression {
+interface Expression extends Token {
     type: string;
     [key: string]: any;
 }
 
-interface Parameter {
+interface Parameter extends Token { // Also ensure Parameter carries token info if it's used for errors
     name: string;
     type: string | null;
     default?: Expression;
@@ -90,11 +95,31 @@ class ContinueException extends Error {
     constructor() { super("Continue"); }
 }
 
+// NovaError now handles potential null/undefined tokens more robustly
+class NovaError extends Error {
+    line: number
+    column: number
+    file: string // Added file property
+    constructor(token: Token | null | undefined, userMessage?: string) {
+        // Provide fallback values if token is null/undefined or lacks properties
+        const file = token?.file || "unknown_file";
+        const line = token?.line || 0;
+        const column = token?.column || 0;
+        const tokenValue = token?.value !== undefined ? token.value : 'N/A';
+
+        const message = `${file}:${line}:${column} ${userMessage || 'unknown error at token: ' + tokenValue}`;
+        super(message);
+        this.line = line;
+        this.column = column;
+        this.file = file; // Initialize file
+    }
+}
+
 /* A simple environment for variable scoping */
 class Environment {
     values: Record<string, any>;
     parent: Environment | null;
-    deferred: Statement[];  // Add this line
+    deferred: Statement[];
 
     constructor(parent: Environment | null = null) {
         this.values = {};
@@ -117,33 +142,24 @@ class Environment {
         this.values[name] = value;
     }
 
-    assign(name: string, value: any): void {
+    assign(name: string, value: any, tok: Token): void {
         if (name in this.values) {
             this.values[name] = value;
         } else if (this.parent) {
-            this.parent.assign(name, value);
+            this.parent.assign(name, value, tok);
         } else {
-            throw new Error(`Undefined variable ${name}`);
+            throw new NovaError(tok, `Undefined variable ${name}`);
         }
     }
 
-    has(name: string): boolean {
-        if (name in this.values) {
-            return true;
-        } else if (this.parent) {
-            return this.parent.has(name);
-        } else {
-            return false;
-        }
-    }
-
-    get(name: string): any {
+    // Modified get method to accept a Token for error reporting
+    get(name: string, tok: Token): any {
         if (name in this.values) {
             return this.values[name];
         } else if (this.parent) {
-            return this.parent.get(name);
+            return this.parent.get(name, tok);
         } else {
-            throw new Error(`Undefined variable ${name}`);
+            throw new NovaError(tok, `Undefined variable ${name}`);
         }
     }
 }
@@ -152,40 +168,43 @@ function initGlobals(globals: Environment): void {
     globals.define('print', console.log);
     const runtimeVersion: RuntimeVersion = {
         major: 0,
-        minor: 5,
-        patch: 4
+        minor: 6,
+        patch: 0
     };
-    
+
+    // Create a dummy token for internal/bootstrap errors in initGlobals
+    const internalToken: Token = { type: "internal", value: "init", file: "internal_init.ts", line: 1, column: 1 };
+
     globals.define("isArray", Array.isArray);
     globals.define("new", (className: any, ...args: any[]) => new className(...args));
-    
+
     globals.define("Logger", {
-        info: (...args: any[]) => console.log("[info %s| at: %i:%i:%i]:", globals.get("Runtime").versionString,
+        info: (...args: any[]) => console.log("[info %s| at: %i:%i:%i]:", globals.get("Runtime", internalToken).versionString, // Pass internalToken
             new Date().getHours(),
             new Date().getMinutes(),
             new Date().getSeconds(),
             ...args
         ),
-        warn: (...args: any[]) => console.warn("[warn %s| at: %i:%i:%i]:", globals.get("Runtime").versionString,
+        warn: (...args: any[]) => console.warn("[warn %s| at: %i:%i:%i]:", globals.get("Runtime", internalToken).versionString, // Pass internalToken
             new Date().getHours(),
             new Date().getMinutes(),
             new Date().getSeconds(),
             ...args
         ),
-        error: (...args: any[]) => console.error("[error %s| at: %i:%i:%i]:", globals.get("Runtime").versionString,
+        error: (...args: any[]) => console.error("[error %s| at: %i:%i:%i]:", globals.get("Runtime", internalToken).versionString, // Pass internalToken
             new Date().getHours(),
             new Date().getMinutes(),
             new Date().getSeconds(),
             ...args
         )
     });
-    
+
     globals.define("is", {
         string: (str: any) => typeof str === "string",
         number: (num: any) => typeof num === "number",
         boolean: (bool: any) => typeof bool === "boolean",
     });
-    
+
     const args = process.argv.slice(2);
     globals.define("json", JSON);
     globals.define("parse", {
@@ -194,14 +213,12 @@ function initGlobals(globals: Environment): void {
         str: String,
         bool: Boolean
     });
-    
+
     globals.define("math", Math);
-    // globals.define("void", undefined);
-    //globals.define("void", null)
     globals.define("null", null);
     globals.define("undefined", undefined);
     globals.define("NaN", NaN);
-    
+
     globals.define('Runtime', {
         dump: {
             keys: Object.keys,
@@ -228,12 +245,16 @@ function initGlobals(globals: Environment): void {
             if (key) return process.env[key];
             return process.env;
         },
+        // This throw is for user-facing `Runtime.throw` in NovaScript, so it should use NovaError
         throw: (reason?: any, ...rest: any[]) => {
             if (rest) {
                 let s = util.format(reason, ...rest);
                 reason = s;
             }
-            throw new Error(reason);
+            // For Runtime.throw, we don't have a direct token from the script.
+            // We can create a dummy one or use a generic "runtime" token.
+            const runtimeThrowToken: Token = { type: "runtime", value: "throw", file: "runtime_internal.ts", line: 0, column: 0 };
+            throw new NovaError(runtimeThrowToken, reason);
         },
         fs: {
             read: function (path: string) {
@@ -259,22 +280,24 @@ function initGlobals(globals: Environment): void {
 }
 
 /* Helper function for type checking */
-function checkType(expected: string, value: any): any {
+function checkType(expected: string, value: any, token: Token): any {
     switch (expected) {
         case "number":
-            if (typeof value !== "number") throw new Error(`Type mismatch: expected number, got ${typeof value}`);
+            if (typeof value !== "number") throw new NovaError(token, `Type mismatch: expected number, got ${typeof value}`);
             break;
         case "string":
-            if (typeof value !== "string") throw new Error(`Type mismatch: expected string, got ${typeof value}`);
+            if (typeof value !== "string") throw new NovaError(token, `Type mismatch: expected string, got ${typeof value}`);
             break;
         case "boolean":
-            if (typeof value !== "boolean") throw new Error(`Type mismatch: expected boolean, got ${typeof value}`);
+            if (typeof value !== "boolean") throw new NovaError(token, `Type mismatch: expected boolean, got ${typeof value}`);
             break;
         case "void":
-            if (value !== undefined) throw new Error(`Type mismatch: expected void, got ${typeof value}`);
+            // Changed to NovaError
+            if (value !== undefined) throw new NovaError(token, `Type mismatch: expected void, got ${typeof value}`);
             break;
         default:
-            throw new Error(`Unknown type: ${expected}`);
+            // Changed to NovaError
+            throw new NovaError(token, `Unknown type: ${expected}`);
     }
     return value;
 }
@@ -286,7 +309,7 @@ export class Interpreter {
         "do", "in", "try", "errored", "defer",
         "switch", "case", "default", "using"
     ];
-    
+
     source: string;
     file: string;
     tokens: Token[];
@@ -302,7 +325,7 @@ export class Interpreter {
         this.file = filePath;
         this.importedFiles = new Set();
 
-        this.tokens = this.tokenize(source);
+        this.tokens = this.tokenize(source, filePath); // Pass filePath to tokenize
         this.current = 0;
         this.globals = new Environment();
         this.functions = {};
@@ -313,17 +336,29 @@ export class Interpreter {
     // ----------------------
     // Tokenization
     // ----------------------
-    tokenize(source: string): Token[] {
+    tokenize(source: string, file: string): Token[] { // Corrected type of file parameter
         const tokens: Token[] = [];
         let i = 0;
+        let line = 1;
+        let col = 1;
+
         const length = source.length;
 
         while (i < length) {
             let char = source[i];
 
             // Skip whitespace.
+            if (char === "\n") {
+                line++;
+                col = 1;
+                i++;
+                continue;
+            }
+
+            // Skip whitespace.
             if (/\s/.test(char)) {
                 i++;
+                col++;
                 continue;
             }
 
@@ -332,12 +367,22 @@ export class Interpreter {
                 while (i < length && source[i] !== "\n") {
                     i++;
                 }
+
+                i++;
+                col = 1;
+                line++;
                 continue;
             }
             if (char === "/" && i + 1 < length && source[i + 1] === "*") {
                 i += 2;
                 while (i < length && !(source[i] === "*" && i + 1 < length && source[i + 1] === "/")) {
                     i++;
+                    if (source[i] === "\n") {
+                        line++;
+                        col = 1;
+                    } else {
+                        col++;
+                    }
                 }
                 i += 2;
                 continue;
@@ -345,12 +390,12 @@ export class Interpreter {
 
             // --- Logical operators (&& and ||) ---
             if (char === "&" && i + 1 < length && source[i + 1] === "&") {
-                tokens.push({ type: "operator", value: "&&" });
+                tokens.push({ type: "operator", value: "&&", line, column: col, file: file });
                 i += 2;
                 continue;
             }
             if (char === "|" && i + 1 < length && source[i + 1] === "|") {
-                tokens.push({ type: "operator", value: "||" });
+                tokens.push({ type: "operator", value: "||", line, column: col, file: file });
                 i += 2;
                 continue;
             }
@@ -358,17 +403,20 @@ export class Interpreter {
             // Numbers (supporting decimals)
             if (/[0-9]/.test(char)) {
                 let num = "";
+                const startCol = col; // Capture starting column for number
                 while (i < length && /[0-9\.]/.test(source[i])) {
                     num += source[i];
                     i++;
+                    col++; // Increment column for each character consumed
                 }
-                tokens.push({ type: "number", value: parseFloat(num) });
+                tokens.push({ type: "number", value: parseFloat(num), line, column: startCol, file: file });
                 continue;
             }
 
             // Strings: delimited by double quotes.
             if (char === '"') {
                 i++;
+                const startCol = col; // Capture starting column for string
                 let str = "";
                 while (i < length && source[i] !== '"') {
                     if (source[i] === "\\" && i + 1 < length) {
@@ -387,25 +435,29 @@ export class Interpreter {
                         str += source[i];
                     }
                     i++;
+                    col++; // Increment column for each character consumed
                 }
                 i++;
-                tokens.push({ type: "string", value: str });
+                col++; // For the closing quote
+                tokens.push({ type: "string", value: str, line, column: startCol, file: file });
                 continue;
             }
 
             // Identifiers, keywords, booleans.
             if (/[A-Za-z_]/.test(char)) {
                 let id = "";
+                const startCol = col; // Capture starting column for identifier
                 while (i < length && /[A-Za-z0-9_]/.test(source[i])) {
                     id += source[i];
                     i++;
+                    col++; // Increment column for each character consumed
                 }
                 if (id === "true" || id === "false") {
-                    tokens.push({ type: "boolean", value: id === "true" });
+                    tokens.push({ type: "boolean", value: id === "true", line, column: startCol, file });
                 } else if (this.keywords.includes(id)) {
-                    tokens.push({ type: "keyword", value: id });
+                    tokens.push({ type: "keyword", value: id, line, column: startCol, file });
                 } else {
-                    tokens.push({ type: "identifier", value: id });
+                    tokens.push({ type: "identifier", value: id, line, column: startCol, file });
                 }
                 continue;
             }
@@ -413,31 +465,37 @@ export class Interpreter {
             // Multi-character operators: ==, !=, >=, <=.
             if (char === "=" || char === "!" || char === "<" || char === ">") {
                 let op = char;
+                const startCol = col;
                 if (i + 1 < length && source[i + 1] === "=") {
                     op += "=";
                     i += 2;
+                    col += 2;
                 } else {
                     i++;
+                    col++;
                 }
-                tokens.push({ type: "operator", value: op });
+                tokens.push({ type: "operator", value: op, line, column: startCol, file });
                 continue;
             }
 
             // Dot operator for property access.
             if (char === ".") {
-                tokens.push({ type: "operator", value: "." });
+                tokens.push({ type: "operator", value: ".", line, column: col, file });
                 i++;
+                col++;
                 continue;
             }
 
             // Single-character operators/punctuation.
             if ("#+-*%/(),{}[]:".includes(char)) {
-                tokens.push({ type: "operator", value: char });
+                tokens.push({ type: "operator", value: char, line, column: col, file });
                 i++;
+                col++;
                 continue;
             }
 
-            throw new Error(`Unexpected character: ${char}`);
+            // Changed to NovaError
+            throw new NovaError({ type: "error", value: char, file: file, line: line, column: col }, `Unexpected character: ${char}`);
         }
         return tokens;
     }
@@ -456,15 +514,21 @@ export class Interpreter {
     expectType(type: string): Token {
         const token = this.getNextToken();
         if (!token || token.type !== type) {
-            throw new Error(`Expected token type ${type}, got ${token ? token.type : "EOF"}`);
+            throw new NovaError(token, `Expected token type ${type}, got ${token ? token.type : "EOF"}`);
         }
         return token;
     }
 
+    // Changed to NovaError
     expectToken(value: string): Token {
         const token = this.getNextToken();
-        if (!token || token.value !== value) {
-            throw new Error(`Expected token '${value}', got ${token ? token.value : "EOF"}`);
+        if (!token) {
+            // Create a dummy token for EOF, or pass the last valid token for context
+            const lastToken = this.tokens[this.current - 1] || { type: "EOF", value: "EOF", file: this.file, line: 1, column: 1 };
+            throw new NovaError(lastToken, `Expected token '${value}', got EOF`);
+        }
+        if (token.value !== value) {
+            throw new NovaError(token, `Expected token '${value}', got ${token.value}`);
         }
         return token;
     }
@@ -476,7 +540,11 @@ export class Interpreter {
         const statements: Statement[] = [];
         while (this.current < this.tokens.length) {
             const token = this.getNextToken();
-            if (!token) throw new Error("Unexpected end of input");
+            if (!token) {
+                // Changed to NovaError
+                const lastToken = this.tokens[this.current - 1] || { type: "EOF", value: "EOF", file: this.file, line: 1, column: 1 };
+                throw new NovaError(lastToken, "Unexpected end of input");
+            }
             if (
                 (token.type === "keyword" && terminators.includes(token.value)) ||
                 (token.type === "operator" && terminators.includes(token.value))
@@ -501,7 +569,11 @@ export class Interpreter {
     // ----------------------
     parseStatement(): Statement {
         const token = this.getNextToken();
-        if (!token) throw new Error("Unexpected end of input");
+        if (!token) {
+            // Changed to NovaError
+            const lastToken = this.tokens[this.current - 1] || { type: "EOF", value: "EOF", file: this.file, line: 1, column: 1 };
+            throw new NovaError(lastToken, "Unexpected end of input");
+        }
 
         // --- Label statement ---
         if (token.type === "keyword" && token.value === "label") {
@@ -509,7 +581,7 @@ export class Interpreter {
             const nameToken = this.expectType("identifier");
             const name = nameToken.value;
             this.consumeToken();
-            return { type: "LabelStmt", name };
+            return { type: "LabelStmt", name, line: token.line, column: token.column, file: token.file };
         }
         // --- Defer statement ---
         if (token.type === "keyword" && token.value === "defer") {
@@ -517,7 +589,7 @@ export class Interpreter {
             const body = this.parseBlockUntil(["end"]);
             this.expectToken("end");
             this.consumeToken();
-            return { type: "DeferStmt", body };
+            return { type: "DeferStmt", body, line: token.line, column: token.column, file: token.file };
         }
         // --- Variable declaration with optional type annotation ---
         if (token.type === "keyword" && token.value === "var") {
@@ -530,10 +602,10 @@ export class Interpreter {
             let typeAnnotation: string | null = null;
             if (
                 this.getNextToken() &&
-                this.getNextToken().type === "identifier" &&
-                ["string", "number", "boolean", "void"].includes(this.getNextToken().value)
+                this.getNextToken()!.type === "identifier" && // Added ! for non-null assertion
+                ["string", "number", "boolean", "void"].includes(this.getNextToken()!.value) // Added !
             ) {
-                typeAnnotation = this.getNextToken().value;
+                typeAnnotation = this.getNextToken()!.value; // Added !
                 this.consumeToken();
             }
 
@@ -541,8 +613,8 @@ export class Interpreter {
             let modifier: string | null = null;
             if (
                 this.getNextToken() &&
-                this.getNextToken().type === "operator" &&
-                this.getNextToken().value === "#"
+                this.getNextToken()!.type === "operator" && // Added !
+                this.getNextToken()!.value === "#" // Added !
             ) {
                 this.consumeToken();
                 const modToken = this.expectType("identifier");
@@ -553,7 +625,7 @@ export class Interpreter {
             this.expectToken("=");
             this.consumeToken();
             const initializer = this.parseExpression();
-            return { type: "VarDecl", name, typeAnnotation, initializer, modifier };
+            return { type: "VarDecl", name, typeAnnotation, initializer, modifier, line: token.line, column: token.column, file: token.file };
         }
 
         // --- Switch statement ---
@@ -561,7 +633,7 @@ export class Interpreter {
             this.consumeToken();
             const expression = this.parseExpression();
             const cases: Case[] = [];
-            while (this.getNextToken()?.type === "keyword" && this.getNextToken().value === "case") {
+            while (this.getNextToken()?.type === "keyword" && this.getNextToken()!.value === "case") { // Added !
                 this.consumeToken();
                 const caseExpr = this.parseExpression();
                 this.expectToken("do");
@@ -571,7 +643,7 @@ export class Interpreter {
                 this.consumeToken();
                 cases.push({ caseExpr, body });
             }
-            if (this.getNextToken()?.type === "keyword" && this.getNextToken().value === "default") {
+            if (this.getNextToken()?.type === "keyword" && this.getNextToken()!.value === "default") { // Added !
                 this.consumeToken();
                 this.expectToken("do");
                 this.consumeToken();
@@ -584,7 +656,7 @@ export class Interpreter {
             this.expectToken("end");
             this.consumeToken();
 
-            return { type: "SwitchStmt", expression, cases };
+            return { type: "SwitchStmt", expression, cases, line: token.line, column: token.column, file: token.file };
         }
 
         // --- using statement ---
@@ -593,7 +665,7 @@ export class Interpreter {
             const nameToken = this.expectType("identifier");
             this.consumeToken();
 
-            return { type: "UsingStmt", name: nameToken.value };
+            return { type: "UsingStmt", name: nameToken.value, line: token.line, column: token.column, file: token.file };
         }
 
         // --- Try/Catch statement ---
@@ -608,7 +680,7 @@ export class Interpreter {
             const catchBlock = this.parseBlockUntil(["end"]);
             this.expectToken("end");
             this.consumeToken();
-            return { type: "TryStmt", tryBlock, errorVar, catchBlock };
+            return { type: "TryStmt", tryBlock, errorVar, catchBlock, line: token.line, column: token.column, file: token.file };
         }
 
         // --- ForEach loop ---
@@ -625,7 +697,7 @@ export class Interpreter {
             const body = this.parseBlockUntil(["end"]);
             this.expectToken("end");
             this.consumeToken();
-            return { type: "ForEachStmt", variable, list: listExpr, body };
+            return { type: "ForEachStmt", variable, list: listExpr, body, line: token.line, column: token.column, file: token.file };
         }
 
         // --- For loop ---
@@ -650,7 +722,7 @@ export class Interpreter {
             const body = this.parseBlockUntil(["end"]);
             this.expectToken("end");
             this.consumeToken();
-            return { type: "ForStmt", variable, start: startExpr, end: endExpr, step: stepExpr, body };
+            return { type: "ForStmt", variable, start: startExpr, end: endExpr, step: stepExpr, body, line: token.line, column: token.column, file: token.file };
         }
 
         // --- While loop ---
@@ -660,51 +732,52 @@ export class Interpreter {
             const body = this.parseBlockUntil(["end"]);
             this.expectToken("end");
             this.consumeToken();
-            return { type: "WhileStmt", condition, body };
+            return { type: "WhileStmt", condition, body, line: token.line, column: token.column, file: token.file };
         }
 
         // --- Break statement ---
         if (token.type === "keyword" && token.value === "break") {
             this.consumeToken();
-            return { type: "BreakStmt" };
+            return { type: "BreakStmt", line: token.line, column: token.column, file: token.file };
         }
         // --- Continue statement ---
         if (token.type === "keyword" && token.value === "continue") {
             this.consumeToken();
-            return { type: "ContinueStmt" };
+            return { type: "ContinueStmt", line: token.line, column: token.column, file: token.file };
         }
 
         if (token.type === "keyword" && token.value === "if") {
             this.consumeToken();
             const condition = this.parseExpression();
             const thenBlock = this.parseBlockUntil(["else", "elseif", "end"]);
-            
+
             const elseIfBlocks: { condition: Expression, body: Statement[] }[] = [];
             let elseBlock: Statement[] | null = null;
-            
+
             // Parse elseif chains
-            while (this.getNextToken()?.type === "keyword" && this.getNextToken().value === "elseif") {
+            while (this.getNextToken()?.type === "keyword" && this.getNextToken()!.value === "elseif") { // Added !
                 this.consumeToken(); // consume 'elseif'
                 const elseifCondition = this.parseExpression();
                 const elseifBody = this.parseBlockUntil(["else", "elseif", "end"]);
                 elseIfBlocks.push({ condition: elseifCondition, body: elseifBody });
             }
-            
+
             // Parse else block if present
-            if (this.getNextToken()?.type === "keyword" && this.getNextToken().value === "else") {
+            if (this.getNextToken()?.type === "keyword" && this.getNextToken()!.value === "else") { // Added !
                 this.consumeToken();
                 elseBlock = this.parseBlockUntil(["end"]);
             }
-            
+
             this.expectToken("end");
             this.consumeToken();
-            
-            return { 
-                type: "IfStmt", 
-                condition, 
-                thenBlock, 
+
+            return {
+                type: "IfStmt",
+                condition,
+                thenBlock,
                 elseBlock,
-                elseIf: elseIfBlocks.length > 0 ? elseIfBlocks : null
+                elseIf: elseIfBlocks.length > 0 ? elseIfBlocks : null,
+                line: token.line, column: token.column, file: token.file
             };
         }
 
@@ -717,9 +790,9 @@ export class Interpreter {
             const body = this.parseBlockUntil(["end"]);
             this.expectToken("end");
             this.consumeToken();
-            return { type: "NamespaceStmt", name, body };
+            return { type: "NamespaceStmt", name, body, line: token.line, column: token.column, file: token.file };
         }
-        
+
         if (token.type === "keyword" && token.value === "func") {
             this.consumeToken();
             const nameToken = this.expectType("identifier");
@@ -729,7 +802,7 @@ export class Interpreter {
             this.consumeToken();
 
             const parameters: Parameter[] = [];
-            if (this.getNextToken() && this.getNextToken().value !== ")") {
+            if (this.getNextToken() && this.getNextToken()!.value !== ")") { // Added !
                 while (true) {
                     const paramToken = this.expectType("identifier");
                     const paramName = paramToken.value;
@@ -740,7 +813,7 @@ export class Interpreter {
 
                     // optional type annotation
                     if (this.getNextToken()?.type === "identifier") {
-                        const typeToken = this.getNextToken();
+                        const typeToken = this.getNextToken()!; // Added !
                         if (["string", "number", "bool"].includes(typeToken.value)) {
                             paramType = typeToken.value;
                             this.consumeToken();
@@ -752,7 +825,7 @@ export class Interpreter {
                         this.consumeToken();
                         defaultExpr = this.parseExpression();
                         if (paramType) {
-                            throw new Error("cannot have both type and default value, as that prevents type infering");
+                            throw new NovaError(token, "cannot have both type and default value, as that prevents type infering");
                         }
                         if (!defaultExpr.value)
                             paramType = defaultExpr.type;
@@ -760,7 +833,8 @@ export class Interpreter {
                             paramType = defaultExpr.value.type;
                     }
 
-                    parameters.push({ name: paramName, type: paramType, default: defaultExpr });
+                    // Ensure Parameter also has token info
+                    parameters.push({ name: paramName, type: paramType, default: defaultExpr, file: paramToken.file, line: paramToken.line, column: paramToken.column, type: paramToken.type, value: paramToken.value });
 
                     if (this.getNextToken()?.value === ",") {
                         this.consumeToken();
@@ -780,7 +854,8 @@ export class Interpreter {
                 type: "FuncDecl",
                 name,
                 parameters,
-                body
+                body,
+                file: token.file, line: token.line, column: token.column
             };
         }
 
@@ -788,10 +863,10 @@ export class Interpreter {
         if (token.type === "keyword" && token.value === "return") {
             this.consumeToken();
             let expression: Expression | null = null;
-            if (this.getNextToken() && !this.keywords.includes(this.getNextToken().value)) {
+            if (this.getNextToken() && !this.keywords.includes(this.getNextToken()!.value)) { // Added !
                 expression = this.parseExpression();
             }
-            return { type: "ReturnStmt", expression };
+            return { type: "ReturnStmt", expression, file: token.file, line: token.line, column: token.column };
         }
 
         // --- Import statement ---
@@ -801,18 +876,18 @@ export class Interpreter {
             const filename = fileToken.value;
             this.consumeToken();
             let alias: string | null = null;
-            if (this.getNextToken() && this.getNextToken().value === "as") {
+            if (this.getNextToken() && this.getNextToken()!.value === "as") { // Added !
                 this.consumeToken();
                 const aliasToken = this.expectType("identifier");
                 alias = aliasToken.value;
                 this.consumeToken();
             }
-            return { type: "ImportStmt", filename, alias };
+            return { type: "ImportStmt", filename, alias, file: token.file, line: token.line, column: token.column };
         }
 
         // --- Expression statement (fallback) ---
         const expr = this.parseExpression();
-        return { type: "ExpressionStmt", expression: expr };
+        return { type: "ExpressionStmt", expression: expr, file: token.file, line: token.line, column: token.column };
     }
 
     // --- Expression Parsing (Recursive Descent) ---
@@ -824,12 +899,13 @@ export class Interpreter {
         let expr = this.parseLogicalOr();
         if (
             this.getNextToken() &&
-            this.getNextToken().type === "operator" &&
-            this.getNextToken().value === "="
+            this.getNextToken()!.type === "operator" && // Added !
+            this.getNextToken()!.value === "=" // Added !
         ) {
-            this.consumeToken();
+            const assignmentOpToken = this.consumeToken(); // Capture the operator token
             const valueExpr = this.parseAssignment();
-            expr = { type: "AssignmentExpr", target: expr, value: valueExpr };
+            // Added file, line, column
+            expr = { type: "AssignmentExpr", target: expr, value: valueExpr, file: assignmentOpToken.file, line: assignmentOpToken.line, column: assignmentOpToken.column };
         }
         return expr;
     }
@@ -838,12 +914,14 @@ export class Interpreter {
         let expr = this.parseLogicalAnd();
         while (
             this.getNextToken() &&
-            this.getNextToken().type === "operator" &&
-            this.getNextToken().value === "||"
+            this.getNextToken()!.type === "operator" && // Added !
+            this.getNextToken()!.value === "||" // Added !
         ) {
-            const operator = this.consumeToken().value;
+            const operatorToken = this.consumeToken(); // Capture the operator token
+            const operator = operatorToken.value;
             const right = this.parseLogicalAnd();
-            expr = { type: "BinaryExpr", operator, left: expr, right };
+            // Added file, line, column
+            expr = { type: "BinaryExpr", operator, left: expr, right, file: operatorToken.file, line: operatorToken.line, column: operatorToken.column };
         }
         return expr;
     }
@@ -852,12 +930,14 @@ export class Interpreter {
         let expr = this.parseEquality();
         while (
             this.getNextToken() &&
-            this.getNextToken().type === "operator" &&
-            this.getNextToken().value === "&&"
+            this.getNextToken()!.type === "operator" && // Added !
+            this.getNextToken()!.value === "&&" // Added !
         ) {
-            const operator = this.consumeToken().value;
+            const operatorToken = this.consumeToken(); // Capture the operator token
+            const operator = operatorToken.value;
             const right = this.parseEquality();
-            expr = { type: "BinaryExpr", operator, left: expr, right };
+            // Added file, line, column
+            expr = { type: "BinaryExpr", operator, left: expr, right, file: operatorToken.file, line: operatorToken.line, column: operatorToken.column };
         }
         return expr;
     }
@@ -866,12 +946,14 @@ export class Interpreter {
         let expr = this.parseComparison();
         while (
             this.getNextToken() &&
-            this.getNextToken().type === "operator" &&
-            (this.getNextToken().value === "==" || this.getNextToken().value === "!=")
+            this.getNextToken()!.type === "operator" && // Added !
+            (this.getNextToken()!.value === "==" || this.getNextToken()!.value === "!=") // Added !
         ) {
-            const operator = this.consumeToken().value;
+            const operatorToken = this.consumeToken(); // Capture the operator token
+            const operator = operatorToken.value;
             const right = this.parseComparison();
-            expr = { type: "BinaryExpr", operator, left: expr, right };
+            // Added file, line, column
+            expr = { type: "BinaryExpr", operator, left: expr, right, file: operatorToken.file, line: operatorToken.line, column: operatorToken.column };
         }
         return expr;
     }
@@ -880,12 +962,14 @@ export class Interpreter {
         let expr = this.parseTerm();
         while (
             this.getNextToken() &&
-            this.getNextToken().type === "operator" &&
-            ["<", "<=", ">", ">="].includes(this.getNextToken().value)
+            this.getNextToken()!.type === "operator" && // Added !
+            ["<", "<=", ">", ">="].includes(this.getNextToken()!.value) // Added !
         ) {
-            const operator = this.consumeToken().value;
+            const operatorToken = this.consumeToken(); // Capture the operator token
+            const operator = operatorToken.value;
             const right = this.parseTerm();
-            expr = { type: "BinaryExpr", operator, left: expr, right };
+            // Added file, line, column
+            expr = { type: "BinaryExpr", operator, left: expr, right, file: operatorToken.file, line: operatorToken.line, column: operatorToken.column };
         }
         return expr;
     }
@@ -894,12 +978,14 @@ export class Interpreter {
         let expr = this.parseFactor();
         while (
             this.getNextToken() &&
-            this.getNextToken().type === "operator" &&
-            (this.getNextToken().value === "+" || this.getNextToken().value === "-")
+            this.getNextToken()!.type === "operator" && // Added !
+            (this.getNextToken()!.value === "+" || this.getNextToken()!.value === "-") // Added !
         ) {
-            const operator = this.consumeToken().value;
+            const operatorToken = this.consumeToken(); // Capture the operator token
+            const operator = operatorToken.value;
             const right = this.parseFactor();
-            expr = { type: "BinaryExpr", operator, left: expr, right };
+            // Added file, line, column
+            expr = { type: "BinaryExpr", operator, left: expr, right, file: operatorToken.file, line: operatorToken.line, column: operatorToken.column };
         }
         return expr;
     }
@@ -908,12 +994,14 @@ export class Interpreter {
         let expr = this.parseUnary();
         while (
             this.getNextToken() &&
-            this.getNextToken().type === "operator" &&
-            (this.getNextToken().value === "*" || this.getNextToken().value === "/" || this.getNextToken().value === "%")
+            this.getNextToken()!.type === "operator" && // Added !
+            (this.getNextToken()!.value === "*" || this.getNextToken()!.value === "/" || this.getNextToken()!.value === "%") // Added !
         ) {
-            const operator = this.consumeToken().value;
+            const operatorToken = this.consumeToken(); // Capture the operator token
+            const operator = operatorToken.value;
             const right = this.parseUnary();
-            expr = { type: "BinaryExpr", operator, left: expr, right };
+            // Added file, line, column
+            expr = { type: "BinaryExpr", operator, left: expr, right, file: operatorToken.file, line: operatorToken.line, column: operatorToken.column };
         }
         return expr;
     }
@@ -921,12 +1009,14 @@ export class Interpreter {
     parseUnary(): Expression {
         if (
             this.getNextToken() &&
-            this.getNextToken().type === "operator" &&
-            (this.getNextToken().value === "-" || this.getNextToken().value === "!")
+            this.getNextToken()!.type === "operator" && // Added !
+            (this.getNextToken()!.value === "-" || this.getNextToken()!.value === "!") // Added !
         ) {
-            const operator = this.consumeToken().value;
+            const operatorToken = this.consumeToken(); // Capture the operator token
+            const operator = operatorToken.value;
             const right = this.parseUnary();
-            return { type: "UnaryExpr", operator, right };
+            // Added file, line, column
+            return { type: "UnaryExpr", operator, right, file: operatorToken.file, line: operatorToken.line, column: operatorToken.column };
         }
         return this.parsePrimary();
     }
@@ -935,24 +1025,28 @@ export class Interpreter {
         let node: Expression;
         const token = this.getNextToken();
         if (!token) {
-            throw new Error("Unexpected end of input");
+            // Changed to NovaError
+            const lastToken = this.tokens[this.current - 1] || { type: "EOF", value: "EOF", file: this.file, line: 1, column: 1 };
+            throw new NovaError(lastToken, "Unexpected end of input");
         }
 
         if (token.type === "boolean") {
             this.consumeToken();
-            node = { type: "Literal", value: token.value };
+            // Added file, line, column
+            node = { type: "Literal", value: token.value, file: token.file, line: token.line, column: token.column };
         }
         else if (token.type === "number" || token.type === "string") {
             this.consumeToken();
-            node = { type: "Literal", value: token.value };
+            // Added file, line, column
+            node = { type: "Literal", value: token.value, file: token.file, line: token.line, column: token.column };
         }
         else if (token.value === "[") {
             this.consumeToken();
             const elements: Expression[] = [];
-            if (this.getNextToken() && this.getNextToken().value !== "]") {
+            if (this.getNextToken() && this.getNextToken()!.value !== "]") { // Added !
                 while (true) {
                     elements.push(this.parseExpression());
-                    if (this.getNextToken() && this.getNextToken().value === ",") {
+                    if (this.getNextToken() && this.getNextToken()!.value === ",") { // Added !
                         this.consumeToken();
                     } else {
                         break;
@@ -961,16 +1055,17 @@ export class Interpreter {
             }
             this.expectToken("]");
             this.consumeToken();
-            node = { type: "ArrayLiteral", elements };
+            // Added file, line, column
+            node = { type: "ArrayLiteral", elements, file: token.file, line: token.line, column: token.column };
         }
         else if (token.value === "{") {
             this.consumeToken();
             const properties: { key: string; value: Expression }[] = [];
-            if (this.getNextToken() && this.getNextToken().value !== "}") {
+            if (this.getNextToken() && this.getNextToken()!.value !== "}") { // Added !
                 while (true) {
-                    let keyToken = this.getNextToken();
+                    let keyToken = this.getNextToken()!; // Added !
                     if (keyToken.type !== "identifier" && keyToken.type !== "string") {
-                        throw new Error("Expected identifier or string as object key");
+                        throw new NovaError(keyToken, "Expected identifier or string as object key");
                     }
                     const key = keyToken.value;
                     this.consumeToken();
@@ -978,7 +1073,7 @@ export class Interpreter {
                     this.consumeToken();
                     const value = this.parseExpression();
                     properties.push({ key, value });
-                    if (this.getNextToken() && this.getNextToken().value === ",") {
+                    if (this.getNextToken() && this.getNextToken()!.value === ",") { // Added !
                         this.consumeToken();
                     } else {
                         break;
@@ -987,25 +1082,27 @@ export class Interpreter {
             }
             this.expectToken("}");
             this.consumeToken();
-            node = { type: "ObjectLiteral", properties };
+            // Added file, line, column
+            node = { type: "ObjectLiteral", properties, file: token.file, line: token.line, column: token.column };
         }
         else if (token.type === "identifier") {
             this.consumeToken();
-            if (this.getNextToken() && this.getNextToken().value === "[") {
+            if (this.getNextToken() && this.getNextToken()!.value === "[") { // Added !
                 // array access
                 this.consumeToken();
                 const index = this.parseExpression();
                 this.expectToken("]");
                 this.consumeToken();
-                node = { type: "ArrayAccess", name: token.value, index };
+                // Added file, line, column
+                node = { type: "ArrayAccess", name: token.value, index, file: token.file, line: token.line, column: token.column };
             }
-            else if (this.getNextToken() && this.getNextToken().value === "(") {
+            else if (this.getNextToken() && this.getNextToken()!.value === "(") { // Added !
                 this.consumeToken();
                 const args: Expression[] = [];
-                if (this.getNextToken() && this.getNextToken().value !== ")") {
+                if (this.getNextToken() && this.getNextToken()!.value !== ")") { // Added !
                     while (true) {
                         args.push(this.parseExpression());
-                        if (this.getNextToken() && this.getNextToken().value === ",") {
+                        if (this.getNextToken() && this.getNextToken()!.value === ",") { // Added !
                             this.consumeToken();
                         } else {
                             break;
@@ -1014,9 +1111,11 @@ export class Interpreter {
                 }
                 this.expectToken(")");
                 this.consumeToken();
-                node = { type: "FuncCall", name: token.value, arguments: args };
+                // Added file, line, column
+                node = { type: "FuncCall", name: token.value, arguments: args, file: token.file, line: token.line, column: token.column };
             } else {
-                node = { type: "Identifier", name: token.value };
+                // Added file, line, column
+                node = { type: "Identifier", name: token.value, file: token.file, line: token.line, column: token.column };
             }
         }
         else if (token.value === "(") {
@@ -1024,41 +1123,47 @@ export class Interpreter {
             node = this.parseExpression();
             this.expectToken(")");
             this.consumeToken();
+            // The node returned from parseExpression already has token info.
+            // No need to add it here, as it's just a grouping.
         }
         else {
-            throw new Error(`Unexpected token: ${JSON.stringify(token)}`);
+            throw new NovaError(token, `Unexpected token: ${JSON.stringify(token)}`);
         }
 
-        while (this.getNextToken() && this.getNextToken().value === ".") {
-            this.consumeToken();                             // consume "."
+        while (this.getNextToken() && this.getNextToken()!.value === ".") { // Added !
+            const dotToken = this.consumeToken();                             // consume "."
             const propToken = this.expectType("identifier");
             const propName = propToken.value;
             this.consumeToken();                             // consume identifier
 
             // method-call?
-            if (this.getNextToken() && this.getNextToken().value === "(") {
+            if (this.getNextToken() && this.getNextToken()!.value === "(") { // Added !
                 this.consumeToken();                           // consume "("
                 const args: Expression[] = [];
-                while (this.getNextToken() && this.getNextToken().value !== ")") {
+                while (this.getNextToken() && this.getNextToken()!.value !== ")") { // Added !
                     args.push(this.parseExpression());
-                    if (this.getNextToken().value === ",") this.consumeToken();
+                    if (this.getNextToken()!.value === ",") this.consumeToken(); // Added !
                     else break;
                 }
                 this.expectToken(")");
                 this.consumeToken();                           // consume ")"
 
+                // Added file, line, column
                 node = {
                     type: "MethodCall",
                     object: node,
                     method: propName,
-                    arguments: args
+                    arguments: args,
+                    file: propToken.file, line: propToken.line, column: propToken.column // Use propToken for location
                 };
             } else {
                 // plain property access
+                // Added file, line, column
                 node = {
                     type: "PropertyAccess",
                     object: node,
-                    property: propName
+                    property: propName,
+                    file: propToken.file, line: propToken.line, column: propToken.column // Use propToken for location
                 };
             }
         }
@@ -1076,7 +1181,12 @@ export class Interpreter {
         } catch (err) {
             // Ensure deferred statements still execute
             this.globals.executeDeferred(this);
-            console.error("Uncaught error:", err);
+            if (err instanceof NovaError) {
+                //console.log(err.message)
+                process.stderr.write(err.message+"\n")
+            } else {
+                console.error("Uncaught error:", err);
+            }
         }
     }
     executeBlock(statements: Statement[], env: Environment): void {
@@ -1104,16 +1214,16 @@ export class Interpreter {
             case "VarDecl": {
                 const value = this.evaluateExpr(stmt.initializer, env);
                 if (stmt.typeAnnotation) {
-                    checkType(stmt.typeAnnotation, value);
+                    checkType(stmt.typeAnnotation, value, stmt);
                 }
                 env.define(stmt.name, value);
                 break;
             }
             case "DeferStmt": {
                 // Add statements to be executed when the block exits
-                const stack:Statement[] = []
-                stmt.body.forEach(e=>stack.push(e));
-                stack.reverse().forEach(e=>env.addDeferred(e))
+                const stack: Statement[] = []
+                stmt.body.forEach(e => stack.push(e));
+                stack.reverse().forEach(e => env.addDeferred(e))
 
                 break;
             }
@@ -1132,7 +1242,9 @@ export class Interpreter {
                     this.executeBlock(stmt.tryBlock, env);
                 } catch (e) {
                     const catchEnv = new Environment(env);
-                    catchEnv.define(stmt.errorVar, e);
+                    // If e is an Error or NovaError, pass it. Otherwise, wrap it.
+                    const errorToDefine = (e instanceof Error || e instanceof NovaError) ? e : new NovaError(stmt, String(e));
+                    catchEnv.define(stmt.errorVar, errorToDefine);
                     this.executeBlock(stmt.catchBlock, catchEnv);
                 }
                 break;
@@ -1141,13 +1253,13 @@ export class Interpreter {
                 const condition = this.evaluateExpr(stmt.condition, env);
                 if (condition) {
                     this.executeBlock(stmt.thenBlock, new Environment(env));
-                } 
+                }
                 // Handle elseif
                 else if (stmt.elseIf) {
                     let matched = false;
                     // Create a new environment for the elseif chain
                     const elseifEnv = new Environment(env);
-                    
+
                     // Evaluate elseif conditions in order
                     for (const elseifBlock of stmt.elseIf) {
                         const elseifCondition = this.evaluateExpr(elseifBlock.condition, elseifEnv);
@@ -1157,7 +1269,7 @@ export class Interpreter {
                             break;
                         }
                     }
-                    
+
                     // If no elseif matched, execute else block if it exists
                     if (!matched && stmt.elseBlock) {
                         this.executeBlock(stmt.elseBlock, new Environment(env));
@@ -1184,6 +1296,9 @@ export class Interpreter {
             }
             case "ForEachStmt": {
                 const list = this.evaluateExpr(stmt.list, env);
+                if (!Array.isArray(list)) {
+                    throw new NovaError(stmt, `Cannot iterate over non-array type for forEach loop. Got: ${typeof list}`);
+                }
                 for (const item of list) {
                     const loopEnv = new Environment(env);
                     loopEnv.define(stmt.variable, item);
@@ -1203,6 +1318,11 @@ export class Interpreter {
                 const start = this.evaluateExpr(stmt.start, env);
                 const end = this.evaluateExpr(stmt.end, env);
                 const step = stmt.step ? this.evaluateExpr(stmt.step, env) : 1;
+
+                if (typeof start !== 'number' || typeof end !== 'number' || typeof step !== 'number') {
+                    throw new NovaError(stmt, `For loop bounds and step must be numbers. Got start: ${typeof start}, end: ${typeof end}, step: ${typeof step}`);
+                }
+
                 for (let i = start; i <= end; i += step) {
                     const loopEnv = new Environment(env);
                     loopEnv.define(stmt.variable, i);
@@ -1223,10 +1343,10 @@ export class Interpreter {
                 if (stmt.filename.startsWith("js:")) {
                     filePath = filePath.substring(3);
                     if (!env.has("js-import-handler")) {
-                        throw new Error("js-import-handler is not defined, your runtime should define it, interpreter.globals.define('js-import-handler', handler)");
+                        throw new NovaError(stmt, "js-import-handler is not defined, your runtime should define it, interpreter.globals.define('js-import-handler', handler)");
                     }
 
-                    const handler = env.get("js-import-handler") as (path: string) => any;
+                    const handler = env.get("js-import-handler", stmt) as (path: string) => any; // Pass stmt as token
                     const result = handler(filePath);
                     let name = stmt.alias || filePath;
                     env.define(name, result);
@@ -1235,10 +1355,16 @@ export class Interpreter {
                 filePath += ".nova";
                 const fileDir = path.dirname(this.file);
 
-                if (this.importedFiles.has(filePath)) break;
-                this.importedFiles.add(filePath);
-
                 const fullPath = path.resolve(fileDir, filePath);
+                if (this.importedFiles.has(fullPath)) break; // Check fullPath for uniqueness
+                this.importedFiles.add(fullPath);
+
+
+                // Check if file exists before trying to read
+                if (!fs.existsSync(fullPath)) {
+                    throw new NovaError(stmt, `Import error: File not found at '${fullPath}'`);
+                }
+
                 const importedInterpreter = new Interpreter(fullPath);
                 const importedEnv = new Environment(this.globals);
                 importedInterpreter.globals = importedEnv;
@@ -1270,22 +1396,24 @@ export class Interpreter {
             case "SwitchStmt": {
                 const value = this.evaluateExpr(stmt.expression, env);
                 let matched = false;
+                let defaultCaseBody: Statement[] | null = null;
 
                 for (const c of stmt.cases) {
-                    // Default case
-                    if (c.caseExpr === null) {
-                        if (!matched) {
-                            this.executeBlock(c.body, new Environment(env));
-                            break;
-                        }
+                    if (c.caseExpr === null) { // This is the default case
+                        defaultCaseBody = c.body;
                     } else {
                         const caseVal = this.evaluateExpr(c.caseExpr, env);
                         if (value === caseVal) {
                             this.executeBlock(c.body, new Environment(env));
                             matched = true;
-                            break;
+                            break; // Exit switch after first match
                         }
                     }
+                }
+
+                // If no case matched and a default case exists, execute it
+                if (!matched && defaultCaseBody) {
+                    this.executeBlock(defaultCaseBody, new Environment(env));
                 }
                 break;
             }
@@ -1299,6 +1427,10 @@ export class Interpreter {
                 const func = (...args: any[]) => {
                     const funcEnv = new Environment(env);
 
+                    if (args.length > stmt.parameters.length) {
+                        throw new NovaError(stmt, `Too many arguments passed to function '${stmt.name}'. Expected ${stmt.parameters.length}, got ${args.length}.`);
+                    }
+
                     for (let i = 0; i < stmt.parameters.length; i++) {
                         const param = stmt.parameters[i];
                         let argVal = args[i];
@@ -1306,6 +1438,9 @@ export class Interpreter {
                         // apply default if missing
                         if (argVal === undefined && param.default !== undefined) {
                             argVal = this.evaluateExpr(param.default, env);
+                        } else if (argVal === undefined && param.default === undefined) {
+                            // If an argument is missing and no default is provided
+                            throw new NovaError(param, `Missing argument for parameter '${param.name}' in function '${stmt.name}'.`);
                         }
 
                         // soft type check
@@ -1314,11 +1449,11 @@ export class Interpreter {
                             const actualType = typeof argVal;
 
                             if (type === "number" && actualType !== "number") {
-                                throw new Error(`Type mismatch in function '${stmt.name}': parameter '${param.name}' expected number, got ${actualType}`);
+                                throw new NovaError(param, `Type mismatch in function '${stmt.name}': parameter '${param.name}' expected number, got ${actualType}`);
                             } else if (type === "string" && actualType !== "string") {
-                                throw new Error(`Type mismatch in function '${stmt.name}': parameter '${param.name}' expected string, got ${actualType}`);
+                                throw new NovaError(param, `Type mismatch in function '${stmt.name}': parameter '${param.name}' expected string, got ${actualType}`);
                             } else if (type === "bool" && actualType !== "boolean") {
-                                throw new Error(`Type mismatch in function '${stmt.name}': parameter '${param.name}' expected bool, got ${actualType}`);
+                                throw new NovaError(param, `Type mismatch in function '${stmt.name}': parameter '${param.name}' expected bool, got ${actualType}`);
                             }
                         }
 
@@ -1334,6 +1469,7 @@ export class Interpreter {
                             throw e;
                         }
                     }
+                    return undefined; // Functions without explicit return return undefined
                 };
 
                 env.define(stmt.name, func);
@@ -1341,7 +1477,7 @@ export class Interpreter {
             }
 
             case "UsingStmt": {
-                const namespace = env.get(stmt.name);
+                const namespace = env.get(stmt.name, stmt); // Pass stmt as token
                 if (namespace instanceof Environment) {
                     for (const [key, value] of Object.entries(namespace.values)) {
                         env.define(key, value);
@@ -1350,12 +1486,14 @@ export class Interpreter {
                     for (const [key, value] of Object.entries(namespace)) {
                         env.define(key, value);
                     }
+                } else {
+                    throw new NovaError(stmt, `Cannot 'use' non-namespace value '${stmt.name}'.`);
                 }
                 break;
             }
 
             default:
-                throw new Error(`Unknown statement type: ${stmt.type}\n${JSON.stringify(stmt, null, 2)}`);
+                throw new NovaError(stmt, `Unknown statement type: ${stmt.type}`);
         }
     }
 
@@ -1363,35 +1501,36 @@ export class Interpreter {
         const arrayName = expr.name;
         const indexExpr = expr.index;
 
-        const arr = env.get(arrayName);
+        const arr = env.get(arrayName, expr); // Pass expr as token
         const index = this.evaluateExpr(indexExpr, env);
 
         if (!Array.isArray(arr) && typeof arr !== "object") {
-            throw new Error(`Cannot index into non-array: ${typeof arr}`);
+            throw new NovaError(expr, `Cannot index into non-array: ${typeof arr}`);
         }
 
         return { arr, index };
     }
 
     expandPropTarget(expr: PropertyAccess, env: Environment): { obj: any, key: string } {
-        let current: any = expr;
+        let current: Expression = expr; // Explicitly type current as Expression
         const chain: string[] = [];
 
+        // Traverse the property access chain to get the base object and all properties
         while (current.type === "PropertyAccess") {
             chain.unshift(current.property);
             current = current.object;
         }
 
         if (current.type !== "Identifier") {
-            throw new Error("Invalid base for property access: " + current.type);
+            throw new NovaError(expr, "Invalid base for property access: " + current.type);
         }
 
-        let obj = env.get(current.name);
+        let obj = env.get(current.name, current); // Pass current as token
 
         for (let i = 0; i < chain.length - 1; i++) {
             const key = chain[i];
             if (obj == null || typeof obj !== 'object') {
-                throw new Error("Cannot access property '" + key + "' on non-object");
+                throw new NovaError(expr, "Cannot access property '" + key + "' on non-object");
             }
             obj = obj[key];
         }
@@ -1407,22 +1546,31 @@ export class Interpreter {
             case "Literal":
                 return expr.value;
             case "Identifier":
-                return env.get(expr.name);
+                return env.get(expr.name, expr); // Pass expr as token
             case "AssignmentExpr": {
                 const value = this.evaluateExpr(expr.value, env);
                 if (expr.target.type == "ArrayAccess") {
                     const { arr, index } = this.expandArrayTarget(expr.target as ArrayAccess, env);
+                    if (arr === null || arr === undefined) {
+                        throw new NovaError(expr.target, `Cannot assign to index of null or undefined value.`);
+                    }
+                    if (typeof index !== 'number' && typeof index !== 'string') {
+                        throw new NovaError(expr.target, `Array index must be a number or string. Got: ${typeof index}`);
+                    }
                     arr[index] = value;
                 } else if (expr.target.type === "PropertyAccess") {
                     const { obj, key } = this.expandPropTarget(expr.target as PropertyAccess, env);
                     if (obj instanceof Environment) {
-                        throw new Error("Cannot assign to environment");
+                        throw new NovaError(expr.target, "Cannot assign to environment properties directly.");
+                    }
+                    if (obj === null || obj === undefined) {
+                        throw new NovaError(expr.target, `Cannot assign property '${key}' of null or undefined value.`);
                     }
                     obj[key] = value;
                 } else if (expr.target.type === "Identifier") {
-                    env.assign(expr.target.name, value);
+                    env.assign(expr.target.name, value, expr.target); // Pass expr.target as token
                 } else {
-                    throw new Error("Unsupported assignment target: " + `${expr.target.type}(${JSON.stringify(expr.target, null, 2)})`);
+                    throw new NovaError(expr.target, "Unsupported assignment target: " + `${expr.target.type}(${JSON.stringify(expr.target, null, 2)})`);
                 }
 
                 return value;
@@ -1436,7 +1584,11 @@ export class Interpreter {
                     case "%": return left % right;
                     case "-": return left - right;
                     case "*": return left * right;
-                    case "/": return left / right;
+                    case "/":
+                        if (right === 0) {
+                            throw new NovaError(expr, "Division by zero is not allowed.");
+                        }
+                        return left / right;
                     case "==": return left === right;
                     case "!=": return left !== right;
                     case "<": return left < right;
@@ -1445,31 +1597,42 @@ export class Interpreter {
                     case ">=": return left >= right;
                     case "&&": return left && right;
                     case "||": return left || right;
-                    default: throw new Error(`Unknown binary operator: ${expr.operator}`);
+                    default:
+                        throw new NovaError(expr, `Unknown binary operator: ${expr.operator}`);
                 }
             }
             case "UnaryExpr": {
                 const right = this.evaluateExpr(expr.right, env);
                 switch (expr.operator) {
-                    case "-": return -right;
+                    case "-":
+                        if (typeof right !== 'number') {
+                            throw new NovaError(expr, `Unary '-' operator can only be applied to numbers. Got: ${typeof right}`);
+                        }
+                        return -right;
                     case "!": return !right;
-                    default: throw new Error(`Unknown unary operator: ${expr.operator}`);
+                    default:
+                        throw new NovaError(expr, `Unknown unary operator: ${expr.operator}`);
                 }
             }
             case "FuncCall": {
-                const func = env.get(expr.name);
+                const func = env.get(expr.name, expr); // Pass expr as token
                 if (typeof func !== "function") {
-                    throw new Error(`${expr.name} is not a function`);
+                    throw new NovaError(expr, `${expr.name} is not a function`);
                 }
                 const args = expr.arguments.map(arg => this.evaluateExpr(arg, env));
                 return func(...args);
             }
             case "MethodCall": {
                 const obj = this.evaluateExpr(expr.object, env);
-                const fn = (obj instanceof Environment) ? obj.get(expr.method) : obj[expr.method];
-                
+
+                if (obj === null || obj === undefined) {
+                    throw new NovaError(expr, `Cannot call method '${expr.method}' on null or undefined.`);
+                }
+
+                const fn = (obj instanceof Environment) ? obj.get(expr.method, expr) : obj[expr.method]; // Pass expr as token
+
                 if (typeof fn !== "function") {
-                    throw new Error(`${expr.method} is not a function`);
+                    throw new NovaError(expr, `${expr.method} is not a function or method on this object`);
                 }
 
                 const argVals = expr.arguments.map(arg => this.evaluateExpr(arg, env));
@@ -1477,17 +1640,27 @@ export class Interpreter {
             }
 
             case "ArrayAccess": {
-                const arr = env.get(expr.name);
+                const arr = env.get(expr.name, expr); // Pass expr as token
                 const index = this.evaluateExpr(expr.index, env);
+                if (!Array.isArray(arr) && typeof arr !== 'object') {
+                    throw new NovaError(expr, `Cannot access index of non-array/object: ${typeof arr}`);
+                }
+                if (typeof index !== 'number' && typeof index !== 'string') {
+                    throw new NovaError(expr, `Array/object index must be a number or string. Got: ${typeof index}`);
+                }
                 return arr[index];
             }
             case "PropertyAccess": {
                 const obj = this.evaluateExpr(expr.object, env);
-                
-                if (obj instanceof Environment) {
-                    return obj.get(expr.property);
+
+                if (obj === null || obj === undefined) {
+                    throw new NovaError(expr, `Cannot access property '${expr.property}' of null or undefined.`);
                 }
-                
+
+                if (obj instanceof Environment) {
+                    return obj.get(expr.property, expr); // Pass expr as token
+                }
+
                 return obj[expr.property];
             }
 
@@ -1502,7 +1675,7 @@ export class Interpreter {
                 return obj;
             }
             default:
-                throw new Error(`Unknown expression type: ${expr.type}`);
+                throw new NovaError(expr, `Unknown expression type: ${expr.type}`);
         }
     }
 }
