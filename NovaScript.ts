@@ -78,7 +78,7 @@ interface DeferStmt extends Statement {
 }
 
 /* A special exception used to implement returning values from functions */
-class ReturnException extends Error {
+export class ReturnException extends Error {
     value: any;
     constructor(value: any) {
         super("Return");
@@ -87,16 +87,16 @@ class ReturnException extends Error {
 }
 
 /* Special exceptions to implement break/continue */
-class BreakException extends Error {
+export class BreakException extends Error {
     constructor() { super("Break"); }
 }
 
-class ContinueException extends Error {
+export class ContinueException extends Error {
     constructor() { super("Continue"); }
 }
 
 // NovaError now handles potential null/undefined tokens more robustly
-class NovaError extends Error {
+export class NovaError extends Error {
     line: number
     column: number
     file: string // Added file property
@@ -116,7 +116,7 @@ class NovaError extends Error {
 }
 
 /* A simple environment for variable scoping */
-class Environment {
+export class Environment {
     values: Record<string, any>;
     parent: Environment | null;
     deferred: Statement[];
@@ -163,13 +163,15 @@ class Environment {
     }
 
     // Modified get method to accept a Token for error reporting
-    get(name: string, tok: Token): any {
+    get(name: string, tok?: Token): any {
         if (name in this.values) {
             return this.values[name];
         } else if (this.parent) {
             return this.parent.get(name, tok);
         } else {
-            throw new NovaError(tok, `Undefined variable ${name}`);
+            if (tok)
+                throw new NovaError(tok, `Undefined variable ${name}`);
+            throw new Error(`Undefined variable ${name}`);
         }
     }
 }
@@ -178,8 +180,8 @@ function initGlobals(globals: Environment): void {
     globals.define('print', console.log);
     const runtimeVersion: RuntimeVersion = {
         major: 0,
-        minor: 6,
-        patch: 1
+        minor: 7,
+        patch: 0
     };
 
     // Create a dummy token for internal/bootstrap errors in initGlobals
@@ -317,7 +319,10 @@ export class Interpreter {
         "var", "if", "else", "elseif", "end", "break", "continue", "func",
         "return", "import", "as", "namespace", "while", "forEach", "for",
         "do", "in", "try", "errored", "defer",
-        "switch", "case", "default", "using"
+        "switch", "case", "default", "using",
+        // "def" = "(...)=>{...}"
+        // def (...) ... end
+        "def"
     ];
 
     source: string;
@@ -869,6 +874,68 @@ export class Interpreter {
             };
         }
 
+        if (token.type === "keyword" && token.value === "def") {
+            this.consumeToken();
+            this.expectToken("(");
+            this.consumeToken();
+
+            const parameters: Parameter[] = [];
+            if (this.getNextToken() && this.getNextToken()!.value !== ")") { // Added !
+                while (true) {
+                    const paramToken = this.expectType("identifier");
+                    const paramName = paramToken.value;
+                    this.consumeToken();
+
+                    let paramType: string | null = null;
+                    let defaultExpr: Expression | undefined;
+
+                    // optional type annotation
+                    if (this.getNextToken()?.type === "identifier") {
+                        const typeToken = this.getNextToken()!; // Added !
+                        if (["string", "number", "bool"].includes(typeToken.value)) {
+                            paramType = typeToken.value;
+                            this.consumeToken();
+                        }
+                    }
+
+                    // optional default value
+                    if (this.getNextToken()?.value === "=") {
+                        this.consumeToken();
+                        defaultExpr = this.parseExpression();
+                        if (paramType) {
+                            throw new NovaError(token, "cannot have both type and default value, as that prevents type infering");
+                        }
+                        if (!defaultExpr.value)
+                            paramType = defaultExpr.type;
+                        else
+                            paramType = defaultExpr.value.type;
+                    }
+
+                    // Ensure Parameter also has token info
+                    parameters.push({ name: paramName, type: paramType, default: defaultExpr, file: paramToken.file, line: paramToken.line, column: paramToken.column, type: paramToken.type, value: paramToken.value });
+
+                    if (this.getNextToken()?.value === ",") {
+                        this.consumeToken();
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            this.expectToken(")");
+            this.consumeToken();
+            const body = this.parseBlockUntil(["end"]);
+            this.expectToken("end");
+            this.consumeToken();
+
+            return {
+                type: "LambdaDecl",
+                parameters,
+                body,
+                file: token.file, line: token.line, column: token.column
+            };
+        }
+
         // --- Return statement ---
         if (token.type === "keyword" && token.value === "return") {
             this.consumeToken();
@@ -1128,6 +1195,68 @@ export class Interpreter {
                 node = { type: "Identifier", name: token.value, file: token.file, line: token.line, column: token.column };
             }
         }
+        else if(token.value == "def"){
+            // x = def (...)  ... end
+            this.consumeToken();
+            this.expectToken("(");
+            this.consumeToken();
+
+            const parameters: Parameter[] = [];
+            if (this.getNextToken() && this.getNextToken()!.value !== ")") { // Added !
+                while (true) {
+                    const paramToken = this.expectType("identifier");
+                    const paramName = paramToken.value;
+                    this.consumeToken();
+
+                    let paramType: string | null = null;
+                    let defaultExpr: Expression | undefined;
+
+                    // optional type annotation
+                    if (this.getNextToken()?.type === "identifier") {
+                        const typeToken = this.getNextToken()!; // Added !
+                        if (["string", "number", "bool"].includes(typeToken.value)) {
+                            paramType = typeToken.value;
+                            this.consumeToken();
+                        }
+                    }
+
+                    // optional default value
+                    if (this.getNextToken()?.value === "=") {
+                        this.consumeToken();
+                        defaultExpr = this.parseExpression();
+                        if (paramType) {
+                            throw new NovaError(token, "cannot have both type and default value, as that prevents type infering");
+                        }
+                        if (!defaultExpr.value)
+                            paramType = defaultExpr.type;
+                        else
+                            paramType = defaultExpr.value.type;
+                    }
+
+                    // Ensure Parameter also has token info
+                    parameters.push({ name: paramName, type: paramType, default: defaultExpr, file: paramToken.file, line: paramToken.line, column: paramToken.column, type: paramToken.type, value: paramToken.value });
+
+                    if (this.getNextToken()?.value === ",") {
+                        this.consumeToken();
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            this.expectToken(")");
+            this.consumeToken();
+            const body = this.parseBlockUntil(["end"]);
+            this.expectToken("end");
+            this.consumeToken();
+
+            return {
+                type: "LambdaDecl",
+                parameters,
+                body,
+                file: token.file, line: token.line, column: token.column
+            };
+        }
         else if (token.value === "(") {
             this.consumeToken();
             node = this.parseExpression();
@@ -1191,12 +1320,7 @@ export class Interpreter {
         } catch (err) {
             // Ensure deferred statements still execute
             this.globals.executeDeferred(this);
-            if (err instanceof NovaError) {
-                //console.log(err.message)
-                process.stderr.write(err.message+"\n")
-            } else {
-                console.error("Uncaught error:", err);
-            }
+            throw err
         }
     }
     executeBlock(statements: Statement[], env: Environment): void {
@@ -1486,6 +1610,7 @@ export class Interpreter {
                 break;
             }
 
+
             case "UsingStmt": {
                 const namespace = env.get(stmt.name, stmt); // Pass stmt as token
                 if (namespace instanceof Environment) {
@@ -1677,6 +1802,59 @@ export class Interpreter {
             case "ArrayLiteral": {
                 return expr.elements.map(element => this.evaluateExpr(element, env));
             }
+
+            case "LambdaDecl": {
+                const stmt = expr;
+                const func = (...args: any[]) => {
+                    const funcEnv = new Environment(env);
+
+                    if (args.length > stmt.parameters.length) {
+                        throw new NovaError(stmt, `Too many arguments passed to function '${stmt.name}'. Expected ${stmt.parameters.length}, got ${args.length}.`);
+                    }
+
+                    for (let i = 0; i < stmt.parameters.length; i++) {
+                        const param = stmt.parameters[i];
+                        let argVal = args[i];
+
+                        // apply default if missing
+                        if (argVal === undefined && param.default !== undefined) {
+                            argVal = this.evaluateExpr(param.default, env);
+                        } else if (argVal === undefined && param.default === undefined) {
+                            // If an argument is missing and no default is provided
+                            throw new NovaError(param, `Missing argument for parameter '${param.name}' in function '${stmt.name}'.`);
+                        }
+
+                        // soft type check
+                        if (param.type) {
+                            const type = param.type;
+                            const actualType = typeof argVal;
+
+                            if (type === "number" && actualType !== "number") {
+                                throw new NovaError(param, `Type mismatch in function '${stmt.name}': parameter '${param.name}' expected number, got ${actualType}`);
+                            } else if (type === "string" && actualType !== "string") {
+                                throw new NovaError(param, `Type mismatch in function '${stmt.name}': parameter '${param.name}' expected string, got ${actualType}`);
+                            } else if (type === "bool" && actualType !== "boolean") {
+                                throw new NovaError(param, `Type mismatch in function '${stmt.name}': parameter '${param.name}' expected bool, got ${actualType}`);
+                            }
+                        }
+
+                        funcEnv.define(param.name, argVal);
+                    }
+
+                    try {
+                        this.executeBlock(stmt.body, funcEnv);
+                    } catch (e) {
+                        if (e instanceof ReturnException) {
+                            return e.value;
+                        } else {
+                            throw e;
+                        }
+                    }
+                    return undefined; // Functions without explicit return return undefined
+                };
+
+                return func;
+            }
             case "ObjectLiteral": {
                 const obj: Record<string, any> = {};
                 for (const prop of expr.properties) {
@@ -1689,3 +1867,4 @@ export class Interpreter {
         }
     }
 }
+export default Interpreter
