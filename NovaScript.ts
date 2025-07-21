@@ -142,6 +142,16 @@ class Environment {
         this.values[name] = value;
     }
 
+    has(name: string): boolean {
+        if (name in this.values) {
+            return true;
+        } else if (this.parent) {
+            return this.parent.has(name);
+        } else {
+            return false;
+        }
+    }
+
     assign(name: string, value: any, tok: Token): void {
         if (name in this.values) {
             this.values[name] = value;
@@ -169,7 +179,7 @@ function initGlobals(globals: Environment): void {
     const runtimeVersion: RuntimeVersion = {
         major: 0,
         minor: 6,
-        patch: 0
+        patch: 1
     };
 
     // Create a dummy token for internal/bootstrap errors in initGlobals
@@ -1127,7 +1137,7 @@ export class Interpreter {
             // No need to add it here, as it's just a grouping.
         }
         else {
-            throw new NovaError(token, `Unexpected token: ${JSON.stringify(token)}`);
+            throw new NovaError(token, `Unexpected token: ${token.value}`);
         }
 
         while (this.getNextToken() && this.getNextToken()!.value === ".") { // Added !
