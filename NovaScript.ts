@@ -1474,13 +1474,13 @@ export class Interpreter {
 
             case "ImportStmt": {
                 let filePath = stmt.filename;
-                if (stmt.filename.startsWith("js:")) {
+                if (stmt.filename.startsWith("os:")) {
                     filePath = filePath.substring(3);
-                    if (!env.has("js-import-handler")) {
-                        throw new NovaError(stmt, "js-import-handler is not defined, your runtime should define it, interpreter.globals.define('js-import-handler', handler)");
+                    if (!env.has("os-import-handler")) {
+                        throw new NovaError(stmt, "os-import-handler is not defined, your runtime should define it, interpreter.globals.define('os-import-handler', handler)");
                     }
 
-                    const handler = env.get("js-import-handler", stmt) as (path: string) => any; // Pass stmt as token
+                    const handler = env.get("os-import-handler", stmt) as (path: string) => any; // Pass stmt as token
                     const result = handler(filePath);
                     let name = stmt.alias || filePath;
                     env.define(name, result);
