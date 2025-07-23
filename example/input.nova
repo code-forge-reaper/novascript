@@ -1,5 +1,5 @@
-import "js:readline-sync" as r
-import "js:process"
+import "os:readline-sync" as r
+import "os:process"
 var stdout = process.stdout
 // this language is so old, i forgot i had added default parameters
 func input(prompt="> ")
