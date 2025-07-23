@@ -50,7 +50,7 @@ contexts:
 
   keywords:
     # Declarations
-    - match: \b(var|func|def|label|jmp|return|import)\b
+    - match: \b(var|func|def|label|jmp|return|import|type)\b
       scope: keyword.declaration.nova
       # import "some module" as alias
     - match: \bas\b\s+(\w+)

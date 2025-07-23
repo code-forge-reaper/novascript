@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 /**
- * NovaScript 
+ * NovaScript
  **/
 import fs from "fs";
 import path from "path";
 import util from "util";
-
 interface Token {
     type: string;
     // @ts-ignore
@@ -32,9 +31,10 @@ interface Expression extends Token {
     [key: string]: any;
 }
 
-interface Parameter extends Token { // Also ensure Parameter carries token info if it's used for errors
+// MODIFIED: Parameter interface to avoid 'type' conflict
+interface Parameter extends Token {
     name: string;
-    type: string | null;
+    annotationType: string | null; // Renamed from 'type' to avoid conflict with Token.type
     default?: Expression;
 }
 
@@ -77,6 +77,36 @@ interface DeferStmt extends Statement {
     body: Statement[];
 }
 
+// NEW: VarDeclStmt interface for clearer type annotation property
+interface VarDeclStmt extends Statement {
+    type: "VarDecl";
+    name: string;
+    typeAnnotation: string | null;
+    initializer: Expression;
+    modifier: string | null;
+}
+
+// NEW: Interfaces for Custom Types
+interface CustomTypeProperty {
+    name: string;
+    type: string; // The NovaScript type name (e.g., "number", "string", "rect")
+}
+
+interface CustomType {
+    name: string;
+    properties: CustomTypeProperty[];
+    file: string;
+    line: number;
+    column: number;
+}
+
+// NEW: Statement for Custom Type Declaration
+interface CustomTypeDeclStmt extends Statement {
+    type: "CustomTypeDecl";
+    name: string;
+    definition: CustomTypeProperty[];
+}
+
 /* A special exception used to implement returning values from functions */
 export class ReturnException extends Error {
     value: any;
@@ -94,6 +124,8 @@ export class BreakException extends Error {
 export class ContinueException extends Error {
     constructor() { super("Continue"); }
 }
+
+// MODIFIED: customTypes is now an instance property of Interpreter, removed global `const customTypes`
 
 // NovaError now handles potential null/undefined tokens more robustly
 export class NovaError extends Error {
@@ -292,8 +324,16 @@ function initGlobals(globals: Environment): void {
 }
 
 /* Helper function for type checking */
-function checkType(expected: string, value: any, token: Token): any {
-    switch (expected) {
+// MODIFIED: Added interpreter parameter
+function checkType(expected: string, value: any, token: Token, interpreter: Interpreter): any {
+    let actualExpected = expected;
+    if (expected === "bool") {
+        actualExpected = "boolean"; // Map 'bool' from parser to 'boolean' for JS type checking
+    }
+
+    //console.log(actualExpected, value, token)
+
+    switch (actualExpected) {
         case "number":
             if (typeof value !== "number") throw new NovaError(token, `Type mismatch: expected number, got ${typeof value}`);
             break;
@@ -308,8 +348,23 @@ function checkType(expected: string, value: any, token: Token): any {
             if (value !== undefined) throw new NovaError(token, `Type mismatch: expected void, got ${typeof value}`);
             break;
         default:
-            // Changed to NovaError
-            throw new NovaError(token, `Unknown type: ${expected}`);
+            // NEW: Check for custom types
+            const customTypeDefinition = interpreter.customTypes.get(expected); // Use original 'expected' for lookup
+            if (customTypeDefinition) {
+                if (typeof value !== "object" || value === null) {
+                    throw new NovaError(token, `Type mismatch: expected custom type '${expected}', got ${typeof value}`);
+                }
+                for (const propDef of customTypeDefinition.properties) {
+                    if (!(propDef.name in value)) {
+                        throw new NovaError(token, `Type mismatch: custom type '${expected}' is missing property '${propDef.name}'`);
+                    }
+                    // Recursively check property type
+                    checkType(propDef.type, value[propDef.name], token, interpreter); // Pass interpreter
+                }
+            } else {
+                // Changed to NovaError
+                throw new NovaError(token, `Unknown type: ${expected}`);
+            }
     }
     return value;
 }
@@ -322,7 +377,9 @@ export class Interpreter {
         "switch", "case", "default", "using",
         // "def" = "(...)=>{...}"
         // def (...) ... end
-        "def"
+        "def",
+        // type rect = {x : number,y: number, width:number, height: number}
+        "type"
     ];
 
     source: string;
@@ -333,6 +390,7 @@ export class Interpreter {
     functions: Record<string, Function>;
     importedFiles: Set<string>;
     currentEnv: Environment | null = null;
+    customTypes: Map<string, CustomType>; // NEW: Custom types map
 
     constructor(filePath: string) {
         const source = fs.readFileSync(filePath, "utf8");
@@ -344,6 +402,7 @@ export class Interpreter {
         this.current = 0;
         this.globals = new Environment();
         this.functions = {};
+        this.customTypes = new Map<string, CustomType>(); // NEW: Initialize customTypes
         initGlobals(this.globals);
         this.globals.define("__SCRIPT_PATH__", path.dirname(this.file));
     }
@@ -606,6 +665,62 @@ export class Interpreter {
             this.consumeToken();
             return { type: "DeferStmt", body, line: token.line, column: token.column, file: token.file };
         }
+        // NEW: Custom Type Declaration
+        if (token.type === "keyword" && token.value === "type") {
+            this.consumeToken(); // consume 'type'
+            const nameToken = this.expectType("identifier");
+            const name = nameToken.value;
+            this.consumeToken(); // consume type name
+
+            this.expectToken("=");
+            this.consumeToken(); // consume '='
+
+            this.expectToken("{");
+            this.consumeToken(); // consume '{'
+
+            const properties: CustomTypeProperty[] = [];
+            while (this.getNextToken() && this.getNextToken()!.value !== "}") {
+                const propNameToken = this.expectType("identifier");
+                const propName = propNameToken.value;
+                this.consumeToken(); // consume property name
+
+                this.expectToken(":");
+                this.consumeToken(); // consume ':'
+
+                // Expect an identifier for the type name (e.g., "number", "string", "MyCustomType")
+                const propTypeToken = this.expectType("identifier");
+                const propType = propTypeToken.value;
+                this.consumeToken(); // consume property type
+
+                properties.push({ name: propName, type: propType });
+
+                if (this.getNextToken() && this.getNextToken()!.value === ",") {
+                    this.consumeToken(); // consume ','
+                } else {
+                    break;
+                }
+            }
+
+            this.expectToken("}");
+            this.consumeToken(); // consume '}'
+            const customTypeStmt = {
+                type: "CustomTypeDecl",
+                name,
+                definition: properties,
+                file: token.file,
+                line: token.line,
+                column: token.column
+            } as CustomTypeDeclStmt;
+            //console.log(`CustomTypeDecl: ${customTypeStmt.name}`);
+            this.customTypes.set(customTypeStmt.name, {
+                name: customTypeStmt.name,
+                properties: customTypeStmt.definition,
+                file: customTypeStmt.file,
+                line: customTypeStmt.line,
+                column: customTypeStmt.column
+            });
+            return customTypeStmt
+        }
         // --- Variable declaration with optional type annotation ---
         if (token.type === "keyword" && token.value === "var") {
             this.consumeToken();
@@ -614,14 +729,22 @@ export class Interpreter {
             this.consumeToken();
 
             // Optional type annotation
-            let typeAnnotation: string | null = null;
+            let annotationType: string | null = null; // MODIFIED: Renamed to annotationType
             if (
                 this.getNextToken() &&
-                this.getNextToken()!.type === "identifier" && // Added ! for non-null assertion
-                ["string", "number", "boolean", "void"].includes(this.getNextToken()!.value) // Added !
+                this.getNextToken()!.type === "identifier"// Added ! for non-null assertion
             ) {
-                typeAnnotation = this.getNextToken()!.value; // Added !
-                this.consumeToken();
+
+                if(
+                    ["string", "number", "boolean", "void", "bool"].includes(this.getNextToken()!.value) || // Added 'bool' for consistency with parser
+                    this.customTypes.has(this.getNextToken()!.value)
+                ){
+                    annotationType = this.getNextToken()!.value; // Added !
+                    this.consumeToken();
+                }else
+                {
+                    throw new NovaError(this.getNextToken()!, `Invalid type annotation: ${this.getNextToken()!.value}`);
+                }
             }
 
             // Optional modifier (e.g., #global)
@@ -640,7 +763,7 @@ export class Interpreter {
             this.expectToken("=");
             this.consumeToken();
             const initializer = this.parseExpression();
-            return { type: "VarDecl", name, typeAnnotation, initializer, modifier, line: token.line, column: token.column, file: token.file };
+            return { type: "VarDecl", name, typeAnnotation: annotationType, initializer, modifier, line: token.line, column: token.column, file: token.file }; // MODIFIED: typeAnnotation
         }
 
         // --- Switch statement ---
@@ -823,14 +946,14 @@ export class Interpreter {
                     const paramName = paramToken.value;
                     this.consumeToken();
 
-                    let paramType: string | null = null;
+                    let annotationType: string | null = null; // MODIFIED: Renamed
                     let defaultExpr: Expression | undefined;
 
                     // optional type annotation
                     if (this.getNextToken()?.type === "identifier") {
                         const typeToken = this.getNextToken()!; // Added !
-                        if (["string", "number", "bool"].includes(typeToken.value)) {
-                            paramType = typeToken.value;
+                        if (["string", "number", "bool", "boolean"].includes(typeToken.value)) { // Added "boolean"
+                            annotationType = typeToken.value; // MODIFIED: Renamed
                             this.consumeToken();
                         }
                     }
@@ -839,17 +962,33 @@ export class Interpreter {
                     if (this.getNextToken()?.value === "=") {
                         this.consumeToken();
                         defaultExpr = this.parseExpression();
-                        if (paramType) {
-                            throw new NovaError(token, "cannot have both type and default value, as that prevents type infering");
+                        if (annotationType) { // MODIFIED: Logic for explicit type + default
+                            throw new NovaError(token, "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.");
                         }
-                        if (!defaultExpr.value)
-                            paramType = defaultExpr.type;
-                        else
-                            paramType = defaultExpr.value.type;
+
+                        // Infer type from default value if no explicit annotation
+                        if (defaultExpr.type === "Literal") {
+                            const inferredType = typeof (defaultExpr as Literal).value;
+                            if (inferredType === "string") annotationType = "string";
+                            else if (inferredType === "number") annotationType = "number";
+                            else if (inferredType === "boolean") annotationType = "bool"; // Use "bool" for consistency with parser
+                            else annotationType = null; // Cannot infer
+                        } else {
+                            annotationType = null; // For complex expressions, inference at parse time is difficult.
+                        }
                     }
 
                     // Ensure Parameter also has token info
-                    parameters.push({ name: paramName, type: paramType, default: defaultExpr, file: paramToken.file, line: paramToken.line, column: paramToken.column, type: paramToken.type, value: paramToken.value });
+                    parameters.push({
+                        name: paramName,
+                        annotationType: annotationType, // MODIFIED: Renamed
+                        default: defaultExpr,
+                        file: paramToken.file,
+                        line: paramToken.line,
+                        column: paramToken.column,
+                        type: paramToken.type, // Token type (e.g., "identifier")
+                        value: paramToken.value // Token value (the identifier name)
+                    });
 
                     if (this.getNextToken()?.value === ",") {
                         this.consumeToken();
@@ -886,14 +1025,14 @@ export class Interpreter {
                     const paramName = paramToken.value;
                     this.consumeToken();
 
-                    let paramType: string | null = null;
+                    let annotationType: string | null = null; // MODIFIED: Renamed
                     let defaultExpr: Expression | undefined;
 
                     // optional type annotation
                     if (this.getNextToken()?.type === "identifier") {
                         const typeToken = this.getNextToken()!; // Added !
-                        if (["string", "number", "bool"].includes(typeToken.value)) {
-                            paramType = typeToken.value;
+                        if (["string", "number", "bool", "boolean"].includes(typeToken.value)) { // Added "boolean"
+                            annotationType = typeToken.value; // MODIFIED: Renamed
                             this.consumeToken();
                         }
                     }
@@ -902,17 +1041,33 @@ export class Interpreter {
                     if (this.getNextToken()?.value === "=") {
                         this.consumeToken();
                         defaultExpr = this.parseExpression();
-                        if (paramType) {
-                            throw new NovaError(token, "cannot have both type and default value, as that prevents type infering");
+                        if (annotationType) { // MODIFIED: Logic for explicit type + default
+                            throw new NovaError(token, "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.");
                         }
-                        if (!defaultExpr.value)
-                            paramType = defaultExpr.type;
-                        else
-                            paramType = defaultExpr.value.type;
+
+                        // Infer type from default value if no explicit annotation
+                        if (defaultExpr.type === "Literal") {
+                            const inferredType = typeof (defaultExpr as Literal).value;
+                            if (inferredType === "string") annotationType = "string";
+                            else if (inferredType === "number") annotationType = "number";
+                            else if (inferredType === "boolean") annotationType = "bool"; // Use "bool" for consistency with parser
+                            else annotationType = null; // Cannot infer
+                        } else {
+                            annotationType = null; // For complex expressions, inference at parse time is difficult.
+                        }
                     }
 
                     // Ensure Parameter also has token info
-                    parameters.push({ name: paramName, type: paramType, default: defaultExpr, file: paramToken.file, line: paramToken.line, column: paramToken.column, type: paramToken.type, value: paramToken.value });
+                    parameters.push({
+                        name: paramName,
+                        annotationType: annotationType, // MODIFIED: Renamed
+                        default: defaultExpr,
+                        file: paramToken.file,
+                        line: paramToken.line,
+                        column: paramToken.column,
+                        type: paramToken.type, // Token type (e.g., "identifier")
+                        value: paramToken.value // Token value (the identifier name)
+                    });
 
                     if (this.getNextToken()?.value === ",") {
                         this.consumeToken();
@@ -1208,14 +1363,14 @@ export class Interpreter {
                     const paramName = paramToken.value;
                     this.consumeToken();
 
-                    let paramType: string | null = null;
+                    let annotationType: string | null = null; // MODIFIED: Renamed
                     let defaultExpr: Expression | undefined;
 
                     // optional type annotation
                     if (this.getNextToken()?.type === "identifier") {
                         const typeToken = this.getNextToken()!; // Added !
-                        if (["string", "number", "bool"].includes(typeToken.value)) {
-                            paramType = typeToken.value;
+                        if (["string", "number", "bool", "boolean"].includes(typeToken.value)) { // Added "boolean"
+                            annotationType = typeToken.value; // MODIFIED: Renamed
                             this.consumeToken();
                         }
                     }
@@ -1224,17 +1379,33 @@ export class Interpreter {
                     if (this.getNextToken()?.value === "=") {
                         this.consumeToken();
                         defaultExpr = this.parseExpression();
-                        if (paramType) {
-                            throw new NovaError(token, "cannot have both type and default value, as that prevents type infering");
+                        if (annotationType) { // MODIFIED: Logic for explicit type + default
+                            throw new NovaError(token, "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.");
                         }
-                        if (!defaultExpr.value)
-                            paramType = defaultExpr.type;
-                        else
-                            paramType = defaultExpr.value.type;
+
+                        // Infer type from default value if no explicit annotation
+                        if (defaultExpr.type === "Literal") {
+                            const inferredType = typeof (defaultExpr as Literal).value;
+                            if (inferredType === "string") annotationType = "string";
+                            else if (inferredType === "number") annotationType = "number";
+                            else if (inferredType === "boolean") annotationType = "bool"; // Use "bool" for consistency with parser
+                            else annotationType = null; // Cannot infer
+                        } else {
+                            annotationType = null; // For complex expressions, inference at parse time is difficult.
+                        }
                     }
 
                     // Ensure Parameter also has token info
-                    parameters.push({ name: paramName, type: paramType, default: defaultExpr, file: paramToken.file, line: paramToken.line, column: paramToken.column, type: paramToken.type, value: paramToken.value });
+                    parameters.push({
+                        name: paramName,
+                        annotationType: annotationType, // MODIFIED: Renamed
+                        default: defaultExpr,
+                        file: paramToken.file,
+                        line: paramToken.line,
+                        column: paramToken.column,
+                        type: paramToken.type, // Token type (e.g., "identifier")
+                        value: paramToken.value // Token value (the identifier name)
+                    });
 
                     if (this.getNextToken()?.value === ",") {
                         this.consumeToken();
@@ -1346,11 +1517,12 @@ export class Interpreter {
     executeStmt(stmt: Statement, env: Environment): void {
         switch (stmt.type) {
             case "VarDecl": {
-                const value = this.evaluateExpr(stmt.initializer, env);
-                if (stmt.typeAnnotation) {
-                    checkType(stmt.typeAnnotation, value, stmt);
+                const varDeclStmt = stmt as VarDeclStmt; // Cast to VarDeclStmt
+                const value = this.evaluateExpr(varDeclStmt.initializer, env);
+                if (varDeclStmt.typeAnnotation) {
+                    checkType(varDeclStmt.typeAnnotation, value, varDeclStmt, this); // MODIFIED: Pass `this`
                 }
-                env.define(stmt.name, value);
+                env.define(varDeclStmt.name, value);
                 break;
             }
             case "DeferStmt": {
@@ -1500,6 +1672,9 @@ export class Interpreter {
                 }
 
                 const importedInterpreter = new Interpreter(fullPath);
+                // NEW: The imported interpreter should share the same customTypes map
+                importedInterpreter.customTypes = this.customTypes; // Share the customTypes map
+
                 const importedEnv = new Environment(this.globals);
                 importedInterpreter.globals = importedEnv;
 
@@ -1578,17 +1753,9 @@ export class Interpreter {
                         }
 
                         // soft type check
-                        if (param.type) {
-                            const type = param.type;
-                            const actualType = typeof argVal;
-
-                            if (type === "number" && actualType !== "number") {
-                                throw new NovaError(param, `Type mismatch in function '${stmt.name}': parameter '${param.name}' expected number, got ${actualType}`);
-                            } else if (type === "string" && actualType !== "string") {
-                                throw new NovaError(param, `Type mismatch in function '${stmt.name}': parameter '${param.name}' expected string, got ${actualType}`);
-                            } else if (type === "bool" && actualType !== "boolean") {
-                                throw new NovaError(param, `Type mismatch in function '${stmt.name}': parameter '${param.name}' expected bool, got ${actualType}`);
-                            }
+                        if (param.annotationType) { // MODIFIED: Use annotationType
+                            // MODIFIED: Call checkType with interpreter instance
+                            checkType(param.annotationType, argVal, param, this);
                         }
 
                         funcEnv.define(param.name, argVal);
@@ -1626,6 +1793,9 @@ export class Interpreter {
                 }
                 break;
             }
+
+            case "CustomTypeDecl":
+                break
 
             default:
                 throw new NovaError(stmt, `Unknown statement type: ${stmt.type}`);
@@ -1809,7 +1979,7 @@ export class Interpreter {
                     const funcEnv = new Environment(env);
 
                     if (args.length > stmt.parameters.length) {
-                        throw new NovaError(stmt, `Too many arguments passed to function '${stmt.name}'. Expected ${stmt.parameters.length}, got ${args.length}.`);
+                        throw new NovaError(stmt, `Too many arguments passed to function. Expected ${stmt.parameters.length}, got ${args.length}.`); // Removed stmt.name as lambda has no name
                     }
 
                     for (let i = 0; i < stmt.parameters.length; i++) {
@@ -1821,21 +1991,13 @@ export class Interpreter {
                             argVal = this.evaluateExpr(param.default, env);
                         } else if (argVal === undefined && param.default === undefined) {
                             // If an argument is missing and no default is provided
-                            throw new NovaError(param, `Missing argument for parameter '${param.name}' in function '${stmt.name}'.`);
+                            throw new NovaError(param, `Missing argument for parameter '${param.name}'.`);
                         }
 
                         // soft type check
-                        if (param.type) {
-                            const type = param.type;
-                            const actualType = typeof argVal;
-
-                            if (type === "number" && actualType !== "number") {
-                                throw new NovaError(param, `Type mismatch in function '${stmt.name}': parameter '${param.name}' expected number, got ${actualType}`);
-                            } else if (type === "string" && actualType !== "string") {
-                                throw new NovaError(param, `Type mismatch in function '${stmt.name}': parameter '${param.name}' expected string, got ${actualType}`);
-                            } else if (type === "bool" && actualType !== "boolean") {
-                                throw new NovaError(param, `Type mismatch in function '${stmt.name}': parameter '${param.name}' expected bool, got ${actualType}`);
-                            }
+                        if (param.annotationType) { // MODIFIED: Use annotationType
+                            // MODIFIED: Call checkType with interpreter instance
+                            checkType(param.annotationType, argVal, param, this);
                         }
 
                         funcEnv.define(param.name, argVal);
