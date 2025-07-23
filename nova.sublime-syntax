@@ -64,7 +64,7 @@ contexts:
       scope: keyword.control.flow.nova
 
     # Types
-    - match: \b(string|number|boolean|void)\b
+    - match: \b(string|number|function|boolean|void)\b
       scope: storage.type.nova
 
     # builtin

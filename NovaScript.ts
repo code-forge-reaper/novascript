@@ -340,6 +340,9 @@ function checkType(expected: string, value: any, token: Token, interpreter: Inte
         case "string":
             if (typeof value !== "string") throw new NovaError(token, `Type mismatch: expected string, got ${typeof value}`);
             break;
+        case "function":
+            if(typeof value !== "function") throw new NovaError(token, `Type mismatch: expected function, got ${typeof value}`)
+            break;
         case "boolean":
             if (typeof value !== "boolean") throw new NovaError(token, `Type mismatch: expected boolean, got ${typeof value}`);
             break;
