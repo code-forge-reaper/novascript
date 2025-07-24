@@ -60,7 +60,7 @@ contexts:
 
 
     # Control flow
-    - match: \b(for|forEach|while|do|in|end|else|elseif|if|try|errored|defer)\b
+    - match: \b(for|break|continue|forEach|while|do|in|end|else|elseif|if|try|errored|defer)\b
       scope: keyword.control.flow.nova
 
     # Types
@@ -98,9 +98,7 @@ contexts:
       scope: keyword.declaration.nova
 
   operators:
-    - match: \.\.\.
-      scope: keyword.operator.variadic.nova
     - match: ==|!=|<=|>=|\+=|-=|\*=|/=|&&|\|\||[=+\-*/<>!]
       scope: keyword.operator.nova
-    - match: '[\(\)\[\]\{\}\.,:;]'
+    - match: '[\(\)\[\]\{\}\.,:]'
       scope: punctuation.separator.nova

@@ -2,9 +2,9 @@
 /**
  * NovaScript
  **/
-import fs from "fs";
-import path from "path";
-import util from "util";
+import fs from "node:fs";
+import path from "node:path";
+import util from "node:util";
 interface Token {
     type: string;
     // @ts-ignore
@@ -62,9 +62,10 @@ interface PropertyAccess extends Expression {
     property: string;
 }
 
+// MODIFIED: ArrayAccess now takes an Expression for 'object' instead of 'name: string'
 interface ArrayAccess extends Expression {
     type: "ArrayAccess";
-    name: string;
+    object: Expression; // Changed from 'name: string'
     index: Expression;
 }
 
@@ -107,6 +108,27 @@ interface CustomTypeDeclStmt extends Statement {
     definition: CustomTypeProperty[];
 }
 
+// MODIFIED: AssignmentExpr interface to include 'operator' for compound assignments
+interface AssignmentExpr extends Expression {
+    type: "AssignmentExpr";
+    target: Expression;
+    value: Expression;
+    operator: string; // Added for compound assignments (e.g., "+=", "-=", or "=" for simple assignment)
+}
+
+// Existing ArrayLiteral interface
+interface ArrayLiteral extends Expression {
+    type: "ArrayLiteral";
+    elements: Expression[];
+}
+
+// Existing Identifier interface (for clarity in assignment target resolution)
+interface Identifier extends Expression {
+    type: "Identifier";
+    name: string;
+}
+
+
 /* A special exception used to implement returning values from functions */
 export class ReturnException extends Error {
     value: any;
@@ -124,8 +146,6 @@ export class BreakException extends Error {
 export class ContinueException extends Error {
     constructor() { super("Continue"); }
 }
-
-// MODIFIED: customTypes is now an instance property of Interpreter, removed global `const customTypes`
 
 // NovaError now handles potential null/undefined tokens more robustly
 export class NovaError extends Error {
@@ -331,17 +351,12 @@ function checkType(expected: string, value: any, token: Token, interpreter: Inte
         actualExpected = "boolean"; // Map 'bool' from parser to 'boolean' for JS type checking
     }
 
-    //console.log(actualExpected, value, token)
-
     switch (actualExpected) {
         case "number":
             if (typeof value !== "number") throw new NovaError(token, `Type mismatch: expected number, got ${typeof value}`);
             break;
         case "string":
             if (typeof value !== "string") throw new NovaError(token, `Type mismatch: expected string, got ${typeof value}`);
-            break;
-        case "function":
-            if(typeof value !== "function") throw new NovaError(token, `Type mismatch: expected function, got ${typeof value}`)
             break;
         case "boolean":
             if (typeof value !== "boolean") throw new NovaError(token, `Type mismatch: expected boolean, got ${typeof value}`);
@@ -423,68 +438,92 @@ export class Interpreter {
 
         while (i < length) {
             let char = source[i];
-
-            // Skip whitespace.
-            if (char === "\n") {
-                line++;
-                col = 1;
-                i++;
-                continue;
-            }
+            const startCol = col;
+            const nextChar = source[i + 1];
 
             // Skip whitespace.
             if (/\s/.test(char)) {
+                if (char === "\n") {
+                    line++;
+                    col = 1;
+                } else {
+                    col++;
+                }
                 i++;
-                col++;
                 continue;
             }
 
             // --- Comment support ---
-            if (char === "/" && i + 1 < length && source[i + 1] === "/") {
+            if (char === "/" && nextChar === "/") { // Single-line comment
                 while (i < length && source[i] !== "\n") {
                     i++;
                 }
-
-                i++;
-                col = 1;
-                line++;
+                // Don't continue here, let the loop handle the newline
                 continue;
             }
-            if (char === "/" && i + 1 < length && source[i + 1] === "*") {
-                i += 2;
+            if (char === "/" && nextChar === "*") { // Multi-line comment
+                i += 2; // Consume "/*"
+                col += 2;
                 while (i < length && !(source[i] === "*" && i + 1 < length && source[i + 1] === "/")) {
-                    i++;
                     if (source[i] === "\n") {
                         line++;
                         col = 1;
                     } else {
                         col++;
                     }
+                    i++;
                 }
-                i += 2;
+                if (i + 1 < length && source[i] === "*" && source[i + 1] === "/") {
+                    i += 2; // Consume "*/"
+                    col += 2;
+                } else {
+                    // Changed to NovaError
+                    throw new NovaError({ type: "error", value: "Unterminated comment", file: file, line: line, column: col }, "Unterminated multi-line comment");
+                }
                 continue;
             }
 
-            // --- Logical operators (&& and ||) ---
-            if (char === "&" && i + 1 < length && source[i + 1] === "&") {
-                tokens.push({ type: "operator", value: "&&", line, column: col, file: file });
+            // --- Operators (prioritize longer matches) ---
+            let matchedOperator = false;
+            const twoCharOps = ["+=", "-=", "*=", "/=", "%=", "==", "!=", "<=", ">=", "&&", "||"];
+            const currentTwoChar = char + (nextChar || ''); // Handle end of string safely
+
+            if (i + 1 < length && twoCharOps.includes(currentTwoChar)) {
+                tokens.push({ type: "operator", value: currentTwoChar, line, column: startCol, file });
                 i += 2;
-                continue;
+                col += 2;
+                matchedOperator = true;
+            } else {
+                // Single-character operators that might be part of two-char ops, or stand alone
+                const potentialSingleOps = "=+-*/%<>!."; // Added '.' here
+                if (potentialSingleOps.includes(char)) {
+                    tokens.push({ type: "operator", value: char, line, column: startCol, file });
+                    i++;
+                    col++;
+                    matchedOperator = true;
+                } else {
+                    // Other single-character punctuation/operators
+                    const otherSingleOps = "()[]{},:#";
+                    if (otherSingleOps.includes(char)) {
+                        tokens.push({ type: "operator", value: char, line, column: startCol, file });
+                        i++;
+                        col++;
+                        matchedOperator = true;
+                    }
+                }
             }
-            if (char === "|" && i + 1 < length && source[i + 1] === "|") {
-                tokens.push({ type: "operator", value: "||", line, column: col, file: file });
-                i += 2;
+
+            if (matchedOperator) {
                 continue;
             }
 
             // Numbers (supporting decimals)
             if (/[0-9]/.test(char)) {
                 let num = "";
-                const startCol = col; // Capture starting column for number
                 while (i < length && /[0-9\.]/.test(source[i])) {
                     num += source[i];
                     i++;
-                    col++; // Increment column for each character consumed
+                    col++;
                 }
                 tokens.push({ type: "number", value: parseFloat(num), line, column: startCol, file: file });
                 continue;
@@ -493,7 +532,6 @@ export class Interpreter {
             // Strings: delimited by double quotes.
             if (char === '"') {
                 i++;
-                const startCol = col; // Capture starting column for string
                 let str = "";
                 while (i < length && source[i] !== '"') {
                     if (source[i] === "\\" && i + 1 < length) {
@@ -512,10 +550,15 @@ export class Interpreter {
                         str += source[i];
                     }
                     i++;
-                    col++; // Increment column for each character consumed
+                    col++;
                 }
-                i++;
-                col++; // For the closing quote
+                if (i < length && source[i] === '"') { // Consume closing quote
+                    i++;
+                    col++;
+                } else {
+                    // Changed to NovaError
+                    throw new NovaError({ type: "error", value: "Unterminated string", file: file, line: line, column: col }, "Unterminated string literal");
+                }
                 tokens.push({ type: "string", value: str, line, column: startCol, file: file });
                 continue;
             }
@@ -523,11 +566,10 @@ export class Interpreter {
             // Identifiers, keywords, booleans.
             if (/[A-Za-z_]/.test(char)) {
                 let id = "";
-                const startCol = col; // Capture starting column for identifier
                 while (i < length && /[A-Za-z0-9_]/.test(source[i])) {
                     id += source[i];
                     i++;
-                    col++; // Increment column for each character consumed
+                    col++;
                 }
                 if (id === "true" || id === "false") {
                     tokens.push({ type: "boolean", value: id === "true", line, column: startCol, file });
@@ -536,38 +578,6 @@ export class Interpreter {
                 } else {
                     tokens.push({ type: "identifier", value: id, line, column: startCol, file });
                 }
-                continue;
-            }
-
-            // Multi-character operators: ==, !=, >=, <=.
-            if (char === "=" || char === "!" || char === "<" || char === ">") {
-                let op = char;
-                const startCol = col;
-                if (i + 1 < length && source[i + 1] === "=") {
-                    op += "=";
-                    i += 2;
-                    col += 2;
-                } else {
-                    i++;
-                    col++;
-                }
-                tokens.push({ type: "operator", value: op, line, column: startCol, file });
-                continue;
-            }
-
-            // Dot operator for property access.
-            if (char === ".") {
-                tokens.push({ type: "operator", value: ".", line, column: col, file });
-                i++;
-                col++;
-                continue;
-            }
-
-            // Single-character operators/punctuation.
-            if ("#+-*%/(),{}[]:".includes(char)) {
-                tokens.push({ type: "operator", value: char, line, column: col, file });
-                i++;
-                col++;
                 continue;
             }
 
@@ -628,7 +638,9 @@ export class Interpreter {
             ) {
                 break;
             }
-            statements.push(this.parseStatement());
+            const t = this.parseStatement()
+            if(t)
+                statements.push(t);
         }
         return statements;
     }
@@ -644,7 +656,7 @@ export class Interpreter {
     // ----------------------
     // Parsing Statements and Expressions
     // ----------------------
-    parseStatement(): Statement {
+    parseStatement(): Statement | null {
         const token = this.getNextToken();
         if (!token) {
             // Changed to NovaError
@@ -713,8 +725,7 @@ export class Interpreter {
                 file: token.file,
                 line: token.line,
                 column: token.column
-            } as CustomTypeDeclStmt;
-            //console.log(`CustomTypeDecl: ${customTypeStmt.name}`);
+            };
             this.customTypes.set(customTypeStmt.name, {
                 name: customTypeStmt.name,
                 properties: customTypeStmt.definition,
@@ -722,7 +733,7 @@ export class Interpreter {
                 line: customTypeStmt.line,
                 column: customTypeStmt.column
             });
-            return customTypeStmt
+            return// the statement is not handled at runtime, don't return it
         }
         // --- Variable declaration with optional type annotation ---
         if (token.type === "keyword" && token.value === "var") {
@@ -735,20 +746,13 @@ export class Interpreter {
             let annotationType: string | null = null; // MODIFIED: Renamed to annotationType
             if (
                 this.getNextToken() &&
-                this.getNextToken()!.type === "identifier"// Added ! for non-null assertion
+                this.getNextToken()!.type === "identifier" && // Added ! for non-null assertion
+                ["string", "number", "boolean", "void", "bool", ...this.customTypes.keys()].includes(this.getNextToken()!.value) // Added 'bool' for consistency with parser
             ) {
-
-                if(
-                    ["string", "number", "boolean", "void", "bool"].includes(this.getNextToken()!.value) || // Added 'bool' for consistency with parser
-                    this.customTypes.has(this.getNextToken()!.value)
-                ){
-                    annotationType = this.getNextToken()!.value; // Added !
-                    this.consumeToken();
-                }else
-                {
-                    throw new NovaError(this.getNextToken()!, `Invalid type annotation: ${this.getNextToken()!.value}`);
-                }
+                annotationType = this.getNextToken()!.value; // Added !
+                this.consumeToken();
             }
+            //console.log(this.customTypes.keys())
 
             // Optional modifier (e.g., #global)
             let modifier: string | null = null;
@@ -1131,18 +1135,35 @@ export class Interpreter {
     }
 
     parseAssignment(): Expression {
-        let expr = this.parseLogicalOr();
+        let expr = this.parseLogicalOr(); // This is the left-hand side of the assignment
+        const nextToken = this.getNextToken();
+
+        // Check if the next token is an assignment operator (simple or compound)
         if (
-            this.getNextToken() &&
-            this.getNextToken()!.type === "operator" && // Added !
-            this.getNextToken()!.value === "=" // Added !
+            nextToken &&
+            nextToken.type === "operator" &&
+            ["=", "+=", "-=", "*=", "/=", "%="].includes(nextToken.value)
         ) {
-            const assignmentOpToken = this.consumeToken(); // Capture the operator token
-            const valueExpr = this.parseAssignment();
-            // Added file, line, column
-            expr = { type: "AssignmentExpr", target: expr, value: valueExpr, file: assignmentOpToken.file, line: assignmentOpToken.line, column: assignmentOpToken.column };
+            const assignmentOpToken = this.consumeToken(); // Consume the assignment operator token
+            const valueExpr = this.parseAssignment(); // Recursively parse the right-hand side (for chained assignments like a = b = 5)
+
+            // Ensure the target is something assignable
+            if (expr.type !== "Identifier" && expr.type !== "PropertyAccess" && expr.type !== "ArrayAccess" && expr.type !== "ArrayLiteral") {
+                throw new NovaError(expr, `Invalid assignment target: Cannot assign to ${expr.type}`);
+            }
+
+            // Create the AssignmentExpr AST node
+            return {
+                type: "AssignmentExpr",
+                target: expr,
+                value: valueExpr,
+                operator: assignmentOpToken.value, // Store the specific operator (e.g., "=", "+=")
+                file: assignmentOpToken.file,
+                line: assignmentOpToken.line,
+                column: assignmentOpToken.column
+            };
         }
-        return expr;
+        return expr; // If no assignment operator, it's just a logical OR expression
     }
 
     parseLogicalOr(): Expression {
@@ -1253,8 +1274,96 @@ export class Interpreter {
             // Added file, line, column
             return { type: "UnaryExpr", operator, right, file: operatorToken.file, line: operatorToken.line, column: operatorToken.column };
         }
-        return this.parsePrimary();
+        // MODIFIED: Call parseCallMemberExpression instead of parsePrimary directly
+        return this.parseCallMemberExpression();
     }
+
+    // NEW FUNCTION: Handles chained property access, array access, and function/method calls
+    parseCallMemberExpression(): Expression {
+        let expr = this.parsePrimary(); // Start with a primary expression
+
+        while (true) {
+            const nextToken = this.getNextToken();
+            if (!nextToken) break;
+
+            if (nextToken.value === ".") {
+                const dotToken = this.consumeToken(); // consume "."
+                const propToken = this.expectType("identifier");
+                const propName = propToken.value;
+                this.consumeToken(); // consume identifier
+
+                // Check for method call
+                if (this.getNextToken() && this.getNextToken()!.value === "(") {
+                    this.consumeToken(); // consume "("
+                    const args: Expression[] = [];
+                    if (this.getNextToken() && this.getNextToken()!.value !== ")") {
+                        while (true) {
+                            args.push(this.parseExpression());
+                            if (this.getNextToken() && this.getNextToken()!.value === ",") this.consumeToken();
+                            else break;
+                        }
+                    }
+                    this.expectToken(")");
+                    this.consumeToken(); // consume ")"
+                    expr = {
+                        type: "MethodCall",
+                        object: expr, // The expression parsed so far is the object
+                        method: propName,
+                        arguments: args,
+                        file: propToken.file, line: propToken.line, column: propToken.column
+                    };
+                } else {
+                    // Plain property access
+                    expr = {
+                        type: "PropertyAccess",
+                        object: expr, // The expression parsed so far is the object
+                        property: propName,
+                        file: propToken.file, line: propToken.line, column: propToken.column
+                    };
+                }
+            } else if (nextToken.value === "[") {
+                const bracketToken = this.consumeToken(); // consume "["
+                const indexExpr = this.parseExpression();
+                this.expectToken("]");
+                this.consumeToken(); // consume "]"
+                expr = {
+                    type: "ArrayAccess",
+                    object: expr, // The expression parsed so far is the array/object
+                    index: indexExpr,
+                    file: bracketToken.file, line: bracketToken.line, column: bracketToken.column
+                };
+            } else if (nextToken.value === "(" && expr.type === "Identifier") {
+                // This handles direct function calls like `myFunc(arg)`
+                // It should only apply if the current 'expr' is an Identifier.
+                // Method calls are handled above with the '.' operator.
+                this.consumeToken(); // consume "("
+                const args: Expression[] = [];
+                if (this.getNextToken() && this.getNextToken()!.value !== ")") {
+                    while (true) {
+                        args.push(this.parseExpression());
+                        if (this.getNextToken() && this.getNextToken()!.value === ",") {
+                            this.consumeToken();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                this.expectToken(")");
+                this.consumeToken(); // consume ")"
+                expr = {
+                    type: "FuncCall",
+                    name: (expr as Identifier).name, // Use the name from the Identifier
+                    arguments: args,
+                    file: expr.file, line: expr.line, column: expr.column
+                };
+            }
+            else {
+                break; // No more chained access/calls
+            }
+        }
+        return expr;
+    }
+
 
     parsePrimary(): Expression {
         let node: Expression;
@@ -1322,36 +1431,9 @@ export class Interpreter {
         }
         else if (token.type === "identifier") {
             this.consumeToken();
-            if (this.getNextToken() && this.getNextToken()!.value === "[") { // Added !
-                // array access
-                this.consumeToken();
-                const index = this.parseExpression();
-                this.expectToken("]");
-                this.consumeToken();
-                // Added file, line, column
-                node = { type: "ArrayAccess", name: token.value, index, file: token.file, line: token.line, column: token.column };
-            }
-            else if (this.getNextToken() && this.getNextToken()!.value === "(") { // Added !
-                this.consumeToken();
-                const args: Expression[] = [];
-                if (this.getNextToken() && this.getNextToken()!.value !== ")") { // Added !
-                    while (true) {
-                        args.push(this.parseExpression());
-                        if (this.getNextToken() && this.getNextToken()!.value === ",") { // Added !
-                            this.consumeToken();
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                this.expectToken(")");
-                this.consumeToken();
-                // Added file, line, column
-                node = { type: "FuncCall", name: token.value, arguments: args, file: token.file, line: token.line, column: token.column };
-            } else {
-                // Added file, line, column
-                node = { type: "Identifier", name: token.value, file: token.file, line: token.line, column: token.column };
-            }
+            // MODIFIED: Removed direct handling of ArrayAccess and FuncCall here.
+            // These will now be handled by parseCallMemberExpression.
+            node = { type: "Identifier", name: token.value, file: token.file, line: token.line, column: token.column };
         }
         else if(token.value == "def"){
             // x = def (...)  ... end
@@ -1443,44 +1525,7 @@ export class Interpreter {
             throw new NovaError(token, `Unexpected token: ${token.value}`);
         }
 
-        while (this.getNextToken() && this.getNextToken()!.value === ".") { // Added !
-            const dotToken = this.consumeToken();                             // consume "."
-            const propToken = this.expectType("identifier");
-            const propName = propToken.value;
-            this.consumeToken();                             // consume identifier
-
-            // method-call?
-            if (this.getNextToken() && this.getNextToken()!.value === "(") { // Added !
-                this.consumeToken();                           // consume "("
-                const args: Expression[] = [];
-                while (this.getNextToken() && this.getNextToken()!.value !== ")") { // Added !
-                    args.push(this.parseExpression());
-                    if (this.getNextToken()!.value === ",") this.consumeToken(); // Added !
-                    else break;
-                }
-                this.expectToken(")");
-                this.consumeToken();                           // consume ")"
-
-                // Added file, line, column
-                node = {
-                    type: "MethodCall",
-                    object: node,
-                    method: propName,
-                    arguments: args,
-                    file: propToken.file, line: propToken.line, column: propToken.column // Use propToken for location
-                };
-            } else {
-                // plain property access
-                // Added file, line, column
-                node = {
-                    type: "PropertyAccess",
-                    object: node,
-                    property: propName,
-                    file: propToken.file, line: propToken.line, column: propToken.column // Use propToken for location
-                };
-            }
-        }
-
+        // MODIFIED: Removed the old while loop for chained access, now handled by parseCallMemberExpression
         return node;
     }
 
@@ -1528,6 +1573,7 @@ export class Interpreter {
                 env.define(varDeclStmt.name, value);
                 break;
             }
+
             case "DeferStmt": {
                 // Add statements to be executed when the block exits
                 const stack: Statement[] = []
@@ -1797,56 +1843,49 @@ export class Interpreter {
                 break;
             }
 
-            case "CustomTypeDecl":
-                break
-
             default:
                 throw new NovaError(stmt, `Unknown statement type: ${stmt.type}`);
         }
     }
 
-    expandArrayTarget(expr: ArrayAccess, env: Environment): { arr: any, index: any } {
-        const arrayName = expr.name;
-        const indexExpr = expr.index;
+    // NEW HELPER: Resolves the base object and final key/index for assignment
+    resolveAssignmentTarget(targetExpr: Expression, env: Environment): { base: any, finalKey: string | number | null } {
+        if (targetExpr.type === "Identifier") {
+            // For simple identifiers, the base is the environment and the key is the identifier name
+            return { base: env, finalKey: (targetExpr as Identifier).name };
+        } else if (targetExpr.type === "ArrayAccess") {
+            const arrayAccess = targetExpr as ArrayAccess;
+            // Recursively evaluate the object part to get the actual array/object
+            const baseObject = this.evaluateExpr(arrayAccess.object, env);
+            const index = this.evaluateExpr(arrayAccess.index, env);
 
-        const arr = env.get(arrayName, expr); // Pass expr as token
-        const index = this.evaluateExpr(indexExpr, env);
-
-        if (!Array.isArray(arr) && typeof arr !== "object") {
-            throw new NovaError(expr, `Cannot index into non-array: ${typeof arr}`);
-        }
-
-        return { arr, index };
-    }
-
-    expandPropTarget(expr: PropertyAccess, env: Environment): { obj: any, key: string } {
-        let current: Expression = expr; // Explicitly type current as Expression
-        const chain: string[] = [];
-
-        // Traverse the property access chain to get the base object and all properties
-        while (current.type === "PropertyAccess") {
-            chain.unshift(current.property);
-            current = current.object;
-        }
-
-        if (current.type !== "Identifier") {
-            throw new NovaError(expr, "Invalid base for property access: " + current.type);
-        }
-
-        let obj = env.get(current.name, current); // Pass current as token
-
-        for (let i = 0; i < chain.length - 1; i++) {
-            const key = chain[i];
-            if (obj == null || typeof obj !== 'object') {
-                throw new NovaError(expr, "Cannot access property '" + key + "' on non-object");
+            if (baseObject === null || baseObject === undefined) {
+                throw new NovaError(arrayAccess, `Cannot assign to index of null or undefined value.`);
             }
-            obj = obj[key];
-        }
+            if (!Array.isArray(baseObject) && typeof baseObject !== 'object') {
+                throw new NovaError(arrayAccess, `Cannot assign to index of non-array/object: ${typeof baseObject}`);
+            }
+            if (typeof index !== 'number' && typeof index !== 'string') {
+                throw new NovaError(arrayAccess, `Array/object index must be a number or string for assignment. Got: ${typeof index}`);
+            }
+            return { base: baseObject, finalKey: index };
+        } else if (targetExpr.type === "PropertyAccess") {
+            const propertyAccess = targetExpr as PropertyAccess;
+            // Recursively evaluate the object part to get the actual object
+            const baseObject = this.evaluateExpr(propertyAccess.object, env);
+            const key = propertyAccess.property; // Property name is a string
 
-        return {
-            obj,
-            key: chain[chain.length - 1]
-        };
+            if (baseObject === null || baseObject === undefined) {
+                throw new NovaError(propertyAccess, `Cannot assign property '${key}' of null or undefined value.`);
+            }
+            // Special case: if the base object is an Environment, we assign to it directly
+            if (baseObject instanceof Environment) {
+                return { base: baseObject, finalKey: key };
+            }
+            return { base: baseObject, finalKey: key };
+        } else {
+            throw new NovaError(targetExpr, "Invalid assignment target type: " + targetExpr.type);
+        }
     }
 
     evaluateExpr(expr: Expression, env: Environment): any {
@@ -1856,32 +1895,73 @@ export class Interpreter {
             case "Identifier":
                 return env.get(expr.name, expr); // Pass expr as token
             case "AssignmentExpr": {
-                const value = this.evaluateExpr(expr.value, env);
-                if (expr.target.type == "ArrayAccess") {
-                    const { arr, index } = this.expandArrayTarget(expr.target as ArrayAccess, env);
-                    if (arr === null || arr === undefined) {
-                        throw new NovaError(expr.target, `Cannot assign to index of null or undefined value.`);
+                const target = (expr as AssignmentExpr).target;
+                const assignedValue = this.evaluateExpr((expr as AssignmentExpr).value, env);
+                const op = (expr as AssignmentExpr).operator; // Get the specific operator
+
+                let finalValueToAssign = assignedValue;
+
+                // Handle compound assignments (if operator is not just "=")
+                if (op !== "=") {
+                    // Compound assignments only make sense for mutable targets that can be read first.
+                    // ArrayLiteral (destructuring) cannot be a target for compound assignment.
+                    if (target.type === "ArrayLiteral") {
+                         throw new NovaError(target, `Compound assignment operators like '${op}' cannot be used with array destructuring.`);
                     }
-                    if (typeof index !== 'number' && typeof index !== 'string') {
-                        throw new NovaError(expr.target, `Array index must be a number or string. Got: ${typeof index}`);
+
+                    // Get the current value of the target before performing the operation
+                    const currentValue = this.evaluateExpr(target, env);
+
+                    switch (op) {
+                        case "+=": finalValueToAssign = currentValue + assignedValue; break;
+                        case "-=": finalValueToAssign = currentValue - assignedValue; break;
+                        case "*=": finalValueToAssign = currentValue * assignedValue; break;
+                        case "/=":
+                            if (assignedValue === 0) {
+                                throw new NovaError(expr, "Division by zero in compound assignment.");
+                            }
+                            finalValueToAssign = currentValue / assignedValue;
+                            break;
+                        case "%=": finalValueToAssign = currentValue % assignedValue; break;
+                        default:
+                            // This should theoretically not be reached if parser is correct
+                            throw new NovaError(expr, `Internal error: Unknown compound assignment operator: ${op}`);
                     }
-                    arr[index] = value;
-                } else if (expr.target.type === "PropertyAccess") {
-                    const { obj, key } = this.expandPropTarget(expr.target as PropertyAccess, env);
-                    if (obj instanceof Environment) {
-                        throw new NovaError(expr.target, "Cannot assign to environment properties directly.");
-                    }
-                    if (obj === null || obj === undefined) {
-                        throw new NovaError(expr.target, `Cannot assign property '${key}' of null or undefined value.`);
-                    }
-                    obj[key] = value;
-                } else if (expr.target.type === "Identifier") {
-                    env.assign(expr.target.name, value, expr.target); // Pass expr.target as token
-                } else {
-                    throw new NovaError(expr.target, "Unsupported assignment target: " + `${expr.target.type}(${JSON.stringify(expr.target, null, 2)})`);
                 }
 
-                return value;
+                // Now, perform the actual assignment with finalValueToAssign
+                // This part handles both simple assignments and the result of compound assignments
+                if (target.type === "ArrayLiteral") { // Array destructuring
+                    // This block will only be reached if op === "=" due to the check above
+                    const sourceArray = finalValueToAssign;
+                    if (!Array.isArray(sourceArray)) {
+                        throw new NovaError(target, `Cannot destructure non-array value. Expected array, got ${typeof sourceArray}.`);
+                    }
+                    const targetArrayLiteral = target as ArrayLiteral;
+                    for (let i = 0; i < targetArrayLiteral.elements.length; i++) {
+                        const targetElement = targetArrayLiteral.elements[i];
+                        const sourceValue = sourceArray[i];
+                        // Recursively assign each element using a simple assignment
+                        const tempAssignment: AssignmentExpr = {
+                            type: "AssignmentExpr",
+                            target: targetElement,
+                            value: { type: "Literal", value: sourceValue, file: expr.file, line: expr.line, column: expr.column },
+                            operator: "=", // Always simple assignment for destructuring elements
+                            file: expr.file, line: expr.line, column: expr.column
+                        };
+                        this.evaluateExpr(tempAssignment, env);
+                    }
+                } else { // All other assignment targets (Identifier, ArrayAccess, PropertyAccess)
+                    const { base, finalKey } = this.resolveAssignmentTarget(target, env);
+                    if (base instanceof Environment) {
+                        base.assign(finalKey as string, finalValueToAssign, target);
+                    } else if (finalKey !== null) {
+                        base[finalKey] = finalValueToAssign;
+                    } else {
+                        throw new NovaError(target, "Failed to resolve assignment target.");
+                    }
+                }
+                return finalValueToAssign; // Return the value that was assigned
             }
 
             case "BinaryExpr": {
@@ -1948,7 +2028,8 @@ export class Interpreter {
             }
 
             case "ArrayAccess": {
-                const arr = env.get(expr.name, expr); // Pass expr as token
+                // MODIFIED: Evaluate expr.object recursively
+                const arr = this.evaluateExpr(expr.object, env);
                 const index = this.evaluateExpr(expr.index, env);
                 if (!Array.isArray(arr) && typeof arr !== 'object') {
                     throw new NovaError(expr, `Cannot access index of non-array/object: ${typeof arr}`);
@@ -1959,6 +2040,7 @@ export class Interpreter {
                 return arr[index];
             }
             case "PropertyAccess": {
+                // MODIFIED: Evaluate expr.object recursively
                 const obj = this.evaluateExpr(expr.object, env);
 
                 if (obj === null || obj === undefined) {
