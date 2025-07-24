@@ -84,7 +84,6 @@ interface VarDeclStmt extends Statement {
     name: string;
     typeAnnotation: string | null;
     initializer: Expression;
-    modifier: string | null;
 }
 
 // NEW: Interfaces for Custom Types
@@ -754,23 +753,10 @@ export class Interpreter {
             }
             //console.log(this.customTypes.keys())
 
-            // Optional modifier (e.g., #global)
-            let modifier: string | null = null;
-            if (
-                this.getNextToken() &&
-                this.getNextToken()!.type === "operator" && // Added !
-                this.getNextToken()!.value === "#" // Added !
-            ) {
-                this.consumeToken();
-                const modToken = this.expectType("identifier");
-                modifier = modToken.value;
-                this.consumeToken();
-            }
-
             this.expectToken("=");
             this.consumeToken();
             const initializer = this.parseExpression();
-            return { type: "VarDecl", name, typeAnnotation: annotationType, initializer, modifier, line: token.line, column: token.column, file: token.file }; // MODIFIED: typeAnnotation
+            return { type: "VarDecl", name, typeAnnotation: annotationType, initializer, line: token.line, column: token.column, file: token.file }; // MODIFIED: typeAnnotation
         }
 
         // --- Switch statement ---

@@ -17,6 +17,7 @@ contexts:
     - include: function_calls
     - include: operators
     - include: types
+    - include: custom_types
     - match: \b[a-zA-Z_]\w*\b
       scope: variable.other.nova
 
@@ -50,7 +51,7 @@ contexts:
 
   keywords:
     # Declarations
-    - match: \b(var|func|def|label|jmp|return|import|type)\b
+    - match: \b(var|func|def|return|import|type)\b
       scope: keyword.declaration.nova
       # import "some module" as alias
     - match: \bas\b\s+(\w+)
@@ -80,12 +81,17 @@ contexts:
   function_definitions:
     - match: \bfunc\b\s+(\w+)
       captures:
-        1: entity.name.function.definition.nova
-      scope: keyword.declaration.nova
+        1: entity.name.function.nova
+      scope: keyword.declaration.function.nova
 
   function_calls:
     - match: \b[a-zA-Z_]\w*(?=\()
       scope: entity.name.function.nova
+  custom_types:
+    - match: \btype\b\s+(\w+)
+      captures:
+        1: entity.name.type.nova
+      scope: keyword.declaration.nova
 
   builtins:
     - match: \b(true|false)\b
