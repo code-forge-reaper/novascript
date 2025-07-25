@@ -280,6 +280,7 @@ function initGlobals(globals: Environment): void {
     globals.define("math", Math);
     globals.define("null", null);
     globals.define("undefined", undefined);
+    globals.define("void", undefined); // 90% of js bindings have functions that return void, return undefined when in js
     globals.define("NaN", NaN);
 
     globals.define('Runtime', {
@@ -359,6 +360,9 @@ function checkType(expected: string, value: any, token: Token, interpreter: Inte
             break;
         case "boolean":
             if (typeof value !== "boolean") throw new NovaError(token, `Type mismatch: expected boolean, got ${typeof value}`);
+            break;
+        case "function":
+            if (typeof value !== "function") throw new NovaError(token, `Type mismatch: expected function, got ${typeof value}`);
             break;
         case "void":
             // Changed to NovaError
