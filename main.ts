@@ -15,7 +15,7 @@ const requireFromCWD = createRequire(path.join(process.cwd(), 'noop.js'))
 try {
 	const interp: Interpreter = new Interpreter(f);
 
-	interp.globals.define("os-import-handler", (name) => {
+	interp.globals.define("os-import-handler", (name: string) => {
 		try {
 			return requireFromCWD(name)
 		} catch (e) {
@@ -27,5 +27,5 @@ try {
 
 	interp.interpret();
 } catch (e) {
-	console.log(e.message)
+	console.log((e as Error).message)
 }

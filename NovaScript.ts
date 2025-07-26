@@ -8,7 +8,7 @@ import util from "node:util";
 interface Token {
     type: string;
     // @ts-ignore
-    value: any;
+    value?: any;
     file: string
     line: number
     column: number
@@ -664,7 +664,7 @@ export class Interpreter {
     // ----------------------
     // Parsing Statements and Expressions
     // ----------------------
-    parseStatement(): Statement | null {
+    parseStatement(): Statement | undefined {
         const token = this.getNextToken();
         if (!token) {
             // Changed to NovaError
@@ -733,7 +733,7 @@ export class Interpreter {
                 line: customTypeStmt.line,
                 column: customTypeStmt.column
             });
-            return// the statement is not handled at runtime, don't return it
+            return undefined// the statement is not handled at runtime, don't return it
         }
         // --- Variable declaration with optional type annotation ---
         if (token.type === "keyword" && token.value === "var") {
@@ -1564,7 +1564,7 @@ export class Interpreter {
             case "DeferStmt": {
                 // Add statements to be executed when the block exits
                 const stack: Statement[] = []
-                stmt.body.forEach(e => stack.push(e));
+                stmt.body.forEach((e: Statement) => stack.push(e));
                 stack.reverse().forEach(e => env.addDeferred(e))
 
                 break;
@@ -1996,7 +1996,7 @@ export class Interpreter {
                 if (typeof func !== "function") {
                     throw new NovaError(expr, `${expr.name} is not a function`);
                 }
-                const args = expr.arguments.map(arg => this.evaluateExpr(arg, env));
+                const args = expr.arguments.map((arg: Expression) => this.evaluateExpr(arg, env));
                 return func(...args);
             }
             case "MethodCall": {
@@ -2012,7 +2012,7 @@ export class Interpreter {
                     throw new NovaError(expr, `${expr.method} is not a function or method on this object`);
                 }
 
-                const argVals = expr.arguments.map(arg => this.evaluateExpr(arg, env));
+                const argVals = expr.arguments.map((arg: Expression) => this.evaluateExpr(arg, env));
                 return fn.apply(obj, argVals);
             }
 
@@ -2044,7 +2044,7 @@ export class Interpreter {
             }
 
             case "ArrayLiteral": {
-                return expr.elements.map(element => this.evaluateExpr(element, env));
+                return expr.elements.map((element: Expression) => this.evaluateExpr(element, env));
             }
 
             case "LambdaDecl": {

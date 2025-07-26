@@ -8,6 +8,6 @@ func text()
 	print(x)
 end
 defer
-	print("hi")
+	print("hi there")
 end
 text()
