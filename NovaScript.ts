@@ -554,6 +554,11 @@ export class Interpreter {
                     }
                     i++;
                     col++;
+                    if(source[i] === "\n")
+                    {
+                        col = 1
+                        line++
+                    }
                 }
                 if (i < length && source[i] === '"') { // Consume closing quote
                     i++;
@@ -667,14 +672,6 @@ export class Interpreter {
             throw new NovaError(lastToken, "Unexpected end of input");
         }
 
-        // --- Label statement ---
-        if (token.type === "keyword" && token.value === "label") {
-            this.consumeToken();
-            const nameToken = this.expectType("identifier");
-            const name = nameToken.value;
-            this.consumeToken();
-            return { type: "LabelStmt", name, line: token.line, column: token.column, file: token.file };
-        }
         // --- Defer statement ---
         if (token.type === "keyword" && token.value === "defer") {
             this.consumeToken();
@@ -949,7 +946,7 @@ export class Interpreter {
                     // optional type annotation
                     if (this.getNextToken()?.type === "identifier") {
                         const typeToken = this.getNextToken()!; // Added !
-                        if (["string", "number", "bool", "boolean"].includes(typeToken.value)) { // Added "boolean"
+                        if (["string", "number", "bool", "boolean", ...this.customTypes.keys()].includes(typeToken.value)) { // Added "boolean"
                             annotationType = typeToken.value; // MODIFIED: Renamed
                             this.consumeToken();
                         }
@@ -1028,7 +1025,7 @@ export class Interpreter {
                     // optional type annotation
                     if (this.getNextToken()?.type === "identifier") {
                         const typeToken = this.getNextToken()!; // Added !
-                        if (["string", "number", "bool", "boolean"].includes(typeToken.value)) { // Added "boolean"
+                        if (["string", "number", "bool", "boolean", ...this.customTypes.keys()].includes(typeToken.value)) { // Added "boolean"
                             annotationType = typeToken.value; // MODIFIED: Renamed
                             this.consumeToken();
                         }
@@ -1775,9 +1772,11 @@ export class Interpreter {
                 const func = (...args: any[]) => {
                     const funcEnv = new Environment(env);
 
+                    /*
                     if (args.length > stmt.parameters.length) {
                         throw new NovaError(stmt, `Too many arguments passed to function '${stmt.name}'. Expected ${stmt.parameters.length}, got ${args.length}.`);
                     }
+                    */
 
                     for (let i = 0; i < stmt.parameters.length; i++) {
                         const param = stmt.parameters[i];
@@ -2052,10 +2051,11 @@ export class Interpreter {
                 const stmt = expr;
                 const func = (...args: any[]) => {
                     const funcEnv = new Environment(env);
-
+                    /*
                     if (args.length > stmt.parameters.length) {
-                        throw new NovaError(stmt, `Too many arguments passed to function. Expected ${stmt.parameters.length}, got ${args.length}.`); // Removed stmt.name as lambda has no name
+                        throw new NovaError(stmt, `Too many arguments passed to function '${stmt.name}'. Expected ${stmt.parameters.length}, got ${args.length}.`);
                     }
+                    */
 
                     for (let i = 0; i < stmt.parameters.length; i++) {
                         const param = stmt.parameters[i];
