@@ -480,7 +480,7 @@ export class ParselParser {
             this.consumeToken(); // consume 'as'
             alias = this.expectType("identifier").value;
         }
-        const fullPath = path.resolve(path.dirname(this.file), pathToken+".nova");
+        const fullPath = path.resolve(path.dirname(this.file), pathToken+".par");
         const parser = new ParselParser(fullPath);
         const body = parser.parse();
 
