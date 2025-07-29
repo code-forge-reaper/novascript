@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Parsel - a ParselScript subset for people that like VNs
+ * Parsel - a NovaScript subset for people that like VNs
  **/
 import fs from "node:fs";
 import path from "node:path";
