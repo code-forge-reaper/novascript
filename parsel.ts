@@ -29,7 +29,7 @@ import {
     ImportStmt
 } from "./subset.ts";
 //import readline from "readline-sync";
-import {input} from "sync-input"
+import {input} from "./sync-input/index.ts"
 
 /* A special exception used to implement returning values from functions */
 export class ReturnException extends Error {
