@@ -4,8 +4,8 @@ import {
 	ExpressionStmt,
 	GotoStmt,
 	Identifier,
-	NovaError,
-	NovaParser,
+	ParselError,
+	ParselParser,
 	OptionsBlockStmt,
 	Parameter,
 	SayStmt,
@@ -59,13 +59,13 @@ export class Environment {
 		} else if (this.parent) {
 			this.parent.assign(name, value, tok);
 		} else {
-			throw new NovaError(tok, `Undefined variable ${name}`);
+			throw new ParselError(tok, `Undefined variable ${name}`);
 		}
 	}
 	get(name: string, tok?: Token): any {
 		if (name in this.values) return this.values[name];
 		if (this.parent) return this.parent.get(name, tok);
-		if (tok) throw new NovaError(tok, `Undefined variable ${name}`);
+		if (tok) throw new ParselError(tok, `Undefined variable ${name}`);
 		throw new Error(`Undefined variable ${name}`);
 	}
 }
@@ -154,20 +154,20 @@ class ParselRuntime {
 
 		switch(actualType){
         case "number":
-            if (typeof value !== "number") throw new NovaError(token, `Type mismatch: expected number, got ${typeof value}`);
+            if (typeof value !== "number") throw new ParselError(token, `Type mismatch: expected number, got ${typeof value}`);
             break;
         case "string":
-            if (typeof value !== "string") throw new NovaError(token, `Type mismatch: expected string, got ${typeof value}`);
+            if (typeof value !== "string") throw new ParselError(token, `Type mismatch: expected string, got ${typeof value}`);
             break;
         case "boolean":
-            if (typeof value !== "boolean") throw new NovaError(token, `Type mismatch: expected boolean, got ${typeof value}`);
+            if (typeof value !== "boolean") throw new ParselError(token, `Type mismatch: expected boolean, got ${typeof value}`);
             break;
         case "function":
-            if (typeof value !== "function") throw new NovaError(token, `Type mismatch: expected function, got ${typeof value}`);
+            if (typeof value !== "function") throw new ParselError(token, `Type mismatch: expected function, got ${typeof value}`);
             break;
         case "void":
-            // Changed to NovaError
-            if (value !== undefined) throw new NovaError(token, `Type mismatch: expected void, got ${typeof value}`);
+            // Changed to ParselError
+            if (value !== undefined) throw new ParselError(token, `Type mismatch: expected void, got ${typeof value}`);
             break;
 		default: // custom types might be allowed in the future, but not now, we need to get this dam language going
 			throw new Error(`Unknown type: ${actualType}`);
@@ -185,7 +185,7 @@ class ParselRuntime {
 				if(argVal === undefined && param.default !== undefined){
 					argVal = this.evaluateExpression(param.default, ctx);
 				}else if(argVal === undefined && param.default === undefined){
-					throw new NovaError(null, `Missing required parameter ${param.name} in function ${s.name}`);
+					throw new ParselError(null, `Missing required parameter ${param.name} in function ${s.name}`);
 				}
 
 				if(param.annotationType){
@@ -286,7 +286,7 @@ class ParselRuntime {
 			case "GotoStmt": {
 				const s = stmt as GotoStmt;
 				if (!this.scenes[s.sceneName]) {
-					throw new NovaError(s, `Scene ${s.sceneName} not defined`);
+					throw new ParselError(s, `Scene ${s.sceneName} not defined`);
 				}
 				this.sceneStack.push(this.currentScene);
 				this.currentScene = s.sceneName;
@@ -322,7 +322,7 @@ class ParselRuntime {
 				if ((stmt as any).expression) {
 					this.evaluateExpression((stmt as any).expression, ctx);
 				} else {
-					throw new NovaError(stmt, `Unsupported stmt: ${stmt.type}`);
+					throw new ParselError(stmt, `Unsupported stmt: ${stmt.type}`);
 				}
 		}
 	}
@@ -344,11 +344,11 @@ class ParselRuntime {
 				const u = expr as UnaryExpr;
 				const val = this.evaluateExpression(u.right, ctx);
 				if (u.operator === "-") {
-					if (typeof val !== "number") throw new NovaError(u, "Unary - only on numbers");
+					if (typeof val !== "number") throw new ParselError(u, "Unary - only on numbers");
 					return -val;
 				}
 				if (u.operator === "!") return !val;
-				throw new NovaError(u, `Unknown unary: ${u.operator}`);
+				throw new ParselError(u, `Unknown unary: ${u.operator}`);
 			}
 			case "AssignmentExpr": {
 				const a = expr as AssignmentExpr;
@@ -365,7 +365,7 @@ class ParselRuntime {
 			case "FuncCall": {
 				const f = expr as FunctionCall;
 				const fn = ctx.get(f.name, f);
-				if (typeof fn !== "function") throw new NovaError(f, `${f.name} is not a function`);
+				if (typeof fn !== "function") throw new ParselError(f, `${f.name} is not a function`);
 				const args = f.arguments.map(arg => this.evaluateExpression(arg, ctx));
 				return fn(...args);
 			}
@@ -403,7 +403,7 @@ class ParselRuntime {
 				return this.createFunc(l, ctx)
 			}
 			default:
-				throw new NovaError(expr, `Unsupported expr: ${expr.type}`);
+				throw new ParselError(expr, `Unsupported expr: ${expr.type}`);
 		}
 	}
 
@@ -414,7 +414,7 @@ class ParselRuntime {
 			case "-": return l - r;
 			case "*": return l * r;
 			case "/":
-				if (r === 0) throw new NovaError(node, "Division by zero");
+				if (r === 0) throw new ParselError(node, "Division by zero");
 				return l / r;
 			case "%": return l % r;
 			case "==": return l === r;
@@ -426,7 +426,7 @@ class ParselRuntime {
 			case "&&": return l && r;
 			case "||": return l || r;
 			default:
-				throw new NovaError(node, `Unknown binary operator: ${op}`);
+				throw new ParselError(node, `Unknown binary operator: ${op}`);
 		}
 	}
 
@@ -459,7 +459,7 @@ function initGlobals(rt: ParselRuntime) {
 }
 
 // ---- bootstrap ----
-const parser = new NovaParser(process.argv[2] || "main.par");
+const parser = new ParselParser(process.argv[2] || "main.par");
 const ast = parser.parse();
 const rt = new ParselRuntime(ast);
 rt.parse();

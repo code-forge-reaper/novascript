@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Parsel - a NovaScript subset for people that like VNs
+ * Parsel - a ParselScript subset for people that like VNs
  **/
 import fs from "node:fs";
 import path from "node:path";
@@ -183,7 +183,7 @@ export interface IfStmt extends Statement {
 
 // --- Exceptions ---
 
-export class NovaError extends Error {
+export class ParselError extends Error {
     line: number;
     column: number;
     file: string;
@@ -201,9 +201,9 @@ export class NovaError extends Error {
     }
 }
 
-// --- NovaParser Class ---
+// --- ParselParser Class ---
 
-export class NovaParser {
+export class ParselParser {
     private tokens: Token[];
     private current: number;
     private file: string;
@@ -268,7 +268,7 @@ export class NovaParser {
                     i += 2;
                     col += 2;
                 } else {
-                    throw new NovaError({ type: "error", value: "Unterminated comment", file: file, line: line, column: col }, "Unterminated multi-line comment");
+                    throw new ParselError({ type: "error", value: "Unterminated comment", file: file, line: line, column: col }, "Unterminated multi-line comment");
                 }
                 continue;
             }
@@ -345,7 +345,7 @@ export class NovaParser {
                     i++;
                     col++;
                 } else {
-                    throw new NovaError({ type: "error", value: "Unterminated string", file: file, line: line, column: col }, "Unterminated string literal");
+                    throw new ParselError({ type: "error", value: "Unterminated string", file: file, line: line, column: col }, "Unterminated string literal");
                 }
                 tokens.push({ type: "string", value: str, line, column: startCol, file: file });
                 continue;
@@ -368,7 +368,7 @@ export class NovaParser {
                 continue;
             }
 
-            throw new NovaError({ type: "error", value: char, file: file, line: line, column: col }, `Unexpected character: ${char}`);
+            throw new ParselError({ type: "error", value: char, file: file, line: line, column: col }, `Unexpected character: ${char}`);
         }
         return tokens;
     }
@@ -384,7 +384,7 @@ export class NovaParser {
     private expectType(type: string): Token {
         const token = this.getNextToken();
         if (!token || token.type !== type) {
-            throw new NovaError(token, `Expected token type ${type}, got ${token ? ([JSON.stringify(token, null,1),token.type]) : "EOF"}`);
+            throw new ParselError(token, `Expected token type ${type}, got ${token ? ([JSON.stringify(token, null,1),token.type]) : "EOF"}`);
         }
         return token;
     }
@@ -393,10 +393,10 @@ export class NovaParser {
         const token = this.getNextToken();
         if (!token) {
             const lastToken = this.tokens[this.current - 1] || { type: "EOF", value: "EOF", file: this.file, line: 1, column: 1 };
-            throw new NovaError(lastToken, `Expected token '${value}', got EOF`);
+            throw new ParselError(lastToken, `Expected token '${value}', got EOF`);
         }
         if (token.value !== value) {
-            throw new NovaError(token, `Expected token '${value}', got ${token.value}`);
+            throw new ParselError(token, `Expected token '${value}', got ${token.value}`);
         }
         return token;
     }
@@ -407,7 +407,7 @@ export class NovaParser {
             const token = this.getNextToken();
             if (!token) {
                 const lastToken = this.tokens[this.current - 1] || { type: "EOF", value: "EOF", file: this.file, line: 1, column: 1 };
-                throw new NovaError(lastToken, "Unexpected end of input");
+                throw new ParselError(lastToken, "Unexpected end of input");
             }
             if (
                 (token.type === "keyword" && terminators.includes(token.value)) ||
@@ -439,7 +439,7 @@ export class NovaParser {
         const token = this.getNextToken();
         if (!token) {
             const lastToken = this.tokens[this.current - 1] || { type: "EOF", value: "EOF", file: this.file, line: 1, column: 1 };
-            throw new NovaError(lastToken, "Unexpected end of input");
+            throw new ParselError(lastToken, "Unexpected end of input");
         }
 
         switch (token.value) {
@@ -481,7 +481,7 @@ export class NovaParser {
             alias = this.expectType("identifier").value;
         }
         const fullPath = path.resolve(path.dirname(this.file), pathToken+".nova");
-        const parser = new NovaParser(fullPath);
+        const parser = new ParselParser(fullPath);
         const body = parser.parse();
 
         return { type: "ImportStmt", path: fullPath, alias, body, file: imp.file, line: imp.line, column: imp.column };
@@ -720,7 +720,7 @@ export class NovaParser {
                     this.consumeToken();
                     defaultExpr = this.parseExpression();
                     if (annotationType) {
-                        throw new NovaError(funcToken, "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.");
+                        throw new ParselError(funcToken, "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.");
                     }
 
                     if (defaultExpr.type === "Literal") {
@@ -797,7 +797,7 @@ export class NovaParser {
                     this.consumeToken();
                     defaultExpr = this.parseExpression();
                     if (annotationType) {
-                        throw new NovaError(defToken, "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.");
+                        throw new ParselError(defToken, "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.");
                     }
 
                     if (defaultExpr.type === "Literal") {
@@ -880,7 +880,7 @@ export class NovaParser {
             const valueExpr = this.parseAssignment();
 
             if (expr.type !== "Identifier" && expr.type !== "PropertyAccess" && expr.type !== "ArrayAccess" && expr.type !== "ArrayLiteral") {
-                throw new NovaError(expr, `Invalid assignment target: Cannot assign to ${expr.type}`);
+                throw new ParselError(expr, `Invalid assignment target: Cannot assign to ${expr.type}`);
             }
 
             return {
@@ -1084,7 +1084,7 @@ export class NovaParser {
         let node: Expression;
         const token = this.getNextToken();
         if (!token) {
-            throw new NovaError(token, "Unexpected end of input");
+            throw new ParselError(token, "Unexpected end of input");
         }
 
         if (token.type === "boolean") {
@@ -1119,7 +1119,7 @@ export class NovaParser {
                 while (true) {
                     let keyToken = this.getNextToken()!;
                     if (keyToken.type !== "identifier" && keyToken.type !== "string") {
-                        throw new NovaError(keyToken, "Expected identifier or string as object key");
+                        throw new ParselError(keyToken, "Expected identifier or string as object key");
                     }
                     const key = keyToken.value;
                     this.consumeToken();
@@ -1152,7 +1152,7 @@ export class NovaParser {
             this.consumeToken();
         }
         else {
-            throw new NovaError(token, `Unexpected token: ${token.value}`);
+            throw new ParselError(token, `Unexpected token: ${token.value}`);
         }
 
         return node;
