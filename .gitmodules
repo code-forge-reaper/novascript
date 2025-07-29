@@ -1,0 +1,3 @@
+[submodule "sync-input"]
+	path = sync-input
+	url = https://github.com/code-forge-reaper/sync-input
