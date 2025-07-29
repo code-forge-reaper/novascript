@@ -1,6 +1,6 @@
 %YAML 1.2
 ---
-name: NovaScript
+name: Parsel
 file_extensions:
   - par
 scope: source.parsel
