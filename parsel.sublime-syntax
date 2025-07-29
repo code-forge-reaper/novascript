@@ -1,0 +1,114 @@
+%YAML 1.2
+---
+name: NovaScript
+file_extensions:
+  - par
+scope: source.parsel
+
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: numbers
+    - include: function_definitions
+    - include: keywords
+    - include: builtins
+    - include: function_calls
+    - include: operators
+    - include: types
+    - match: \b[a-zA-Z_]\w*\b
+      scope: variable.other.parsel
+
+  comments:
+    # Single-line comments starting with //
+    - match: '//.*$'
+      scope: comment.line.double-slash.parsel
+    # Multi-line comments starting with /* and ending with */
+    - match: '/\*'
+      scope: comment.block.parsel
+      push:
+        - meta_scope: comment.block.parsel
+        - match: '\*/'
+          pop: true
+        - match: '.+'
+
+  strings:
+    # Double-quoted strings
+    - match: '"'
+      scope: punctuation.definition.string.begin.parsel
+      push: double_quoted_string
+
+  double_quoted_string:
+    - meta_scope: string.quoted.double.parsel
+    # Escape sequences like \n, \t, etc.
+    - match: '\\.'
+      scope: constant.character.escape.parsel
+    - match: '"'
+      scope: punctuation.definition.string.end.parsel
+      pop: true
+
+  numbers:
+    # Integers and floating-point numbers
+    - match: \b-?\d+(\.\d+)?\b
+      scope: constant.numeric.parsel
+
+  keywords:
+    # Declarations: var, func, def, return, import, char, scene
+    - match: \b(var|func|def|return|import|char|scene)\b
+      scope: keyword.declaration.parsel
+
+    # Control flow and structural keywords: end, if, else, elseif, goto, pause, exit, begin, to, in
+    - match: \b(end|if|else|elseif|goto|pause|exit|begin|to|in)\b
+      scope: keyword.control.flow.parsel
+
+    # Ren'Py specific statement keywords: say, think, options, set
+    - match: \b(say|think|options|set)\b
+      scope: keyword.statement.parsel
+
+    # The 'as' keyword used in 'import ... as' and 'say ... as'
+    - match: \bas\b\s+(\w+)
+      captures:
+        1: entity.name.label.parsel # Captures the alias/character name
+      scope: keyword.control.flow.parsel # Categorizing 'as' as control flow due to its role in structuring statements
+
+  function_definitions:
+    # Function declarations (func keyword)
+    - match: \bfunc\b\s+(\w+)
+      captures:
+        1: entity.name.function.parsel
+      scope: keyword.declaration.function.parsel
+    # Lambda declarations (def keyword)
+    - match: \bdef\b(?=\s*\() # 'def' followed by an opening parenthesis for parameters
+      scope: keyword.declaration.function.parsel
+
+  function_calls:
+    # Standard function calls (identifier followed by parenthesis)
+    - match: \b[a-zA-Z_]\w*(?=\()
+      scope: entity.name.function.parsel
+    # Method calls (object.method()) are implicitly handled by property access and then function call patterns.
+    # Property access (object.property)
+    - match: '(\b[a-zA-Z_]\w*)\.(\b[a-zA-Z_]\w*)'
+      captures:
+        1: variable.other.object.parsel
+        2: variable.property.parsel
+
+  types:
+    # Primitive types used for type annotations
+    - match: \b(string|number|boolean|void|bool)\b
+      scope: storage.type.parsel
+
+  builtins:
+    # Boolean literals
+    - match: \b(true|false)\b
+      scope: constant.language.parsel
+
+  operators:
+    # Two-character operators (assignment, equality, logical, comparison)
+    - match: '==|!=|<=|>=|\+=|-=|\*=|/=|%=|&&|\|\|'
+      scope: keyword.operator.parsel
+    # Single-character operators (assignment, arithmetic, comparison, logical NOT, member access)
+    - match: '[=+\-*/%<>!.]'
+      scope: keyword.operator.parsel
+    # Punctuation and separators (parentheses, brackets, braces, comma, colon, hash)
+    - match: '[\(\)\[\]\{\},:#]'
+      scope: punctuation.separator.parsel
