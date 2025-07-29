@@ -25,7 +25,8 @@ import {
 	FunctionCall,
 	FuncDecl,
 	LambdaDecl,
-	ReturnStmt
+	ReturnStmt,
+    ImportStmt
 } from "./subset.ts";
 //import readline from "readline-sync";
 import {input} from "sync-input"
@@ -298,6 +299,22 @@ class ParselRuntime {
 			case "PauseStmt":
 				input("(Press enter to continue)");
 				break;
+			case "ImportStmt":
+				{
+					const s = stmt as ImportStmt;
+					const interp = new ParselRuntime(s.body)
+					const env = new Environment(this.context);
+					interp.context = env
+					interp.parse()
+					const namespace: Record<string, any> = {}
+
+					for(const key in env.values){
+						namespace[key] = env.values[key]
+					}
+
+					ctx.define(s.alias, namespace)
+					break
+				}
 			case "ExitStmt":
 				process.exit(0);
 			default:

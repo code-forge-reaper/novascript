@@ -3,6 +3,7 @@
  * Parsel - a NovaScript subset for people that like VNs
  **/
 import fs from "node:fs";
+import path from "node:path";
 
 // --- Shared Interfaces and Classes ---
 
@@ -162,6 +163,10 @@ export interface OptionsBlockStmt extends Statement {
     type: "OptionsBlockStmt";
     choices: OptionChoice[];
 }
+export interface ImportStmt extends Statement {
+    type: "ImportStmt";
+    body: Statement[];
+}
 
 export interface GotoStmt extends Statement {
     type: "GotoStmt";
@@ -204,9 +209,11 @@ export class NovaParser {
     private file: string;
     private source: string;
     private keywords: string[] = [
-        "var", "func", "return", "def", "as", "end", // Existing
-        "char", "scene", "say", "think", "options", "begin", "goto", "set", "to", "in", // New Ren'Py
-        "if", "else", "elseif", "pause", "exit" // Re-adding if keywords for clarity, though current parser handles implicitly
+        "var", "func", "return", "def", "as", "end", // Existing subset
+        // New Ren'Py
+        "char", "scene", "say", "think", "options", "begin", "goto", "set", "to", "in",
+        "if", "else", "elseif", "pause", "exit",
+        "import"
     ];
 
     constructor(filePath: string) {
@@ -456,11 +463,28 @@ export class NovaParser {
             case "func": return this.parseFuncDeclaration();
             case "def": return this.parseLambdaDeclarationAsStatement(); // Lambdas can be assigned, but 'def' as a standalone statement is not typical. Assuming it's part of an assignment.
             case "return": return this.parseReturnStatement();
+            case "import": return this.parseImportStatement();
             default:
                 // Fallback to expression statement
                 const expr = this.parseExpression();
                 return { type: "ExpressionStmt", expression: expr, file: token.file, line: token.line, column: token.column };
         }
+    }
+
+    parseImportStatement(): ImportStmt {
+        const imp = this.consumeToken(); // consume 'import'
+
+        const pathToken = this.expectType("string").value;
+        let alias = pathToken
+        if(this.getNextToken()?.value === "as") {
+            this.consumeToken(); // consume 'as'
+            alias = this.expectType("identifier").value;
+        }
+        const fullPath = path.resolve(path.dirname(this.file), pathToken+".nova");
+        const parser = new NovaParser(fullPath);
+        const body = parser.parse();
+
+        return { type: "ImportStmt", path: fullPath, alias, body, file: imp.file, line: imp.line, column: imp.column };
     }
 
     // --- Ren'Py Specific Parsers ---
