@@ -459,7 +459,7 @@ function initGlobals(rt: ParselRuntime) {
 }
 
 // ---- bootstrap ----
-const parser = new NovaParser(process.argv[2] || "main.nova");
+const parser = new NovaParser(process.argv[2] || "main.par");
 const ast = parser.parse();
 const rt = new ParselRuntime(ast);
 rt.parse();
