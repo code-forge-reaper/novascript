@@ -68,6 +68,10 @@ export interface ReturnStmt extends Statement {
     expression: Expression | null;
 }
 
+export interface UsingStmt extends Statement {
+    type: "UsingStmt";
+}
+
 export interface ExpressionStmt extends Statement {
     type: "ExpressionStmt";
     expression: Expression;
@@ -214,7 +218,7 @@ export class ParselParser {
         // New Ren'Py
         "char", "scene", "say", "think", "options", "begin", "goto", "set", "to", "in",
         "if", "else", "elseif", "pause", "exit",
-        "import"
+        "import", "using"
     ];
 
     constructor(filePath: string) {
@@ -465,11 +469,21 @@ export class ParselParser {
             case "def": return this.parseLambdaDeclarationAsStatement(); // Lambdas can be assigned, but 'def' as a standalone statement is not typical. Assuming it's part of an assignment.
             case "return": return this.parseReturnStatement();
             case "import": return this.parseImportStatement();
+            case "using": return this.parseUsingStatement();
             default:
                 // Fallback to expression statement
                 const expr = this.parseExpression();
                 return { type: "ExpressionStmt", expression: expr, file: token.file, line: token.line, column: token.column };
         }
+    }
+
+    // --- Ren'Py Specific Parsers ---
+
+    parseUsingStatement(): UsingStmt {
+        // using <name>
+        const usingToken = this.consumeToken(); // consume 'using'
+        const what = this.expectType("identifier");
+        return { type: "UsingStmt", name:what.value, file: usingToken.file, line: usingToken.line, column: usingToken.column };
     }
 
     parseImportStatement(): ImportStmt {
@@ -490,8 +504,6 @@ export class ParselParser {
 
         return { type: "ImportStmt", path: fullPath, alias, body, file: imp.file, line: imp.line, column: imp.column };
     }
-
-    // --- Ren'Py Specific Parsers ---
 
     private parseCharDeclaration(): CharDeclStmt {
         const charToken = this.consumeToken(); // consume 'char'

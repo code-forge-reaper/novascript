@@ -27,7 +27,8 @@ import {
 	FuncDecl,
 	LambdaDecl,
 	ReturnStmt,
-    ImportStmt
+    ImportStmt,
+    UsingStmt
 } from "./subset.ts";
 //import readline from "readline-sync";
 import {input} from "./sync-input/index.ts"
@@ -224,6 +225,22 @@ class ParselRuntime {
 				const func = this.createFunc(s, ctx);
 				ctx.define(s.name, func);
 				break
+			}
+
+			case "UsingStmt": {
+				const s = stmt as UsingStmt
+				const space = ctx.get(s.name, s)
+				if(space instanceof Environment){
+					for(const [key, value] of Object.entries(space.values)){
+						ctx.define(key, value)
+					}
+				}else if(typeof space === "object" && space !== null){
+					for(const [key, value] of Object.entries(space)){
+						ctx.define(key, value)
+					}
+				}else{
+					throw new ParselError(s, `Cannot 'use' non-namespace value: ${s.name}`)
+				}
 			}
 
 			case "CharDecl": {
