@@ -494,13 +494,13 @@ export class ParselParser {
             this.consumeToken(); // consume 'as'
             alias = this.expectType("identifier").value;
         }
-        if(alias in this.importedFiles) return this.importedFiles[alias];
         const fullPath = path.resolve(path.dirname(this.file), pathToken+".par");
+        if(fullPath in this.importedFiles) return this.importedFiles[fullPath];
         const parser = new ParselParser(fullPath);
         parser.importedFiles = this.importedFiles;
         const body = parser.parse();
 
-        this.importedFiles[alias] = { type: "ImportStmt", path: fullPath, alias, body, file: imp.file, line: imp.line, column: imp.column };
+        this.importedFiles[fullPath] = { type: "ImportStmt", path: fullPath, alias, body, file: imp.file, line: imp.line, column: imp.column };
 
         return { type: "ImportStmt", path: fullPath, alias, body, file: imp.file, line: imp.line, column: imp.column };
     }
