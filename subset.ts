@@ -208,6 +208,7 @@ export class ParselParser {
     private current: number;
     private file: string;
     private source: string;
+    private importedFiles: { [key: string]: ImportStmt } = {};
     private keywords: string[] = [
         "var", "func", "return", "def", "as", "end", // Existing subset
         // New Ren'Py
@@ -473,16 +474,19 @@ export class ParselParser {
 
     parseImportStatement(): ImportStmt {
         const imp = this.consumeToken(); // consume 'import'
-
         const pathToken = this.expectType("string").value;
         let alias = pathToken
         if(this.getNextToken()?.value === "as") {
             this.consumeToken(); // consume 'as'
             alias = this.expectType("identifier").value;
         }
+        if(alias in this.importedFiles) return this.importedFiles[alias];
         const fullPath = path.resolve(path.dirname(this.file), pathToken+".par");
         const parser = new ParselParser(fullPath);
+        parser.importedFiles = this.importedFiles;
         const body = parser.parse();
+
+        this.importedFiles[alias] = { type: "ImportStmt", path: fullPath, alias, body, file: imp.file, line: imp.line, column: imp.column };
 
         return { type: "ImportStmt", path: fullPath, alias, body, file: imp.file, line: imp.line, column: imp.column };
     }
