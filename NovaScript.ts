@@ -477,11 +477,11 @@ class NovaClass {
 
         // Bind instance methods to the instance
         for (const [methodName, methodDef] of this.instanceMethods.entries()) {
-            console.log(methodName)
+            //console.log(methodName)
             // Create a JS function that wraps the NovaScript method body
             const novaMethod = (...methodArgs: any[]) => {
                 const methodEnv = new Environment(this.env); // Method's scope
-                methodEnv.define("this", instance); // 'this' refers to the instance
+                methodEnv.define("self", instance); // 'self' refers to the instance
 
                 // Handle 'super' call within instance methods
                 if (this.superClass) {
@@ -493,7 +493,7 @@ class NovaClass {
                         // Create a temporary function to execute the super method
                         const tempSuperFunc = (...tempArgs: any[]) => {
                             const tempSuperEnv = new Environment(this.superClass!.env);
-                            tempSuperEnv.define("this", instance); // 'this' still refers to the current instance
+                            tempSuperEnv.define("self", instance); // 'self' still refers to the current instance
                             for (let i = 0; i < superMethod.parameters.length; i++) {
                                 const param = superMethod.parameters[i];
                                 let argVal = tempArgs[i];
@@ -559,7 +559,7 @@ class NovaClass {
         if (!instanceObj) {
             if (this.constructorDef) {
                 const constructorEnv = new Environment(this.env);
-                constructorEnv.define("this", instance);
+                constructorEnv.define("self", instance);
                 // Define 'super' for constructor's environment
                 if (this.superClass) {
                     constructorEnv.define("super", (...superArgs: any[]) => {
@@ -2191,8 +2191,8 @@ export class Interpreter {
                             // Wrap static methods similar to how FuncDecl is handled
                             const staticMethod = (...args: any[]) => {
                                 const methodEnv = new Environment(env); // Static methods run in the class's definition environment
-                                // Define 'this' for static methods to refer to the static members map
-                                methodEnv.define("this", novaClass.staticMembers);
+                                // Define 'self' for static methods to refer to the static members map
+                                methodEnv.define("self", novaClass.staticMembers);
                                 // Handle parameters and execute body
                                 for (let i = 0; i < member.parameters.length; i++) {
                                     const param = member.parameters[i];
@@ -2434,17 +2434,17 @@ export class Interpreter {
                 if (obj instanceof NovaClass) {
                     const staticMethod = obj.staticMembers.get(methodCallExpr.method);
                     if (typeof staticMethod === "function") {
-                        // Call static method with 'this' context as the static members map (or the class itself)
-                        return staticMethod.apply(obj.staticMembers, argVals); // Or obj for a more JS-like 'this' in static methods
+                        // Call static method with 'self' context as the static members map (or the class itself)
+                        return staticMethod.apply(obj.staticMembers, argVals); // Or obj for a more JS-like 'self' in static methods
                     }
                     // If not a static method, it might be an instance method called on the class itself, which is an error
                     throw new NovaError(methodCallExpr, `Static method '${methodCallExpr.method}' not found or is not a function on class '${obj.name}'.`);
                 }
 
-                // Handle NovaScript instance methods (bound to 'this' in NovaClass.instantiate)
+                // Handle NovaScript instance methods (bound to 'self' in NovaClass.instantiate)
                 // or regular JavaScript object methods
                 let fn;
-                if (obj instanceof Environment) { // This case is for NovaScript's 'this' environment
+                if (obj instanceof Environment) { // This case is for NovaScript's 'self' environment
                     fn = obj.get(methodCallExpr.method, methodCallExpr);
                 } else {
                     // For regular JS objects or NovaScript instances
@@ -2455,7 +2455,7 @@ export class Interpreter {
                     throw new NovaError(methodCallExpr, `${methodCallExpr.method} is not a function or method on this object`);
                 }
 
-                // Call the method. 'apply' correctly sets 'this' to 'obj'.
+                // Call the method. 'apply' correctly sets 'self' to 'obj'.
                 return fn.apply(obj, argVals);
             }
 
@@ -2488,7 +2488,7 @@ export class Interpreter {
                     throw new NovaError(propertyAccessExpr, `Static property '${propertyAccessExpr.property}' not found on class '${obj.name}'.`);
                 }
 
-                // Handle NovaScript instance properties (via 'this' environment)
+                // Handle NovaScript instance properties (via 'self' environment)
                 // or regular JavaScript object properties
                 if (obj instanceof Environment) {
                     return obj.get(propertyAccessExpr.property, propertyAccessExpr);
