@@ -1480,7 +1480,6 @@ export class ParselRuntime {
                         }
                         const res = this.context.get("os-import-handler", s)(s.path)
                         let name = s.alias || s.path;
-                        console.log(res)
 
                         ctx.define(name, res)
                         break
