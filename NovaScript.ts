@@ -127,6 +127,37 @@ interface Identifier extends Expression {
     name: string;
 }
 
+// NEW: Class related interfaces
+interface ClassDefinition extends Statement {
+    type: "ClassDefinition";
+    name: string;
+    superclassName: string | null; // Name of the superclass if it extends one
+    body: (MethodDefinition | PropertyDefinition)[];
+}
+
+interface MethodDefinition extends Statement {
+    type: "MethodDefinition";
+    name: string;
+    parameters: Parameter[];
+    body: Statement[];
+    isStatic: boolean;
+    isConstructor: boolean; // True if this method is the constructor
+}
+
+interface PropertyDefinition extends Statement {
+    type: "PropertyDefinition";
+    name: string;
+    typeAnnotation: string | null;
+    initializer: Expression | null;
+    isStatic: boolean;
+}
+
+interface NewInstance extends Expression {
+    type: "NewInstance";
+    className: string;
+    arguments: Expression[];
+}
+
 
 /* A special exception used to implement returning values from functions */
 export class ReturnException extends Error {
@@ -136,6 +167,7 @@ export class ReturnException extends Error {
         this.value = value;
     }
 }
+
 
 /* Special exceptions to implement break/continue */
 export class BreakException extends Error {
@@ -232,14 +264,14 @@ function initGlobals(globals: Environment): void {
     const runtimeVersion: RuntimeVersion = {
         major: 0,
         minor: 7,
-        patch: 0
+        patch: 5
     };
 
     // Create a dummy token for internal/bootstrap errors in initGlobals
     const internalToken: Token = { type: "internal", value: "init", file: "internal_init.ts", line: 1, column: 1 };
 
     globals.define("isArray", Array.isArray);
-    globals.define("new", (className: any, ...args: any[]) => new className(...args));
+    // globals.define("new", (className: any, ...args: any[]) => new className(...args)); // REMOVED: 'new' is now a keyword for class instantiation
 
     globals.define("Logger", {
         info: (...args: any[]) => console.log("[info %s| at: %i:%i:%i]:", globals.get("Runtime", internalToken).versionString, // Pass internalToken
@@ -390,6 +422,186 @@ function checkType(expected: string, value: any, token: Token, interpreter: Inte
     return value;
 }
 
+// NEW: Runtime representation of a NovaScript class
+class NovaClass {
+    name: string;
+    superClass: NovaClass | null;
+    staticMembers: Map<string, any>;
+    instanceProperties: Map<string, PropertyDefinition>;
+    instanceMethods: Map<string, MethodDefinition>;
+    constructorDef: MethodDefinition | null;
+    interpreter: Interpreter;
+    env: Environment; // Environment where the class was defined (for evaluating initializers/defaults)
+
+    constructor(
+        name: string,
+        superClass: NovaClass | null,
+        interpreter: Interpreter,
+        env: Environment
+    ) {
+        this.name = name;
+        this.superClass = superClass;
+        this.interpreter = interpreter;
+        this.env = env;
+        this.staticMembers = new Map();
+        this.instanceProperties = new Map();
+        this.instanceMethods = new Map();
+        this.constructorDef = null;
+    }
+
+    // This method will be called to create an instance
+    instantiate(args: any[], instanceToken: Token, instanceObj?: any): any {
+        const instance = instanceObj || {}; // If instanceObj is provided, use it (for super calls)
+
+        // First, handle superclass construction if applicable and this is the top-level call
+        if (this.superClass && !instanceObj) { // Only call superclass constructor if this is the initial instantiation
+            this.superClass.instantiate(args, instanceToken, instance); // Pass the current instance to superclass
+        }
+
+        // Initialize instance properties
+        for (const [propName, propDef] of this.instanceProperties.entries()) {
+            let propValue;
+            if (propDef.initializer) {
+                // Evaluate initializer in the context of the class definition environment
+                propValue = this.interpreter.evaluateExpr(propDef.initializer, this.env);
+            } else {
+                propValue = undefined; // Default value if no initializer
+            }
+            Object.defineProperty(instance, propName, {
+                value: propValue,
+                writable: true,
+                enumerable: true,
+                configurable: true
+            });
+        }
+
+        // Bind instance methods to the instance
+        for (const [methodName, methodDef] of this.instanceMethods.entries()) {
+            console.log(methodName)
+            // Create a JS function that wraps the NovaScript method body
+            const novaMethod = (...methodArgs: any[]) => {
+                const methodEnv = new Environment(this.env); // Method's scope
+                methodEnv.define("this", instance); // 'this' refers to the instance
+
+                // Handle 'super' call within instance methods
+                if (this.superClass) {
+                    methodEnv.define("super", (...superMethodArgs: any[]) => {
+                        const superMethod = this.superClass!.instanceMethods.get(methodName); // Get super method definition
+                        if (!superMethod) {
+                            throw new NovaError(instanceToken, `Method '${methodName}' not found in superclass '${this.superClass!.name}'.`);
+                        }
+                        // Create a temporary function to execute the super method
+                        const tempSuperFunc = (...tempArgs: any[]) => {
+                            const tempSuperEnv = new Environment(this.superClass!.env);
+                            tempSuperEnv.define("this", instance); // 'this' still refers to the current instance
+                            for (let i = 0; i < superMethod.parameters.length; i++) {
+                                const param = superMethod.parameters[i];
+                                let argVal = tempArgs[i];
+                                if (argVal === undefined && param.default !== undefined) {
+                                    argVal = this.interpreter.evaluateExpr(param.default, this.superClass!.env);
+                                } else if (argVal === undefined && param.default === undefined) {
+                                    throw new NovaError(param, `Missing argument for parameter '${param.name}' in super method '${methodName}'.`);
+                                }
+                                if (param.annotationType) {
+                                    checkType(param.annotationType, argVal, param, this.interpreter);
+                                }
+                                tempSuperEnv.define(param.name, argVal);
+                            }
+                            try {
+                                this.interpreter.executeBlock(superMethod.body, tempSuperEnv);
+                            } catch (e) {
+                                if (e instanceof ReturnException) {
+                                    return e.value;
+                                }
+                                throw e;
+                            }
+                            return undefined;
+                        };
+                        return tempSuperFunc(...superMethodArgs);
+                    });
+                }
+
+                // Handle parameters for current method
+                for (let i = 0; i < methodDef.parameters.length; i++) {
+                    const param = methodDef.parameters[i];
+                    let argVal = methodArgs[i];
+                    if (argVal === undefined && param.default !== undefined) {
+                        argVal = this.interpreter.evaluateExpr(param.default, this.env); // Evaluate default in class's env
+                    } else if (argVal === undefined && param.default === undefined) {
+                        throw new NovaError(param, `Missing argument for parameter '${param.name}' in method '${methodDef.name}'.`);
+                    }
+                    if (param.annotationType) {
+                        checkType(param.annotationType, argVal, param, this.interpreter);
+                    }
+                    methodEnv.define(param.name, argVal);
+                }
+
+                try {
+                    this.interpreter.executeBlock(methodDef.body, methodEnv);
+                } catch (e) {
+                    if (e instanceof ReturnException) {
+                        return e.value;
+                    }
+                    throw e;
+                }
+                return undefined;
+            };
+            Object.defineProperty(instance, methodName, {
+                value: novaMethod,
+                writable: true,
+                enumerable: true,
+                configurable: true
+            });
+        }
+
+
+        // Handle constructor call (only if this is the top-level instantiation)
+        if (!instanceObj) {
+            if (this.constructorDef) {
+                const constructorEnv = new Environment(this.env);
+                constructorEnv.define("this", instance);
+                // Define 'super' for constructor's environment
+                if (this.superClass) {
+                    constructorEnv.define("super", (...superArgs: any[]) => {
+                        if (!this.superClass) { // Should not happen given the check above
+                            throw new NovaError(instanceToken, "Cannot call super() in a class without a superclass.");
+                        }
+                        this.superClass.instantiate(superArgs, instanceToken, instance); // Pass current instance
+                    });
+                }
+
+                // Handle constructor parameters
+                for (let i = 0; i < this.constructorDef.parameters.length; i++) {
+                    const param = this.constructorDef.parameters[i];
+                    let argVal = args[i];
+                    if (argVal === undefined && param.default !== undefined) {
+                        argVal = this.interpreter.evaluateExpr(param.default, this.env);
+                    } else if (argVal === undefined && param.default === undefined) {
+                        throw new NovaError(param, `Missing argument for parameter '${param.name}' in constructor of '${this.name}'.`);
+                    }
+                    if (param.annotationType) {
+                        checkType(param.annotationType, argVal, param, this.interpreter);
+                    }
+                    constructorEnv.define(param.name, argVal);
+                }
+
+                try {
+                    this.interpreter.executeBlock(this.constructorDef.body, constructorEnv);
+                } catch (e) {
+                    if (e instanceof ReturnException) {
+                        // Constructors don't typically return values, but if they do, ignore it.
+                    } else {
+                        throw e;
+                    }
+                }
+            }
+        }
+
+        return instance;
+    }
+}
+
+
 export class Interpreter {
     keywords: string[] = [
         "var", "if", "else", "elseif", "end", "break", "continue", "func",
@@ -400,7 +612,9 @@ export class Interpreter {
         // def (...) ... end
         "def",
         // type rect = {x : number,y: number, width:number, height: number}
-        "type"
+        "type",
+        // NEW: Class keywords
+        "class", "inherits", "static", "new", "super"
     ];
 
     source: string;
@@ -426,6 +640,19 @@ export class Interpreter {
         this.customTypes = new Map<string, CustomType>(); // NEW: Initialize customTypes
         initGlobals(this.globals);
         this.globals.define("__SCRIPT_PATH__", path.dirname(this.file));
+    }
+
+    /**
+     * Exposes a JavaScript class to the NovaScript environment.
+     * NovaScript code can then instantiate and interact with this class using 'new' keyword.
+     * @param name The name by which the class will be known in NovaScript.
+     * @param jsClass The JavaScript class (constructor function) to expose.
+     */
+    exposeJsClass(name: string, jsClass: any): void {
+        if (typeof jsClass !== 'function' || !jsClass.prototype || typeof jsClass.prototype.constructor !== 'function') {
+            throw new Error(`Cannot expose '${name}': Provided value is not a valid JavaScript class constructor.`);
+        }
+        this.globals.define(name, jsClass);
     }
 
     // ----------------------
@@ -554,8 +781,7 @@ export class Interpreter {
                     }
                     i++;
                     col++;
-                    if(source[i] === "\n")
-                    {
+                    if (source[i] === "\n") {
                         col = 1
                         line++
                     }
@@ -647,7 +873,7 @@ export class Interpreter {
                 break;
             }
             const t = this.parseStatement()
-            if(t)
+            if (t)
                 statements.push(t);
         }
         return statements;
@@ -661,454 +887,552 @@ export class Interpreter {
         return this.consumeToken();
     }
 
+    // NEW: parseClassDefinition method
+    parseClassDefinition(): ClassDefinition {
+        const classToken = this.consumeToken(); // consume 'class'
+        const nameToken = this.expectType("identifier");
+        const name = nameToken.value;
+        this.consumeToken(); // consume class name
+
+        let superclassName: string | null = null;
+        if (this.getNextToken()?.value === "inherits") { // Using 'inherits' as proposed
+            this.consumeToken(); // consume 'inherits'
+            const superNameToken = this.expectType("identifier");
+            superclassName = superNameToken.value;
+            this.consumeToken(); // consume superclass name
+        }
+
+        let hasInitializer = false
+        const body: (MethodDefinition | PropertyDefinition)[] = [];
+        while (this.getNextToken() && this.getNextToken()!.value !== "end") {
+            const memberToken = this.getNextToken()!;
+            let isStatic = false;
+            if (memberToken.type === "keyword" && memberToken.value === "static") {
+                this.consumeToken(); // consume 'static'
+                isStatic = true;
+            }
+
+            if (this.getNextToken()?.type === "keyword" && this.getNextToken()!.value === "var") {
+                // Property Definition
+                this.consumeToken(); // consume 'var'
+                const propNameToken = this.expectType("identifier");
+                const propName = propNameToken.value;
+                this.consumeToken();
+
+                let typeAnnotation: string | null = null;
+                if (this.getNextToken()?.type === "operator" && this.getNextToken()!.value === ":") {
+                    this.consumeToken(); // consume ':'
+                    const typeToken = this.expectType("identifier");
+                    typeAnnotation = typeToken.value;
+                    this.consumeToken();
+                }
+
+                let initializer: Expression | null = null;
+                if (this.getNextToken()?.type === "operator" && this.getNextToken()!.value === "=") {
+                    this.consumeToken(); // consume '='
+                    initializer = this.parseExpression();
+                }
+                body.push({
+                    type: "PropertyDefinition",
+                    name: propName,
+                    typeAnnotation,
+                    initializer,
+                    isStatic,
+                    file: propNameToken.file, line: propNameToken.line, column: propNameToken.column
+                });
+            } else if (this.getNextToken()?.type === "keyword" && this.getNextToken()!.value === "func") {
+                // Method Definition
+                this.consumeToken(); // consume 'func'
+                const methodNameToken = this.expectType("identifier");
+                const methodName = methodNameToken.value;
+                this.consumeToken();
+
+                let isConstructor = false;
+                if (methodName === "init") {
+                    isConstructor = true;
+                    hasInitializer = true
+                }
+
+                this.expectToken("(");
+                this.consumeToken();
+
+                const parameters: Parameter[] = [];
+                if (this.getNextToken() && this.getNextToken()!.value !== ")") {
+                    while (true) {
+                        const paramToken = this.expectType("identifier");
+                        const paramName = paramToken.value;
+                        this.consumeToken();
+
+                        let annotationType: string | null = null;
+                        if (this.getNextToken()?.type === "identifier") {
+                            const typeToken = this.getNextToken()!;
+                            if (["string", "number", "bool", "boolean", ...this.customTypes.keys()].includes(typeToken.value)) {
+                                annotationType = typeToken.value;
+                                this.consumeToken();
+                            }
+                        }
+
+                        let defaultExpr: Expression | undefined;
+                        if (this.getNextToken()?.value === "=") {
+                            this.consumeToken();
+                            defaultExpr = this.parseExpression();
+                        }
+
+                        parameters.push({
+                            name: paramName,
+                            annotationType: annotationType,
+                            default: defaultExpr,
+                            file: paramToken.file, line: paramToken.line, column: paramToken.column,
+                            type: paramToken.type, value: paramToken.value
+                        });
+
+                        if (this.getNextToken()?.value === ",") {
+                            this.consumeToken();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                this.expectToken(")");
+                this.consumeToken();
+
+                const bodyStatements = this.parseBlockUntil(["end"]);
+                this.expectToken("end");
+                this.consumeToken();
+
+                body.push({
+                    type: "MethodDefinition",
+                    name: methodName,
+                    parameters,
+                    body: bodyStatements,
+                    isStatic,
+                    isConstructor,
+                    file: methodNameToken.file, line: methodNameToken.line, column: methodNameToken.column
+                });
+            } else {
+                throw new NovaError(memberToken, `Unexpected token in class body: ${memberToken.value}`);
+            }
+        }
+
+        if (!hasInitializer) {
+            throw new NovaError(classToken, "this class has no `init` initializer function")
+        }
+
+        this.expectToken("end");
+        this.consumeToken(); // consume 'end'
+
+        return {
+            type: "ClassDefinition",
+            name,
+            superclassName,
+            body,
+            file: classToken.file, line: classToken.line, column: classToken.column
+        };
+    }
+
     // ----------------------
     // Parsing Statements and Expressions
     // ----------------------
     parseStatement(): Statement | undefined {
         const token = this.getNextToken();
         if (!token) {
-            // Changed to NovaError
             const lastToken = this.tokens[this.current - 1] || { type: "EOF", value: "EOF", file: this.file, line: 1, column: 1 };
             throw new NovaError(lastToken, "Unexpected end of input");
         }
 
-        // --- Defer statement ---
-        if (token.type === "keyword" && token.value === "defer") {
-            this.consumeToken();
-            const body = this.parseBlockUntil(["end"]);
-            this.expectToken("end");
-            this.consumeToken();
-            return { type: "DeferStmt", body, line: token.line, column: token.column, file: token.file };
-        }
-        // NEW: Custom Type Declaration
-        if (token.type === "keyword" && token.value === "type") {
-            this.consumeToken(); // consume 'type'
-            const nameToken = this.expectType("identifier");
-            const name = nameToken.value;
-            this.consumeToken(); // consume type name
+        // Refactored to use switch-case for keyword statements
+        if (token.type === "keyword") {
+            switch (token.value) {
+                case "defer":
+                    this.consumeToken();
+                    const deferBody = this.parseBlockUntil(["end"]);
+                    this.expectToken("end");
+                    this.consumeToken();
+                    return { type: "DeferStmt", body: deferBody, line: token.line, column: token.column, file: token.file };
 
-            this.expectToken("=");
-            this.consumeToken(); // consume '='
+                case "type":
+                    this.consumeToken(); // consume 'type'
+                    const customTypeNameToken = this.expectType("identifier");
+                    const customTypeName = customTypeNameToken.value;
+                    this.consumeToken(); // consume type name
 
-            this.expectToken("{");
-            this.consumeToken(); // consume '{'
+                    this.expectToken("=");
+                    this.consumeToken(); // consume '='
 
-            const properties: CustomTypeProperty[] = [];
-            while (this.getNextToken() && this.getNextToken()!.value !== "}") {
-                const propNameToken = this.expectType("identifier");
-                const propName = propNameToken.value;
-                this.consumeToken(); // consume property name
+                    this.expectToken("{");
+                    this.consumeToken(); // consume '{'
 
-                this.expectToken(":");
-                this.consumeToken(); // consume ':'
+                    const properties: CustomTypeProperty[] = [];
+                    while (this.getNextToken() && this.getNextToken()!.value !== "}") {
+                        const propNameToken = this.expectType("identifier");
+                        const propName = propNameToken.value;
+                        this.consumeToken(); // consume property name
 
-                // Expect an identifier for the type name (e.g., "number", "string", "MyCustomType")
-                const propTypeToken = this.expectType("identifier");
-                const propType = propTypeToken.value;
-                this.consumeToken(); // consume property type
+                        this.expectToken(":");
+                        this.consumeToken(); // consume ':'
 
-                properties.push({ name: propName, type: propType });
+                        const propTypeToken = this.expectType("identifier");
+                        const propType = propTypeToken.value;
+                        this.consumeToken(); // consume property type
 
-                if (this.getNextToken() && this.getNextToken()!.value === ",") {
-                    this.consumeToken(); // consume ','
-                } else {
-                    break;
-                }
-            }
+                        properties.push({ name: propName, type: propType });
 
-            this.expectToken("}");
-            this.consumeToken(); // consume '}'
-            const customTypeStmt = {
-                type: "CustomTypeDecl",
-                name,
-                definition: properties,
-                file: token.file,
-                line: token.line,
-                column: token.column
-            };
-            this.customTypes.set(customTypeStmt.name, {
-                name: customTypeStmt.name,
-                properties: customTypeStmt.definition,
-                file: customTypeStmt.file,
-                line: customTypeStmt.line,
-                column: customTypeStmt.column
-            });
-            return undefined// the statement is not handled at runtime, don't return it
-        }
-        // --- Variable declaration with optional type annotation ---
-        if (token.type === "keyword" && token.value === "var") {
-            this.consumeToken();
-            const nameToken = this.expectType("identifier");
-            const name = nameToken.value;
-            this.consumeToken();
+                        if (this.getNextToken() && this.getNextToken()!.value === ",") {
+                            this.consumeToken(); // consume ','
+                        } else {
+                            break;
+                        }
+                    }
 
-            // Optional type annotation
-            let annotationType: string | null = null; // MODIFIED: Renamed to annotationType
-            if (
-                this.getNextToken() &&
-                this.getNextToken()!.type === "identifier" && // Added ! for non-null assertion
-                ["string", "number", "boolean", "void", "bool", ...this.customTypes.keys()].includes(this.getNextToken()!.value) // Added 'bool' for consistency with parser
-            ) {
-                annotationType = this.getNextToken()!.value; // Added !
-                this.consumeToken();
-            }
-            //console.log(this.customTypes.keys())
+                    this.expectToken("}");
+                    this.consumeToken(); // consume '}'
+                    const customTypeStmt: CustomTypeDeclStmt = {
+                        type: "CustomTypeDecl",
+                        name: customTypeName,
+                        definition: properties,
+                        file: token.file,
+                        line: token.line,
+                        column: token.column
+                    };
+                    this.customTypes.set(customTypeStmt.name, {
+                        name: customTypeStmt.name,
+                        properties: customTypeStmt.definition,
+                        file: customTypeStmt.file,
+                        line: customTypeStmt.line,
+                        column: customTypeStmt.column
+                    });
+                    return undefined; // the statement is not handled at runtime, don't return it
 
-            this.expectToken("=");
-            this.consumeToken();
-            const initializer = this.parseExpression();
-            return { type: "VarDecl", name, typeAnnotation: annotationType, initializer, line: token.line, column: token.column, file: token.file }; // MODIFIED: typeAnnotation
-        }
-
-        // --- Switch statement ---
-        if (token.type === "keyword" && token.value === "switch") {
-            this.consumeToken();
-            const expression = this.parseExpression();
-            const cases: Case[] = [];
-            while (this.getNextToken()?.type === "keyword" && this.getNextToken()!.value === "case") { // Added !
-                this.consumeToken();
-                const caseExpr = this.parseExpression();
-                this.expectToken("do");
-                this.consumeToken();
-                const body = this.parseBlockUntil(["end"]);
-                this.expectToken("end");
-                this.consumeToken();
-                cases.push({ caseExpr, body });
-            }
-            if (this.getNextToken()?.type === "keyword" && this.getNextToken()!.value === "default") { // Added !
-                this.consumeToken();
-                this.expectToken("do");
-                this.consumeToken();
-                const body = this.parseBlockUntil(["end"]);
-                this.expectToken("end");
-                this.consumeToken();
-                cases.push({ caseExpr: null, body });
-            }
-
-            this.expectToken("end");
-            this.consumeToken();
-
-            return { type: "SwitchStmt", expression, cases, line: token.line, column: token.column, file: token.file };
-        }
-
-        // --- using statement ---
-        if (token.type === "keyword" && token.value === "using") {
-            this.consumeToken();
-            const nameToken = this.expectType("identifier");
-            this.consumeToken();
-
-            return { type: "UsingStmt", name: nameToken.value, line: token.line, column: token.column, file: token.file };
-        }
-
-        // --- Try/Catch statement ---
-        if (token.type === "keyword" && token.value === "try") {
-            this.consumeToken();
-            const tryBlock = this.parseBlockUntil(["errored"]);
-            this.expectToken("errored");
-            this.consumeToken();
-            const errorVarToken = this.expectType("identifier");
-            const errorVar = errorVarToken.value;
-            this.consumeToken();
-            const catchBlock = this.parseBlockUntil(["end"]);
-            this.expectToken("end");
-            this.consumeToken();
-            return { type: "TryStmt", tryBlock, errorVar, catchBlock, line: token.line, column: token.column, file: token.file };
-        }
-
-        // --- ForEach loop ---
-        if (token.type === "keyword" && token.value === "forEach") {
-            this.consumeToken();
-            const varToken = this.expectType("identifier");
-            const variable = varToken.value;
-            this.consumeToken();
-            this.expectToken("in");
-            this.consumeToken();
-            const listExpr = this.parseExpression();
-            this.expectToken("do");
-            this.consumeToken();
-            const body = this.parseBlockUntil(["end"]);
-            this.expectToken("end");
-            this.consumeToken();
-            return { type: "ForEachStmt", variable, list: listExpr, body, line: token.line, column: token.column, file: token.file };
-        }
-
-        // --- For loop ---
-        if (token.type === "keyword" && token.value === "for") {
-            this.consumeToken();
-            const varToken = this.expectType("identifier");
-            const variable = varToken.value;
-            this.consumeToken();
-            this.expectToken("=");
-            this.consumeToken();
-            const startExpr = this.parseExpression();
-            this.expectToken(",");
-            this.consumeToken();
-            const endExpr = this.parseExpression();
-            let stepExpr: Expression | undefined;
-            if (this.getNextToken()?.value === ",") {
-                this.consumeToken();
-                stepExpr = this.parseExpression();
-            }
-            this.expectToken("do");
-            this.consumeToken();
-            const body = this.parseBlockUntil(["end"]);
-            this.expectToken("end");
-            this.consumeToken();
-            return { type: "ForStmt", variable, start: startExpr, end: endExpr, step: stepExpr, body, line: token.line, column: token.column, file: token.file };
-        }
-
-        // --- While loop ---
-        if (token.type === "keyword" && token.value === "while") {
-            this.consumeToken();
-            const condition = this.parseExpression();
-            const body = this.parseBlockUntil(["end"]);
-            this.expectToken("end");
-            this.consumeToken();
-            return { type: "WhileStmt", condition, body, line: token.line, column: token.column, file: token.file };
-        }
-
-        // --- Break statement ---
-        if (token.type === "keyword" && token.value === "break") {
-            this.consumeToken();
-            return { type: "BreakStmt", line: token.line, column: token.column, file: token.file };
-        }
-        // --- Continue statement ---
-        if (token.type === "keyword" && token.value === "continue") {
-            this.consumeToken();
-            return { type: "ContinueStmt", line: token.line, column: token.column, file: token.file };
-        }
-
-        if (token.type === "keyword" && token.value === "if") {
-            this.consumeToken();
-            const condition = this.parseExpression();
-            const thenBlock = this.parseBlockUntil(["else", "elseif", "end"]);
-
-            const elseIfBlocks: { condition: Expression, body: Statement[] }[] = [];
-            let elseBlock: Statement[] | null = null;
-
-            // Parse elseif chains
-            while (this.getNextToken()?.type === "keyword" && this.getNextToken()!.value === "elseif") { // Added !
-                this.consumeToken(); // consume 'elseif'
-                const elseifCondition = this.parseExpression();
-                const elseifBody = this.parseBlockUntil(["else", "elseif", "end"]);
-                elseIfBlocks.push({ condition: elseifCondition, body: elseifBody });
-            }
-
-            // Parse else block if present
-            if (this.getNextToken()?.type === "keyword" && this.getNextToken()!.value === "else") { // Added !
-                this.consumeToken();
-                elseBlock = this.parseBlockUntil(["end"]);
-            }
-
-            this.expectToken("end");
-            this.consumeToken();
-
-            return {
-                type: "IfStmt",
-                condition,
-                thenBlock,
-                elseBlock,
-                elseIf: elseIfBlocks.length > 0 ? elseIfBlocks : null,
-                line: token.line, column: token.column, file: token.file
-            };
-        }
-
-        // --- namespace ---
-        if (token.type === "keyword" && token.value === "namespace") {
-            this.consumeToken();
-            const nameToken = this.expectType("identifier");
-            const name = nameToken.value;
-            this.consumeToken();
-            const body = this.parseBlockUntil(["end"]);
-            this.expectToken("end");
-            this.consumeToken();
-            return { type: "NamespaceStmt", name, body, line: token.line, column: token.column, file: token.file };
-        }
-
-        if (token.type === "keyword" && token.value === "func") {
-            this.consumeToken();
-            const nameToken = this.expectType("identifier");
-            const name = nameToken.value;
-            this.consumeToken();
-            this.expectToken("(");
-            this.consumeToken();
-
-            const parameters: Parameter[] = [];
-            if (this.getNextToken() && this.getNextToken()!.value !== ")") { // Added !
-                while (true) {
-                    const paramToken = this.expectType("identifier");
-                    const paramName = paramToken.value;
+                case "var":
+                    this.consumeToken();
+                    const varNameToken = this.expectType("identifier");
+                    const varName = varNameToken.value;
                     this.consumeToken();
 
-                    let annotationType: string | null = null; // MODIFIED: Renamed
-                    let defaultExpr: Expression | undefined;
-
-                    // optional type annotation
-                    if (this.getNextToken()?.type === "identifier") {
-                        const typeToken = this.getNextToken()!; // Added !
-                        if (["string", "number", "bool", "boolean", ...this.customTypes.keys()].includes(typeToken.value)) { // Added "boolean"
-                            annotationType = typeToken.value; // MODIFIED: Renamed
-                            this.consumeToken();
-                        }
-                    }
-
-                    // optional default value
-                    if (this.getNextToken()?.value === "=") {
+                    let varAnnotationType: string | null = null;
+                    if (
+                        this.getNextToken() &&
+                        this.getNextToken()!.type === "identifier" &&
+                        ["string", "number", "boolean", "void", "bool", ...this.customTypes.keys()].includes(this.getNextToken()!.value)
+                    ) {
+                        varAnnotationType = this.getNextToken()!.value;
                         this.consumeToken();
-                        defaultExpr = this.parseExpression();
-                        if (annotationType) { // MODIFIED: Logic for explicit type + default
-                            throw new NovaError(token, "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.");
-                        }
-
-                        // Infer type from default value if no explicit annotation
-                        if (defaultExpr.type === "Literal") {
-                            const inferredType = typeof (defaultExpr as Literal).value;
-                            if (inferredType === "string") annotationType = "string";
-                            else if (inferredType === "number") annotationType = "number";
-                            else if (inferredType === "boolean") annotationType = "bool"; // Use "bool" for consistency with parser
-                            else annotationType = null; // Cannot infer
-                        } else {
-                            annotationType = null; // For complex expressions, inference at parse time is difficult.
-                        }
                     }
 
-                    // Ensure Parameter also has token info
-                    parameters.push({
-                        name: paramName,
-                        annotationType: annotationType, // MODIFIED: Renamed
-                        default: defaultExpr,
-                        file: paramToken.file,
-                        line: paramToken.line,
-                        column: paramToken.column,
-                        type: paramToken.type, // Token type (e.g., "identifier")
-                        value: paramToken.value // Token value (the identifier name)
-                    });
+                    this.expectToken("=");
+                    this.consumeToken();
+                    const varInitializer = this.parseExpression();
+                    return { type: "VarDecl", name: varName, typeAnnotation: varAnnotationType, initializer: varInitializer, line: token.line, column: token.column, file: token.file };
 
+                case "switch":
+                    this.consumeToken();
+                    const switchExpr = this.parseExpression();
+                    const cases: Case[] = [];
+                    while (this.getNextToken()?.type === "keyword" && this.getNextToken()!.value === "case") {
+                        this.consumeToken();
+                        const caseExpr = this.parseExpression();
+                        this.expectToken("do");
+                        this.consumeToken();
+                        const caseBody = this.parseBlockUntil(["end"]);
+                        this.expectToken("end");
+                        this.consumeToken();
+                        cases.push({ caseExpr, body: caseBody });
+                    }
+                    if (this.getNextToken()?.type === "keyword" && this.getNextToken()!.value === "default") {
+                        this.consumeToken();
+                        this.expectToken("do");
+                        this.consumeToken();
+                        const defaultBody = this.parseBlockUntil(["end"]);
+                        this.expectToken("end");
+                        this.consumeToken();
+                        cases.push({ caseExpr: null, body: defaultBody });
+                    }
+                    this.expectToken("end");
+                    this.consumeToken();
+                    return { type: "SwitchStmt", expression: switchExpr, cases, line: token.line, column: token.column, file: token.file };
+
+                case "using":
+                    this.consumeToken();
+                    const usingNameToken = this.expectType("identifier");
+                    this.consumeToken();
+                    return { type: "UsingStmt", name: usingNameToken.value, line: token.line, column: token.column, file: token.file };
+
+                case "try":
+                    this.consumeToken();
+                    const tryBlock = this.parseBlockUntil(["errored"]);
+                    this.expectToken("errored");
+                    this.consumeToken();
+                    const errorVarToken = this.expectType("identifier");
+                    const errorVar = errorVarToken.value;
+                    this.consumeToken();
+                    const catchBlock = this.parseBlockUntil(["end"]);
+                    this.expectToken("end");
+                    this.consumeToken();
+                    return { type: "TryStmt", tryBlock, errorVar, catchBlock, line: token.line, column: token.column, file: token.file };
+
+                case "forEach":
+                    this.consumeToken();
+                    const forEachVarToken = this.expectType("identifier");
+                    const forEachVariable = forEachVarToken.value;
+                    this.consumeToken();
+                    this.expectToken("in");
+                    this.consumeToken();
+                    const forEachListExpr = this.parseExpression();
+                    this.expectToken("do");
+                    this.consumeToken();
+                    const forEachBody = this.parseBlockUntil(["end"]);
+                    this.expectToken("end");
+                    this.consumeToken();
+                    return { type: "ForEachStmt", variable: forEachVariable, list: forEachListExpr, body: forEachBody, line: token.line, column: token.column, file: token.file };
+
+                case "for":
+                    this.consumeToken();
+                    const forVarToken = this.expectType("identifier");
+                    const forVariable = forVarToken.value;
+                    this.consumeToken();
+                    this.expectToken("=");
+                    this.consumeToken();
+                    const forStartExpr = this.parseExpression();
+                    this.expectToken(",");
+                    this.consumeToken();
+                    const forEndExpr = this.parseExpression();
+                    let forStepExpr: Expression | undefined;
                     if (this.getNextToken()?.value === ",") {
                         this.consumeToken();
-                    } else {
-                        break;
+                        forStepExpr = this.parseExpression();
                     }
-                }
-            }
+                    this.expectToken("do");
+                    this.consumeToken();
+                    const forBody = this.parseBlockUntil(["end"]);
+                    this.expectToken("end");
+                    this.consumeToken();
+                    return { type: "ForStmt", variable: forVariable, start: forStartExpr, end: forEndExpr, step: forStepExpr, body: forBody, line: token.line, column: token.column, file: token.file };
 
-            this.expectToken(")");
-            this.consumeToken();
-            const body = this.parseBlockUntil(["end"]);
-            this.expectToken("end");
-            this.consumeToken();
+                case "while":
+                    this.consumeToken();
+                    const whileCondition = this.parseExpression();
+                    const whileBody = this.parseBlockUntil(["end"]);
+                    this.expectToken("end");
+                    this.consumeToken();
+                    return { type: "WhileStmt", condition: whileCondition, body: whileBody, line: token.line, column: token.column, file: token.file };
 
-            return {
-                type: "FuncDecl",
-                name,
-                parameters,
-                body,
-                file: token.file, line: token.line, column: token.column
-            };
-        }
+                case "break":
+                    this.consumeToken();
+                    return { type: "BreakStmt", line: token.line, column: token.column, file: token.file };
 
-        if (token.type === "keyword" && token.value === "def") {
-            this.consumeToken();
-            this.expectToken("(");
-            this.consumeToken();
+                case "continue":
+                    this.consumeToken();
+                    return { type: "ContinueStmt", line: token.line, column: token.column, file: token.file };
 
-            const parameters: Parameter[] = [];
-            if (this.getNextToken() && this.getNextToken()!.value !== ")") { // Added !
-                while (true) {
-                    const paramToken = this.expectType("identifier");
-                    const paramName = paramToken.value;
+                case "if":
+                    this.consumeToken();
+                    const ifCondition = this.parseExpression();
+                    const thenBlock = this.parseBlockUntil(["else", "elseif", "end"]);
+
+                    const elseIfBlocks: { condition: Expression, body: Statement[] }[] = [];
+                    let elseBlock: Statement[] | null = null;
+
+                    while (this.getNextToken()?.type === "keyword" && this.getNextToken()!.value === "elseif") {
+                        this.consumeToken();
+                        const elseifCondition = this.parseExpression();
+                        const elseifBody = this.parseBlockUntil(["else", "elseif", "end"]);
+                        elseIfBlocks.push({ condition: elseifCondition, body: elseifBody });
+                    }
+
+                    if (this.getNextToken()?.type === "keyword" && this.getNextToken()!.value === "else") {
+                        this.consumeToken();
+                        elseBlock = this.parseBlockUntil(["end"]);
+                    }
+
+                    this.expectToken("end");
                     this.consumeToken();
 
-                    let annotationType: string | null = null; // MODIFIED: Renamed
-                    let defaultExpr: Expression | undefined;
+                    return {
+                        type: "IfStmt",
+                        condition: ifCondition,
+                        thenBlock,
+                        elseBlock,
+                        elseIf: elseIfBlocks.length > 0 ? elseIfBlocks : null,
+                        line: token.line, column: token.column, file: token.file
+                    };
 
-                    // optional type annotation
-                    if (this.getNextToken()?.type === "identifier") {
-                        const typeToken = this.getNextToken()!; // Added !
-                        if (["string", "number", "bool", "boolean", ...this.customTypes.keys()].includes(typeToken.value)) { // Added "boolean"
-                            annotationType = typeToken.value; // MODIFIED: Renamed
+                case "namespace":
+                    this.consumeToken();
+                    const namespaceNameToken = this.expectType("identifier");
+                    const namespaceName = namespaceNameToken.value;
+                    this.consumeToken();
+                    const namespaceBody = this.parseBlockUntil(["end"]);
+                    this.expectToken("end");
+                    this.consumeToken();
+                    return { type: "NamespaceStmt", name: namespaceName, body: namespaceBody, line: token.line, column: token.column, file: token.file };
+
+                case "func":
+                    this.consumeToken();
+                    const funcNameToken = this.expectType("identifier");
+                    const funcName = funcNameToken.value;
+                    this.consumeToken();
+                    this.expectToken("(");
+                    this.consumeToken();
+
+                    const funcParameters: Parameter[] = [];
+                    if (this.getNextToken() && this.getNextToken()!.value !== ")") {
+                        while (true) {
+                            const paramToken = this.expectType("identifier");
+                            const paramName = paramToken.value;
                             this.consumeToken();
+
+                            let annotationType: string | null = null;
+                            if (this.getNextToken()?.type === "identifier") {
+                                const typeToken = this.getNextToken()!;
+                                if (["string", "number", "bool", "boolean", ...this.customTypes.keys()].includes(typeToken.value)) {
+                                    annotationType = typeToken.value;
+                                    this.consumeToken();
+                                }
+                            }
+
+                            let defaultExpr: Expression | undefined;
+                            if (this.getNextToken()?.value === "=") {
+                                this.consumeToken();
+                                defaultExpr = this.parseExpression();
+                                if (annotationType) {
+                                    throw new NovaError(token, "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.");
+                                }
+
+                                if (defaultExpr.type === "Literal") {
+                                    const inferredType = typeof (defaultExpr as Literal).value;
+                                    if (inferredType === "string") annotationType = "string";
+                                    else if (inferredType === "number") annotationType = "number";
+                                    else if (inferredType === "boolean") annotationType = "bool";
+                                    else annotationType = null;
+                                } else {
+                                    annotationType = null;
+                                }
+                            }
+
+                            funcParameters.push({
+                                name: paramName,
+                                annotationType: annotationType,
+                                default: defaultExpr,
+                                file: paramToken.file, line: paramToken.line, column: paramToken.column,
+                                type: paramToken.type, value: paramToken.value
+                            });
+
+                            if (this.getNextToken()?.value === ",") {
+                                this.consumeToken();
+                            } else {
+                                break;
+                            }
                         }
                     }
 
-                    // optional default value
-                    if (this.getNextToken()?.value === "=") {
+                    this.expectToken(")");
+                    this.consumeToken();
+                    const funcBody = this.parseBlockUntil(["end"]);
+                    this.expectToken("end");
+                    this.consumeToken();
+
+                    return {
+                        type: "FuncDecl",
+                        name: funcName,
+                        parameters: funcParameters,
+                        body: funcBody,
+                        file: token.file, line: token.line, column: token.column
+                    };
+
+                case "def":
+                    this.consumeToken();
+                    this.expectToken("(");
+                    this.consumeToken();
+
+                    const lambdaParameters: Parameter[] = [];
+                    if (this.getNextToken() && this.getNextToken()!.value !== ")") {
+                        while (true) {
+                            const paramToken = this.expectType("identifier");
+                            const paramName = paramToken.value;
+                            this.consumeToken();
+
+                            let annotationType: string | null = null;
+                            if (this.getNextToken()?.type === "identifier") {
+                                const typeToken = this.getNextToken()!;
+                                if (["string", "number", "bool", "boolean", ...this.customTypes.keys()].includes(typeToken.value)) {
+                                    annotationType = typeToken.value;
+                                    this.consumeToken();
+                                }
+                            }
+
+                            let defaultExpr: Expression | undefined;
+                            if (this.getNextToken()?.value === "=") {
+                                this.consumeToken();
+                                defaultExpr = this.parseExpression();
+                                if (annotationType) {
+                                    throw new NovaError(token, "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.");
+                                }
+
+                                if (defaultExpr.type === "Literal") {
+                                    const inferredType = typeof (defaultExpr as Literal).value;
+                                    if (inferredType === "string") annotationType = "string";
+                                    else if (inferredType === "number") annotationType = "number";
+                                    else if (inferredType === "boolean") annotationType = "bool";
+                                    else annotationType = null;
+                                } else {
+                                    annotationType = null;
+                                }
+                            }
+
+                            lambdaParameters.push({
+                                name: paramName,
+                                annotationType: annotationType,
+                                default: defaultExpr,
+                                file: paramToken.file, line: paramToken.line, column: paramToken.column,
+                                type: paramToken.type, value: paramToken.value
+                            });
+
+                            if (this.getNextToken()?.value === ",") {
+                                this.consumeToken();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+
+                    this.expectToken(")");
+                    this.consumeToken();
+                    const lambdaBody = this.parseBlockUntil(["end"]);
+                    this.expectToken("end");
+                    this.consumeToken();
+
+                    return {
+                        type: "LambdaDecl",
+                        parameters: lambdaParameters,
+                        body: lambdaBody,
+                        file: token.file, line: token.line, column: token.column
+                    };
+
+                case "return":
+                    this.consumeToken();
+                    let returnExpression: Expression | null = null;
+                    if (this.getNextToken() && !this.keywords.includes(this.getNextToken()!.value)) {
+                        returnExpression = this.parseExpression();
+                    }
+                    return { type: "ReturnStmt", expression: returnExpression, file: token.file, line: token.line, column: token.column };
+
+                case "import":
+                    this.consumeToken();
+                    const fileToken = this.expectType("string");
+                    const filename = fileToken.value;
+                    this.consumeToken();
+                    let alias: string | null = null;
+                    if (this.getNextToken() && this.getNextToken()!.value === "as") {
                         this.consumeToken();
-                        defaultExpr = this.parseExpression();
-                        if (annotationType) { // MODIFIED: Logic for explicit type + default
-                            throw new NovaError(token, "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.");
-                        }
-
-                        // Infer type from default value if no explicit annotation
-                        if (defaultExpr.type === "Literal") {
-                            const inferredType = typeof (defaultExpr as Literal).value;
-                            if (inferredType === "string") annotationType = "string";
-                            else if (inferredType === "number") annotationType = "number";
-                            else if (inferredType === "boolean") annotationType = "bool"; // Use "bool" for consistency with parser
-                            else annotationType = null; // Cannot infer
-                        } else {
-                            annotationType = null; // For complex expressions, inference at parse time is difficult.
-                        }
-                    }
-
-                    // Ensure Parameter also has token info
-                    parameters.push({
-                        name: paramName,
-                        annotationType: annotationType, // MODIFIED: Renamed
-                        default: defaultExpr,
-                        file: paramToken.file,
-                        line: paramToken.line,
-                        column: paramToken.column,
-                        type: paramToken.type, // Token type (e.g., "identifier")
-                        value: paramToken.value // Token value (the identifier name)
-                    });
-
-                    if (this.getNextToken()?.value === ",") {
+                        const aliasToken = this.expectType("identifier");
+                        alias = aliasToken.value;
                         this.consumeToken();
-                    } else {
-                        break;
                     }
-                }
+                    return { type: "ImportStmt", filename, alias, file: token.file, line: token.line, column: token.column };
+
+                case "class":
+                    return this.parseClassDefinition();
             }
-
-            this.expectToken(")");
-            this.consumeToken();
-            const body = this.parseBlockUntil(["end"]);
-            this.expectToken("end");
-            this.consumeToken();
-
-            return {
-                type: "LambdaDecl",
-                parameters,
-                body,
-                file: token.file, line: token.line, column: token.column
-            };
-        }
-
-        // --- Return statement ---
-        if (token.type === "keyword" && token.value === "return") {
-            this.consumeToken();
-            let expression: Expression | null = null;
-            if (this.getNextToken() && !this.keywords.includes(this.getNextToken()!.value)) { // Added !
-                expression = this.parseExpression();
-            }
-            return { type: "ReturnStmt", expression, file: token.file, line: token.line, column: token.column };
-        }
-
-        // --- Import statement ---
-        if (token.type === "keyword" && token.value === "import") {
-            this.consumeToken();
-            const fileToken = this.expectType("string");
-            const filename = fileToken.value;
-            this.consumeToken();
-            let alias: string | null = null;
-            if (this.getNextToken() && this.getNextToken()!.value === "as") { // Added !
-                this.consumeToken();
-                const aliasToken = this.expectType("identifier");
-                alias = aliasToken.value;
-                this.consumeToken();
-            }
-            return { type: "ImportStmt", filename, alias, file: token.file, line: token.line, column: token.column };
         }
 
         // --- Expression statement (fallback) ---
@@ -1422,7 +1746,36 @@ export class Interpreter {
             // These will now be handled by parseCallMemberExpression.
             node = { type: "Identifier", name: token.value, file: token.file, line: token.line, column: token.column };
         }
-        else if(token.value == "def"){
+        else if (token.type === "keyword" && token.value === "new") { // NEW: 'new' keyword for class instantiation
+            this.consumeToken(); // consume 'new'
+            const classNameToken = this.expectType("identifier");
+            const className = classNameToken.value;
+            this.consumeToken(); // consume class name
+
+            this.expectToken("(");
+            this.consumeToken();
+
+            const args: Expression[] = [];
+            if (this.getNextToken() && this.getNextToken()!.value !== ")") {
+                while (true) {
+                    args.push(this.parseExpression());
+                    if (this.getNextToken() && this.getNextToken()!.value === ",") {
+                        this.consumeToken();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            this.expectToken(")");
+            this.consumeToken();
+            node = {
+                type: "NewInstance",
+                className,
+                arguments: args,
+                file: classNameToken.file, line: classNameToken.line, column: classNameToken.column
+            };
+        }
+        else if (token.value == "def") {
             // x = def (...)  ... end
             this.consumeToken();
             this.expectToken("(");
@@ -1436,9 +1789,6 @@ export class Interpreter {
                     this.consumeToken();
 
                     let annotationType: string | null = null; // MODIFIED: Renamed
-                    let defaultExpr: Expression | undefined;
-
-                    // optional type annotation
                     if (this.getNextToken()?.type === "identifier") {
                         const typeToken = this.getNextToken()!; // Added !
                         if (["string", "number", "bool", "boolean"].includes(typeToken.value)) { // Added "boolean"
@@ -1448,6 +1798,7 @@ export class Interpreter {
                     }
 
                     // optional default value
+                    let defaultExpr: Expression | undefined;
                     if (this.getNextToken()?.value === "=") {
                         this.consumeToken();
                         defaultExpr = this.parseExpression();
@@ -1815,6 +2166,76 @@ export class Interpreter {
                 break;
             }
 
+            case "ClassDefinition": { // NEW: Handle ClassDefinition
+                const classDef = stmt as ClassDefinition;
+                const novaClass = new NovaClass(classDef.name, null, this, env); // Superclass will be resolved later
+
+                // Populate static members, instance properties/methods
+                for (const member of classDef.body) {
+                    if (member.type === "PropertyDefinition") {
+                        if (member.isStatic) {
+                            let propValue;
+                            if (member.initializer) {
+                                propValue = this.evaluateExpr(member.initializer, env);
+                            } else {
+                                propValue = undefined;
+                            }
+                            novaClass.staticMembers.set(member.name, propValue);
+                        } else {
+                            novaClass.instanceProperties.set(member.name, member);
+                        }
+                    } else if (member.type === "MethodDefinition") {
+                        if (member.isConstructor) {
+                            novaClass.constructorDef = member;
+                        } else if (member.isStatic) {
+                            // Wrap static methods similar to how FuncDecl is handled
+                            const staticMethod = (...args: any[]) => {
+                                const methodEnv = new Environment(env); // Static methods run in the class's definition environment
+                                // Define 'this' for static methods to refer to the static members map
+                                methodEnv.define("this", novaClass.staticMembers);
+                                // Handle parameters and execute body
+                                for (let i = 0; i < member.parameters.length; i++) {
+                                    const param = member.parameters[i];
+                                    let argVal = args[i];
+                                    if (argVal === undefined && param.default !== undefined) {
+                                        argVal = this.evaluateExpr(param.default, env);
+                                    } else if (argVal === undefined && param.default === undefined) {
+                                        throw new NovaError(param, `Missing argument for parameter '${param.name}' in static method '${member.name}'.`);
+                                    }
+                                    if (param.annotationType) {
+                                        checkType(param.annotationType, argVal, param, this);
+                                    }
+                                    methodEnv.define(param.name, argVal);
+                                }
+                                try {
+                                    this.executeBlock(member.body, methodEnv);
+                                } catch (e) {
+                                    if (e instanceof ReturnException) {
+                                        return e.value;
+                                    }
+                                    throw e;
+                                }
+                                return undefined;
+                            };
+                            novaClass.staticMembers.set(member.name, staticMethod);
+                        } else {
+                            novaClass.instanceMethods.set(member.name, member);
+                        }
+                    }
+                }
+
+                // Resolve superclass if exists
+                if (classDef.superclassName) {
+                    const superClass = env.get(classDef.superclassName, classDef) as NovaClass;
+                    if (!superClass || !(superClass instanceof NovaClass)) {
+                        throw new NovaError(classDef, `Superclass '${classDef.superclassName}' not found or is not a class.`);
+                    }
+                    novaClass.superClass = superClass;
+                }
+
+                env.define(classDef.name, novaClass);
+                break;
+            }
 
             case "UsingStmt": {
                 const namespace = env.get(stmt.name, stmt); // Pass stmt as token
@@ -1895,7 +2316,7 @@ export class Interpreter {
                     // Compound assignments only make sense for mutable targets that can be read first.
                     // ArrayLiteral (destructuring) cannot be a target for compound assignment.
                     if (target.type === "ArrayLiteral") {
-                         throw new NovaError(target, `Compound assignment operators like '${op}' cannot be used with array destructuring.`);
+                        throw new NovaError(target, `Compound assignment operators like '${op}' cannot be used with array destructuring.`);
                     }
 
                     // Get the current value of the target before performing the operation
@@ -2000,19 +2421,41 @@ export class Interpreter {
                 return func(...args);
             }
             case "MethodCall": {
-                const obj = this.evaluateExpr(expr.object, env);
+                const methodCallExpr = expr as MethodCall;
+                const obj = this.evaluateExpr(methodCallExpr.object, env);
 
                 if (obj === null || obj === undefined) {
-                    throw new NovaError(expr, `Cannot call method '${expr.method}' on null or undefined.`);
+                    throw new NovaError(methodCallExpr, `Cannot call method '${methodCallExpr.method}' on null or undefined.`);
                 }
 
-                const fn = (obj instanceof Environment) ? obj.get(expr.method, expr) : obj[expr.method]; // Pass expr as token
+                const argVals = methodCallExpr.arguments.map(arg => this.evaluateExpr(arg, env));
+
+                // Handle NovaClass static methods
+                if (obj instanceof NovaClass) {
+                    const staticMethod = obj.staticMembers.get(methodCallExpr.method);
+                    if (typeof staticMethod === "function") {
+                        // Call static method with 'this' context as the static members map (or the class itself)
+                        return staticMethod.apply(obj.staticMembers, argVals); // Or obj for a more JS-like 'this' in static methods
+                    }
+                    // If not a static method, it might be an instance method called on the class itself, which is an error
+                    throw new NovaError(methodCallExpr, `Static method '${methodCallExpr.method}' not found or is not a function on class '${obj.name}'.`);
+                }
+
+                // Handle NovaScript instance methods (bound to 'this' in NovaClass.instantiate)
+                // or regular JavaScript object methods
+                let fn;
+                if (obj instanceof Environment) { // This case is for NovaScript's 'this' environment
+                    fn = obj.get(methodCallExpr.method, methodCallExpr);
+                } else {
+                    // For regular JS objects or NovaScript instances
+                    fn = obj[methodCallExpr.method];
+                }
 
                 if (typeof fn !== "function") {
-                    throw new NovaError(expr, `${expr.method} is not a function or method on this object`);
+                    throw new NovaError(methodCallExpr, `${methodCallExpr.method} is not a function or method on this object`);
                 }
 
-                const argVals = expr.arguments.map((arg: Expression) => this.evaluateExpr(arg, env));
+                // Call the method. 'apply' correctly sets 'this' to 'obj'.
                 return fn.apply(obj, argVals);
             }
 
@@ -2029,22 +2472,71 @@ export class Interpreter {
                 return arr[index];
             }
             case "PropertyAccess": {
-                // MODIFIED: Evaluate expr.object recursively
-                const obj = this.evaluateExpr(expr.object, env);
+                const propertyAccessExpr = expr as PropertyAccess;
+                const obj = this.evaluateExpr(propertyAccessExpr.object, env);
 
                 if (obj === null || obj === undefined) {
-                    throw new NovaError(expr, `Cannot access property '${expr.property}' of null or undefined.`);
+                    throw new NovaError(propertyAccessExpr, `Cannot access property '${propertyAccessExpr.property}' of null or undefined.`);
                 }
 
+                // Handle NovaClass static properties
+                if (obj instanceof NovaClass) {
+                    if (obj.staticMembers.has(propertyAccessExpr.property)) {
+                        return obj.staticMembers.get(propertyAccessExpr.property);
+                    }
+                    // If not a static property, it might be an instance property accessed on the class itself, which is an error
+                    throw new NovaError(propertyAccessExpr, `Static property '${propertyAccessExpr.property}' not found on class '${obj.name}'.`);
+                }
+
+                // Handle NovaScript instance properties (via 'this' environment)
+                // or regular JavaScript object properties
                 if (obj instanceof Environment) {
-                    return obj.get(expr.property, expr); // Pass expr as token
+                    return obj.get(propertyAccessExpr.property, propertyAccessExpr);
                 }
 
-                return obj[expr.property];
+                // For regular JS objects or functions (for static properties)
+                if (typeof obj === 'object' || typeof obj === 'function') {
+                    if (propertyAccessExpr.property in obj) {
+                        return obj[propertyAccessExpr.property];
+                    }
+                }
+
+                throw new NovaError(propertyAccessExpr, `Property '${propertyAccessExpr.property}' not found on object.`);
             }
 
             case "ArrayLiteral": {
                 return expr.elements.map((element: Expression) => this.evaluateExpr(element, env));
+            }
+
+            case "ObjectLiteral": {
+                const obj: Record<string, any> = {};
+                for (const prop of expr.properties) {
+                    obj[prop.key] = this.evaluateExpr(prop.value, env);
+                }
+                return obj;
+            }
+
+            case "NewInstance": { // NEW: Handle NewInstance expression
+                const newInstanceExpr = expr as NewInstance;
+                const className = newInstanceExpr.className;
+                const targetClass = env.get(className, newInstanceExpr); // Get the class definition from the environment
+
+                const args = newInstanceExpr.arguments.map(arg => this.evaluateExpr(arg, env));
+
+                if (targetClass instanceof NovaClass) {
+                    // It's a NovaScript class
+                    return targetClass.instantiate(args, newInstanceExpr);
+                } else if (typeof targetClass === 'function' && targetClass.prototype && typeof targetClass.prototype.constructor === 'function') {
+                    // It's a JavaScript class/constructor function
+                    try {
+                        // Use Reflect.construct to properly handle 'new' with arbitrary constructors
+                        return Reflect.construct(targetClass, args);
+                    } catch (e: any) {
+                        throw new NovaError(newInstanceExpr, `Error instantiating JavaScript class '${className}': ${e.message}`);
+                    }
+                } else {
+                    throw new NovaError(newInstanceExpr, `'${className}' is not a constructible class.`);
+                }
             }
 
             case "LambdaDecl": {
@@ -2091,13 +2583,6 @@ export class Interpreter {
                 };
 
                 return func;
-            }
-            case "ObjectLiteral": {
-                const obj: Record<string, any> = {};
-                for (const prop of expr.properties) {
-                    obj[prop.key] = this.evaluateExpr(prop.value, env);
-                }
-                return obj;
             }
             default:
                 throw new NovaError(expr, `Unknown expression type: ${expr.type}`);
