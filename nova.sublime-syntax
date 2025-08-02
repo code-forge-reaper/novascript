@@ -18,9 +18,12 @@ contexts:
     - include: operators
     - include: types
     - include: custom_types
+    - include: class
     - match: \b[a-zA-Z_]\w*\b
       scope: variable.other.nova
-
+  class:
+    - match: \b(class|inherits|static|super)\b
+      scope: keyword.declaration.nova
   comments:
     - match: '//.*$'
       scope: comment.line.double-slash.nova

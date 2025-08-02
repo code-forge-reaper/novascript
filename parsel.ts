@@ -70,6 +70,7 @@ export interface ReturnStmt extends Statement {
 
 export interface UsingStmt extends Statement {
     type: "UsingStmt";
+    name: string; // Added name property
 }
 
 export interface ExpressionStmt extends Statement {
@@ -109,14 +110,14 @@ export interface ArrayLiteral extends Expression {
 export interface FunctionCall extends Expression {
     type: "FuncCall";
     name: string;
-    arguments: Expression[]; // Changed from parameters
+    arguments: Expression[];
 }
 
 export interface MethodCall extends Expression {
     type: "MethodCall";
     object: Expression;
     method: string;
-    arguments: Expression[]; // Changed from parameters
+    arguments: Expression[];
 }
 
 export interface PropertyAccess extends Expression {
@@ -137,7 +138,7 @@ export interface ArrayAccess extends Expression {
 export interface CharDeclStmt extends Statement {
     type: "CharDecl";
     name: string;
-    displayName: string;
+    displayName: Expression; // Changed to Expression
 }
 
 export interface SceneDeclStmt extends Statement {
@@ -159,7 +160,8 @@ export interface ThinkStmt extends Statement {
 }
 
 export interface OptionChoice {
-    text: string;
+    text: Expression; // Changed from string to Expression
+    condition?: Expression; // New: optional condition for the choice
     body: Statement[];
 }
 
@@ -167,8 +169,11 @@ export interface OptionsBlockStmt extends Statement {
     type: "OptionsBlockStmt";
     choices: OptionChoice[];
 }
+
 export interface ImportStmt extends Statement {
     type: "ImportStmt";
+    path: string; // Added path property
+    alias?: string; // Added alias property
     body: Statement[];
     os: boolean
 }
@@ -184,6 +189,14 @@ export interface IfStmt extends Statement {
     thenBlock: Statement[];
     elseBlock: Statement[] | null;
     elseIf: { condition: Expression, body: Statement[] }[] | null;
+}
+
+export interface PauseStmt extends Statement {
+    type: "PauseStmt";
+}
+
+export interface ExitStmt extends Statement {
+    type: "ExitStmt";
 }
 
 // --- Exceptions ---
@@ -467,7 +480,7 @@ export class ParselParser {
             }
             case "var": return this.parseVarDeclaration();
             case "func": return this.parseFuncDeclaration();
-            case "def": return this.parseLambdaDeclarationAsStatement(); // Lambdas can be assigned, but 'def' as a standalone statement is not typical. Assuming it's part of an assignment.
+            case "def": return this.parseLambdaDeclarationAsStatement();
             case "return": return this.parseReturnStatement();
             case "import": return this.parseImportStatement();
             case "using": return this.parseUsingStatement();
@@ -481,38 +494,43 @@ export class ParselParser {
     // --- Ren'Py Specific Parsers ---
 
     parseUsingStatement(): UsingStmt {
-        // using <name>
         const usingToken = this.consumeToken(); // consume 'using'
         const what = this.expectType("identifier");
+        this.consumeToken(); // consume identifier
         return { type: "UsingStmt", name: what.value, file: usingToken.file, line: usingToken.line, column: usingToken.column };
     }
 
     parseImportStatement(): ImportStmt {
         const imp = this.consumeToken(); // consume 'import'
-        const pathToken = this.expectType("string").value;
-        this.consumeToken(); // consume 'as'
+        const pathToken = this.expectType("string");
+        const importPath = pathToken.value;
+        this.consumeToken(); // consume string
 
-        let alias: string | undefined
+        let alias: string | undefined;
         if (this.getNextToken()?.value === "as") {
             this.consumeToken(); // consume 'as'
-            alias = this.expectType("identifier").value;
-            this.consumeToken()
+            const aliasToken = this.expectType("identifier");
+            alias = aliasToken.value;
+            this.consumeToken(); // consume the identifier for the alias
+        }
 
+        if (importPath.startsWith("os:")) {
+            const pa = importPath.substring(3);
+            const newImportStmt: ImportStmt = { type: "ImportStmt", path: pa, alias, body: [], os: true, file: imp.file, line: imp.line, column: imp.column };
+            this.importedFiles[importPath] = newImportStmt; // Store with original path for os imports
+            return newImportStmt;
         }
-        if (pathToken.startsWith("os:")) {
-            const pa = pathToken.substring(3);
-            this.importedFiles[pathToken.value] = { type: "ImportStmt", path: pa, alias, body: [], os: true, file: imp.file, line: imp.line, column: imp.column };
-            return this.importedFiles[pathToken.value]
-        }
-        const fullPath = path.resolve(path.dirname(this.file), pathToken + ".par");
+
+        const fullPath = path.resolve(path.dirname(this.file), importPath + ".par");
         if (fullPath in this.importedFiles) return this.importedFiles[fullPath];
+
         const parser = new ParselParser(fullPath);
-        parser.importedFiles = this.importedFiles;
+        parser.importedFiles = this.importedFiles; // Share importedFiles cache
         const body = parser.parse();
 
-        this.importedFiles[fullPath] = { type: "ImportStmt", os: false, path: fullPath, alias, body, file: imp.file, line: imp.line, column: imp.column };
-
-        return { type: "ImportStmt", path: fullPath, alias, body, os: false, file: imp.file, line: imp.line, column: imp.column };
+        const newImportStmt: ImportStmt = { type: "ImportStmt", os: false, path: fullPath, alias, body, file: imp.file, line: imp.line, column: imp.column };
+        this.importedFiles[fullPath] = newImportStmt; // Store with full path for file imports
+        return newImportStmt;
     }
 
     private parseCharDeclaration(): CharDeclStmt {
@@ -521,11 +539,10 @@ export class ParselParser {
         const name = nameToken.value;
         this.consumeToken(); // consume identifier
 
-        const displayNameToken = this.expectType("string");
-        const displayName = displayNameToken.value;
-        this.consumeToken(); // consume string
+        // Now parse an expression for the display name
+        const displayNameExpr = this.parseExpression();
 
-        return { type: "CharDecl", name, displayName, file: charToken.file, line: charToken.line, column: charToken.column };
+        return { type: "CharDecl", name, displayName: displayNameExpr, file: charToken.file, line: charToken.line, column: charToken.column };
     }
 
     private parseSceneDeclaration(): SceneDeclStmt {
@@ -543,11 +560,10 @@ export class ParselParser {
 
     private parseSayStatement(): SayStmt {
         const sayToken = this.consumeToken(); // consume 'say'
-        const textToken = this.expectType("string");
+        const textToken = this.expectType("string"); // Say statement text is still a string literal
         const text = textToken.value;
         this.consumeToken(); // consume string
         let who: Identifier | null = null;
-        //console.log(`this.getNextToken() = ${JSON.stringify(this.getNextToken())}`);
         if (this.getNextToken() && this.getNextToken()!.type === "keyword" && this.getNextToken()!.value === "as") {
             this.consumeToken(); // consume 'as'
             let whoTok = this.expectType("identifier");
@@ -587,10 +603,15 @@ export class ParselParser {
         const optionsToken = this.consumeToken(); // consume 'options'
 
         const choices: OptionChoice[] = [];
-        while (this.getNextToken() && this.getNextToken()!.type === "string") {
-            const textToken = this.expectType("string");
-            const text = textToken.value;
-            this.consumeToken(); // consume option text
+        // Loop as long as we can parse an expression for the choice text
+        while (this.current < this.tokens.length && this.getNextToken() && this.isExpressionStart(this.getNextToken()!)) {
+            const textExpr = this.parseExpression(); // Parse expression for choice text
+
+            let condition: Expression | undefined;
+            if (this.getNextToken()?.value === "if") {
+                this.consumeToken(); // consume 'if'
+                condition = this.parseExpression(); // Parse condition expression
+            }
 
             this.expectToken("begin");
             this.consumeToken(); // consume 'begin'
@@ -599,7 +620,7 @@ export class ParselParser {
             this.expectToken("end");
             this.consumeToken(); // consume 'end'
 
-            choices.push({ text, body });
+            choices.push({ text: textExpr, condition, body });
         }
 
         // The outer 'options' block also has an 'end'
@@ -608,6 +629,21 @@ export class ParselParser {
 
         return { type: "OptionsBlockStmt", choices, file: optionsToken.file, line: optionsToken.line, column: optionsToken.column };
     }
+
+    private isExpressionStart(token: Token): boolean {
+        // Helper to determine if a token can start an expression for options block
+        return token.type === "number" ||
+               token.type === "string" ||
+               token.type === "boolean" ||
+               token.type === "identifier" ||
+               token.value === "(" || // Parenthesized expression
+               token.value === "[" || // Array literal
+               token.value === "{" || // Object literal
+               token.value === "-" || // Unary minus
+               token.value === "!" || // Unary not
+               token.value === "def"; // Lambda declaration
+    }
+
 
     private parseGotoStatement(): GotoStmt {
         const gotoToken = this.consumeToken(); // consume 'goto'
@@ -660,9 +696,6 @@ export class ParselParser {
     private parseIfStatement(): IfStmt {
         const ifToken = this.consumeToken(); // consume 'if'
         const condition = this.parseExpression();
-        // The example uses 'then' but doesn't explicitly consume it.
-        // Assuming 'then' is implicit or part of the block structure.
-        // If it were a keyword to consume: this.expectToken("then"); this.consumeToken();
 
         const thenBlock = this.parseBlockUntil(["else", "elseif", "end"]);
 
@@ -794,8 +827,6 @@ export class ParselParser {
         };
     }
 
-    // This is for 'def (...)' as a value, not a standalone statement.
-    // It's called from parsePrimary, so it returns an Expression.
     private parseLambdaDeclaration(): LambdaDecl {
         const defToken = this.consumeToken(); // consume 'def'
         this.expectToken("(");
@@ -905,7 +936,8 @@ export class ParselParser {
             const assignmentOpToken = this.consumeToken();
             const valueExpr = this.parseAssignment();
 
-            if (expr.type !== "Identifier" && expr.type !== "PropertyAccess" && expr.type !== "ArrayAccess" && expr.type !== "ArrayLiteral") {
+            // Corrected: ArrayLiteral is not a valid assignment target.
+            if (expr.type !== "Identifier" && expr.type !== "PropertyAccess" && expr.type !== "ArrayAccess") {
                 throw new ParselError(expr, `Invalid assignment target: Cannot assign to ${expr.type}`);
             }
 
@@ -1055,7 +1087,7 @@ export class ParselParser {
                         type: "MethodCall",
                         object: expr,
                         method: propName,
-                        arguments: args, // Changed from parameters
+                        arguments: args,
                         file: propToken.file, line: propToken.line, column: propToken.column
                     };
                 } else {
@@ -1095,8 +1127,8 @@ export class ParselParser {
                 expr = {
                     type: "FuncCall",
                     name: (expr as Identifier).name,
-                    arguments: args, // Changed from parameters
-                    file: expr.file, line: expr.file, column: expr.column
+                    arguments: args,
+                    file: expr.file, line: expr.line, column: expr.column // Corrected line: expr.file to expr.line
                 };
             }
             else {
@@ -1341,7 +1373,7 @@ export class ParselRuntime {
                 if (argVal === undefined && param.default !== undefined) {
                     argVal = this.evaluateExpression(param.default, ctx);
                 } else if (argVal === undefined && param.default === undefined) {
-                    throw new ParselError(null, `Missing required parameter ${param.name} in function ${s.name}`);
+                    throw new ParselError(null, `Missing required parameter ${param.name} in function ${s.type === "FuncDecl" ? (s as FuncDecl).name : "lambda"}`); // Added name for FuncDecl
                 }
 
                 if (param.annotationType) {
@@ -1395,11 +1427,14 @@ export class ParselRuntime {
                 } else {
                     throw new ParselError(s, `Cannot 'use' non-namespace value: ${s.name}`)
                 }
+                break; // Added break
             }
 
             case "CharDecl": {
                 const s = stmt as CharDeclStmt;
-                ctx.define(s.name, s.displayName);
+                // Evaluate the expression for displayName
+                const evaluatedDisplayName = this.evaluateExpression(s.displayName, ctx);
+                ctx.define(s.name, evaluatedDisplayName);
                 break;
             }
             case "ExpressionStmt": {
@@ -1409,6 +1444,8 @@ export class ParselRuntime {
             case "SayStmt": {
                 const s = stmt as SayStmt;
                 let who = s.who ? this.evaluateExpression(s.who, ctx) + ": " : "";
+                // SayStmt text is still a string literal, so interpolate it.
+                // If it were an expression, it would be evaluated.
                 let text = this.interpolate(s.text, ctx);
                 console.log(`${who}"${text}"`);
                 break;
@@ -1422,9 +1459,32 @@ export class ParselRuntime {
             }
             case "OptionsBlockStmt": {
                 const ob = stmt as OptionsBlockStmt;
-                const choices = ob.choices.map(c => c.text);
-                const idx = showChoice(choices);
-                for (const child of ob.choices[idx].body) {
+                const availableChoices: { originalIndex: number; displayText: string; body: Statement[] }[] = [];
+
+                for (let i = 0; i < ob.choices.length; i++) {
+                    const choice = ob.choices[i];
+                    let includeChoice = true;
+                    if (choice.condition) {
+                        includeChoice = !!this.evaluateExpression(choice.condition, ctx);
+                    }
+
+                    if (includeChoice) {
+                        // Evaluate the text expression for display
+                        const displayText = String(this.evaluateExpression(choice.text, ctx));
+                        availableChoices.push({ originalIndex: i, displayText, body: choice.body });
+                    }
+                }
+
+                if (availableChoices.length === 0) {
+                    console.log("No options available.");
+                    return;
+                }
+
+                const choicesToDisplay = availableChoices.map(c => c.displayText);
+                const selectedDisplayIndex = showChoice(choicesToDisplay);
+                const originalSelectedChoice = availableChoices[selectedDisplayIndex];
+
+                for (const child of originalSelectedChoice.body) {
                     try {
                         this.executeStatement(child, ctx);
                     } catch (e) {
@@ -1465,7 +1525,7 @@ export class ParselRuntime {
                 throw new ReturnException(undefined)
             }
             case "ReturnStmt":
-                const value = stmt.expression ? this.evaluateExpression(stmt.expression, ctx) : undefined;
+                const value = (stmt as ReturnStmt).expression ? this.evaluateExpression((stmt as ReturnStmt).expression!, ctx) : undefined;
                 throw new ReturnException(value);
 
             case "PauseStmt":
@@ -1494,7 +1554,7 @@ export class ParselRuntime {
                         namespace[key] = env.values[key]
                     }
 
-                    ctx.define(s.alias, namespace)
+                    ctx.define(s.alias || path.basename(s.path, '.par'), namespace) // Use alias or filename as default
                     break
                 }
             case "ExitStmt":
@@ -1537,10 +1597,23 @@ export class ParselRuntime {
                 const val = this.evaluateExpression(a.value, ctx);
                 if (a.target.type === "Identifier") {
                     ctx.assign((a.target as Identifier).name, val, a);
-                } else {
+                } else if (a.target.type === "PropertyAccess") {
                     const pa = a.target as PropertyAccess;
                     const obj = this.evaluateExpression(pa.object, ctx);
+                    if (typeof obj !== 'object' || obj === null) {
+                        throw new ParselError(a.target, `Cannot assign property '${pa.property}' of non-object value.`);
+                    }
                     obj[pa.property] = val;
+                } else if (a.target.type === "ArrayAccess") {
+                    const aa = a.target as ArrayAccess;
+                    const arr = this.evaluateExpression(aa.object, ctx);
+                    const index = this.evaluateExpression(aa.index, ctx);
+                    if (!Array.isArray(arr)) {
+                        throw new ParselError(a.target, `Cannot assign element at index '${index}' of non-array value.`);
+                    }
+                    arr[index] = val;
+                } else {
+                    throw new ParselError(a.target, `Invalid assignment target: ${a.target.type}`);
                 }
                 return val;
             }
@@ -1554,6 +1627,9 @@ export class ParselRuntime {
             case "PropertyAccess": {
                 const p = expr as PropertyAccess;
                 const obj = this.evaluateExpression(p.object, ctx);
+                if (typeof obj !== 'object' || obj === null) {
+                    throw new ParselError(p.object, `Cannot access property '${p.property}' of non-object value.`);
+                }
                 return obj[p.property];
             }
             case "ObjectLiteral": {
@@ -1567,7 +1643,6 @@ export class ParselRuntime {
             case "ArrayLiteral":
                 {
                     const a = expr as ArrayLiteral
-                    //console.log(expr)
                     const out: any[] = [];
                     for (const el of a.elements) {
                         out.push(this.evaluateExpression(el, ctx));
@@ -1577,12 +1652,27 @@ export class ParselRuntime {
             case "MethodCall": {
                 const m = expr as MethodCall
                 const obj = this.evaluateExpression(m.object, ctx)
+                if (typeof obj !== 'object' || obj === null) {
+                    throw new ParselError(m.object, `Cannot call method '${m.method}' on non-object value.`);
+                }
                 const args = m.arguments.map(arg => this.evaluateExpression(arg, ctx))
+                if (typeof obj[m.method] !== 'function') {
+                    throw new ParselError(m, `Method '${m.method}' is not a function on object.`);
+                }
                 return obj[m.method](...args)
             }
             case "LambdaDecl": {
                 const l = expr as LambdaDecl
                 return this.createFunc(l, ctx)
+            }
+            case "ArrayAccess": {
+                const a = expr as ArrayAccess;
+                const arr = this.evaluateExpression(a.object, ctx);
+                const index = this.evaluateExpression(a.index, ctx);
+                if (!Array.isArray(arr)) {
+                    throw new ParselError(a.object, `Cannot access element at index '${index}' of non-array value.`);
+                }
+                return arr[index];
             }
             default:
                 throw new ParselError(expr, `Unsupported expr: ${expr.type}`);
@@ -1619,6 +1709,9 @@ export class ParselRuntime {
             const parts = expr.trim().split(".");
             let val = ctx.get(parts[0]);
             for (let i = 1; i < parts.length; i++) {
+                if (typeof val !== 'object' || val === null) {
+                    throw new ParselError(null, `Cannot access property '${parts[i]}' of non-object value during interpolation: ${parts.slice(0, i).join('.')}`);
+                }
                 val = val[parts[i]];
             }
             return String(val);
@@ -1631,7 +1724,9 @@ export function initGlobals(rt: ParselRuntime) {
     rt.context.define("print", console.log);
     rt.context.define("visited", (scene: string) => {
         const was = rt.sceneStack.includes(scene);
-        if (!was) rt.sceneStack.push(scene);
+        if (!was) rt.sceneStack.push(scene); // This logic seems to be for marking scenes as visited, not checking if they were.
+                                            // Ren'Py's visited() checks if a label has been visited.
+                                            // For simplicity, I'll keep the current logic but note it.
         return was;
     });
 
