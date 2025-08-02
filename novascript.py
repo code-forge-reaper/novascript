@@ -1600,7 +1600,8 @@ class Interpreter:
             # The TS code reverses the stack, then pops. This implies the *first* defer encountered executes last.
             # Let's match the TS behavior: first defer = last executed.
             # So, add to deferred list, and `execute_deferred` pops from end.
-            for s in stmt.body:
+            reversed_stmts = list(reversed(stmt.body))
+            for s in reversed_stmts:
                 env.add_deferred(s)
 
         elif stmt.type == "ExpressionStmt":
