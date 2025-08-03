@@ -703,7 +703,7 @@ class Interpreter:
                 else:
                     # Other single-character punctuation/operators
                     other_single_ops = "()[]{},:#"
-                    if char in other_single_ops:
+                    if other_single_ops.find(char) != -1: # Use find for string check
                         tokens.append(Token("operator", char, file, line, start_col))
                         i += 1
                         col += 1
@@ -999,8 +999,8 @@ class Interpreter:
                 var_annotation_type = None
                 if (self.get_next_token() and
                     self.get_next_token().type == "identifier" and
-                    self.get_next_token().value in ["string", "number", "boolean", "void", "bool"] or
-                    self.get_next_token().value in self.custom_types):
+                    (self.get_next_token().value in ["string", "number", "boolean", "void", "bool"] or
+                    self.get_next_token().value in self.custom_types)): # Parentheses for clarity
                     var_annotation_type = self.get_next_token().value
                     self.consume_token()
 
@@ -1284,7 +1284,8 @@ class Interpreter:
             operator_token = self.consume_token()
             operator = operator_token.value
             right = self.parse_logical_and()
-            expr = BinaryExpr(operator, expr, right, operator_token.file, operator_token.token.line, operator_token.column)
+            # Corrected: operator_token.token.line should be operator_token.line
+            expr = BinaryExpr(operator, expr, right, operator_token.file, operator_token.line, operator_token.column)
         return expr
 
     def parse_logical_and(self):
@@ -1589,17 +1590,9 @@ class Interpreter:
             env.define(stmt.name, value)
 
         elif stmt.type == "DeferStmt":
-            # Add statements to be executed when the block exits
-            # Note: Python's list.extend(reversed(list)) is equivalent to pushing reversed elements
-            # to a stack to pop in original order.
-            # The TS code pushes to stack and then reverses, then pops.
-            # Python's `append` and `pop` on a list makes it a stack.
-            # So, to execute in original order of deferral, we append them to the deferred list.
-            # And `execute_deferred` pops from the end, effectively executing in reverse order of deferral.
-            # This means the last defer statement encountered is the first to execute.
-            # The TS code reverses the stack, then pops. This implies the *first* defer encountered executes last.
-            # Let's match the TS behavior: first defer = last executed.
-            # So, add to deferred list, and `execute_deferred` pops from end.
+            # To match TypeScript's behavior: statements within a single defer block
+            # are executed in FIFO order. Since `execute_deferred` pops from the end
+            # of the list, we must add them in reverse order here.
             reversed_stmts = list(reversed(stmt.body))
             for s in reversed_stmts:
                 env.add_deferred(s)
@@ -1891,7 +1884,12 @@ class Interpreter:
             # Special case: if the base object is an Environment, we assign to it directly
             if isinstance(base_object, Environment):
                 return {"base": base_object, "final_key": key}
-            return {"base": base_object, "final_key": key}
+            # If the base object is a NovaScript instance (a Python dict), assign to its key.
+            elif isinstance(base_object, dict):
+                return {"base": base_object, "final_key": key}
+            # For other Python objects, assume it's a regular attribute access.
+            else:
+                return {"base": base_object, "final_key": key}
         else:
             raise NovaError(target_expr, "Invalid assignment target type: " + target_expr.type)
 
@@ -1947,7 +1945,19 @@ class Interpreter:
                 if isinstance(base, Environment):
                     base.assign(final_key, final_value_to_assign, target)
                 elif final_key is not None:
-                    base[final_key] = final_value_to_assign
+                    # For NovaScript instances (Python dictionaries), assign directly
+                    if isinstance(base, dict):
+                        base[final_key] = final_value_to_assign
+                    else: # For other Python objects, use setattr if it's an attribute
+                        try:
+                            setattr(base, final_key, final_value_to_assign)
+                        except AttributeError:
+                             # Fallback for dicts that are not NovaScript instances but are being assigned to
+                             # This handles object literals or other dicts where direct key assignment is expected
+                            if isinstance(base, dict):
+                                base[final_key] = final_value_to_assign
+                            else:
+                                raise NovaError(target, f"Cannot assign to property '{final_key}' of object of type {type(base).__name__}.")
                 else:
                     raise NovaError(target, "Failed to resolve assignment target.")
             return final_value_to_assign # Return the value that was assigned
@@ -2006,11 +2016,14 @@ class Interpreter:
                     return static_method(*arg_vals)
                 raise NovaError(expr, f"Static method '{expr.method}' not found or is not a function on class '{obj.name}'.")
 
-            # Handle NovaScript instance methods (bound to 'self' in NovaClass.instantiate)
-            # or regular Python object methods
             fn = None
-            if isinstance(obj, Environment): # This case is for NovaScript's 'self' environment
+            # If obj is a NovaScript instance (represented as a Python dictionary)
+            if isinstance(obj, dict) and expr.method in obj:
+                fn = obj[expr.method]
+            # If obj is an Environment (e.g., 'self' within a NovaScript method)
+            elif isinstance(obj, Environment):
                 fn = obj.get(expr.method, expr)
+            # For regular Python objects exposed to NovaScript
             else:
                 fn = getattr(obj, expr.method, None)
 
@@ -2045,17 +2058,15 @@ class Interpreter:
                     return obj.static_members[expr.property]
                 raise NovaError(expr, f"Static property '{expr.property}' not found on class '{obj.name}'.")
 
-            # Handle NovaScript instance properties (via 'self' environment)
-            # or regular Python object properties
-            if isinstance(obj, Environment):
+            # If obj is a NovaScript instance (represented as a Python dictionary)
+            if isinstance(obj, dict) and expr.property in obj:
+                return obj[expr.property]
+            # If obj is an Environment (e.g., 'self' within a NovaScript method)
+            elif isinstance(obj, Environment):
                 return obj.get(expr.property, expr)
-
-            # For regular Python objects
-            if isinstance(obj, (dict, object)): # dict for object literals, object for any other Python object
-                if hasattr(obj, expr.property):
-                    return getattr(obj, expr.property)
-                elif isinstance(obj, dict) and expr.property in obj:
-                    return obj[expr.property]
+            # For regular Python objects (e.g., exposed modules, native types)
+            elif hasattr(obj, expr.property):
+                return getattr(obj, expr.property)
 
             raise NovaError(expr, f"Property '{expr.property}' not found on object.")
 
