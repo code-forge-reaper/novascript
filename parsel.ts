@@ -1722,6 +1722,7 @@ export class ParselRuntime {
 export function initGlobals(rt: ParselRuntime) {
     // define built‑ins
     rt.context.define("print", console.log);
+    rt.context.define("math", Math);
     rt.context.define("visited", (scene: string) => {
         const was = rt.sceneStack.includes(scene);
         if (!was) rt.sceneStack.push(scene); // This logic seems to be for marking scenes as visited, not checking if they were.
