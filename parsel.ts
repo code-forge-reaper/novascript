@@ -147,6 +147,10 @@ export interface SceneDeclStmt extends Statement {
     body: Statement[];
 }
 
+export interface NarrateStmt extends Statement {
+    type: "NarrateStmt";
+    text: string;
+}
 export interface SayStmt extends Statement {
     type: "SayStmt";
     text: string;
@@ -230,7 +234,7 @@ export class ParselParser {
     private keywords: string[] = [
         "var", "func", "return", "def", "as", "end", // Existing subset
         // New Ren'Py
-        "char", "scene", "say", "think", "options", "begin", "goto", "set", "to", "in",
+        "char", "scene", "say", "narrate", "think", "options", "begin", "goto", "set", "to", "in",
         "if", "else", "elseif", "pause", "exit",
         "import", "using"
     ];
@@ -465,6 +469,8 @@ export class ParselParser {
             case "char": return this.parseCharDeclaration();
             case "scene": return this.parseSceneDeclaration();
             case "say": return this.parseSayStatement();
+            case "narrate": return this.parseNarrateStatement();
+
             case "think": return this.parseThinkStatement();
             case "options": return this.parseOptionsBlock();
             case "goto": return this.parseGotoStatement();
@@ -579,6 +585,14 @@ export class ParselParser {
         return { type: "SayStmt", text, who, file: sayToken.file, line: sayToken.line, column: sayToken.column };
     }
 
+    private parseNarrateStatement(): NarrateStmt {
+        const sayToken = this.consumeToken(); // consume 'say'
+        const textToken = this.expectType("string"); // Say statement text is still a string literal
+        const text = textToken.value;
+        this.consumeToken(); // consume string
+        return { type: "NarrateStmt", text, file: sayToken.file, line: sayToken.line, column: sayToken.column };
+    }
+
     private parseThinkStatement(): ThinkStmt {
         const thinkToken = this.consumeToken(); // consume 'think'
         const textToken = this.expectType("string");
@@ -633,15 +647,15 @@ export class ParselParser {
     private isExpressionStart(token: Token): boolean {
         // Helper to determine if a token can start an expression for options block
         return token.type === "number" ||
-               token.type === "string" ||
-               token.type === "boolean" ||
-               token.type === "identifier" ||
-               token.value === "(" || // Parenthesized expression
-               token.value === "[" || // Array literal
-               token.value === "{" || // Object literal
-               token.value === "-" || // Unary minus
-               token.value === "!" || // Unary not
-               token.value === "def"; // Lambda declaration
+            token.type === "string" ||
+            token.type === "boolean" ||
+            token.type === "identifier" ||
+            token.value === "(" || // Parenthesized expression
+            token.value === "[" || // Array literal
+            token.value === "{" || // Object literal
+            token.value === "-" || // Unary minus
+            token.value === "!" || // Unary not
+            token.value === "def"; // Lambda declaration
     }
 
 
@@ -1450,6 +1464,14 @@ export class ParselRuntime {
                 console.log(`${who}"${text}"`);
                 break;
             }
+            case "NarrateStmt": {
+                const s = stmt as NarrateStmt;
+                // NarrateStmt text is still a string literal, so interpolate it.
+                // If it were an expression, it would be evaluated.
+                const text = this.interpolate(s.text, ctx);
+                console.log(text);
+                break;
+            }
             case "ThinkStmt": {
                 const s = stmt as ThinkStmt;
                 const who = this.evaluateExpression(s.character, ctx);
@@ -1726,8 +1748,8 @@ export function initGlobals(rt: ParselRuntime) {
     rt.context.define("visited", (scene: string) => {
         const was = rt.sceneStack.includes(scene);
         if (!was) rt.sceneStack.push(scene); // This logic seems to be for marking scenes as visited, not checking if they were.
-                                            // Ren'Py's visited() checks if a label has been visited.
-                                            // For simplicity, I'll keep the current logic but note it.
+        // Ren'Py's visited() checks if a label has been visited.
+        // For simplicity, I'll keep the current logic but note it.
         return was;
     });
 

@@ -63,7 +63,7 @@ contexts:
       scope: keyword.control.flow.parsel
 
     # Ren'Py specific statement keywords: say, think, options, set
-    - match: \b(say|think|options|set)\b
+    - match: \b(say|think|narrate|options|set)\b
       scope: keyword.statement.parsel
 
     # The 'as' keyword used in 'import ... as' and 'say ... as'
