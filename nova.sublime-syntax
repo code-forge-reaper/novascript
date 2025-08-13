@@ -64,7 +64,7 @@ contexts:
 
 
     # Control flow
-    - match: \b(for|break|continue|forEach|while|do|in|end|else|elseif|if|try|errored|defer)\b
+    - match: \b(for|break|continue|forEach|while|do|in|end|else|elseif|if|test|failed|defer)\b
       scope: keyword.control.flow.nova
 
     # Types

@@ -617,7 +617,7 @@ export class Interpreter {
     keywords: string[] = [
         "var", "if", "else", "elseif", "end", "break", "continue", "func",
         "return", "import", "as", "namespace", "while", "forEach", "for",
-        "do", "in", "try", "errored", "defer",
+        "do", "in", "test", "failed", "defer",
         "switch", "case", "default", "using",
         // "def" = "(...)=>{...}"
         // def (...) ... end
@@ -1168,10 +1168,10 @@ export class Interpreter {
                     this.consumeToken();
                     return { type: "UsingStmt", name: usingNameToken.value, line: token.line, column: token.column, file: token.file };
 
-                case "try":
+                case "test":
                     this.consumeToken();
-                    const tryBlock = this.parseBlockUntil(["errored"]);
-                    this.expectToken("errored");
+                    const tryBlock = this.parseBlockUntil(["failed"]);
+                    this.expectToken("failed");
                     this.consumeToken();
                     const errorVarToken = this.expectType("identifier");
                     const errorVar = errorVarToken.value;
