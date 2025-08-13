@@ -429,6 +429,7 @@ class NovaClass {
     staticMembers: Map<string, any>;
     instanceProperties: Map<string, PropertyDefinition>;
     instanceMethods: Map<string, MethodDefinition>;
+    staticProperties: Map<string, PropertyDefinition>; // NEW: To store static property definitions for type checking
     constructorDef: MethodDefinition | null;
     interpreter: Interpreter;
     env: Environment; // Environment where the class was defined (for evaluating initializers/defaults)
@@ -446,12 +447,20 @@ class NovaClass {
         this.staticMembers = new Map();
         this.instanceProperties = new Map();
         this.instanceMethods = new Map();
+        this.staticProperties = new Map(); // NEW: Initialize staticProperties map
         this.constructorDef = null;
     }
 
     // This method will be called to create an instance
     instantiate(args: any[], instanceToken: Token, instanceObj?: any): any {
         const instance = instanceObj || {}; // If instanceObj is provided, use it (for super calls)
+
+        // NEW: Link the instance to its NovaClass definition
+        Object.defineProperty(instance, '__novaClass__', {
+            value: this,
+            enumerable: false,
+            configurable: true // Allow re-definition if needed, though not expected
+        });
 
         // First, handle superclass construction if applicable and this is the top-level call
         if (this.superClass && !instanceObj) { // Only call superclass constructor if this is the initial instantiation
@@ -467,6 +476,7 @@ class NovaClass {
             } else {
                 propValue = undefined; // Default value if no initializer
             }
+
             Object.defineProperty(instance, propName, {
                 value: propValue,
                 writable: true,
@@ -579,6 +589,7 @@ class NovaClass {
                     } else if (argVal === undefined && param.default === undefined) {
                         throw new NovaError(param, `Missing argument for parameter '${param.name}' in constructor of '${this.name}'.`);
                     }
+                    // Type checking for constructor parameters (already there)
                     if (param.annotationType) {
                         checkType(param.annotationType, argVal, param, this.interpreter);
                     }
@@ -2174,13 +2185,19 @@ export class Interpreter {
                 for (const member of classDef.body) {
                     if (member.type === "PropertyDefinition") {
                         if (member.isStatic) {
+                            // NEW: Store the PropertyDefinition for static members
+                            novaClass.staticProperties.set(member.name, member);
                             let propValue;
                             if (member.initializer) {
                                 propValue = this.evaluateExpr(member.initializer, env);
                             } else {
                                 propValue = undefined;
                             }
-                            novaClass.staticMembers.set(member.name, propValue);
+                            // Type check static properties at definition time (already there)
+                            if (member.typeAnnotation) {
+                                checkType(member.typeAnnotation, propValue, member, this);
+                            }
+                            novaClass.staticMembers.set(member.name, propValue); // Store the value
                         } else {
                             novaClass.instanceProperties.set(member.name, member);
                         }
@@ -2305,9 +2322,10 @@ export class Interpreter {
             case "Identifier":
                 return env.get(expr.name, expr); // Pass expr as token
             case "AssignmentExpr": {
-                const target = (expr as AssignmentExpr).target;
-                const assignedValue = this.evaluateExpr((expr as AssignmentExpr).value, env);
-                const op = (expr as AssignmentExpr).operator; // Get the specific operator
+                const assignmentExpr = expr as AssignmentExpr;
+                const target = assignmentExpr.target;
+                let assignedValue = this.evaluateExpr(assignmentExpr.value, env);
+                const op = assignmentExpr.operator; // Get the specific operator
 
                 let finalValueToAssign = assignedValue;
 
@@ -2363,6 +2381,31 @@ export class Interpreter {
                     }
                 } else { // All other assignment targets (Identifier, ArrayAccess, PropertyAccess)
                     const { base, finalKey } = this.resolveAssignmentTarget(target, env);
+
+                    // NEW: Type checking for assignments to properties
+                    if (target.type === "PropertyAccess") {
+                        const propAccessTarget = target as PropertyAccess;
+                        // Re-evaluate the object part to get the actual runtime object (instance or class)
+                        const objBeingAssignedTo = this.evaluateExpr(propAccessTarget.object, env);
+
+                        let propDef: PropertyDefinition | undefined;
+
+                        // Check if it's an assignment to a static property of a NovaClass
+                        if (objBeingAssignedTo instanceof NovaClass) {
+                            propDef = objBeingAssignedTo.staticProperties.get(propAccessTarget.property);
+                        }
+                        // Check if it's an assignment to an instance property of a NovaScript object
+                        else if (objBeingAssignedTo && typeof objBeingAssignedTo === 'object' && (objBeingAssignedTo as any).__novaClass__ instanceof NovaClass) {
+                            const novaClassDef = (objBeingAssignedTo as any).__novaClass__ as NovaClass;
+                            propDef = novaClassDef.instanceProperties.get(propAccessTarget.property);
+                        }
+
+                        if (propDef && propDef.typeAnnotation) {
+                            checkType(propDef.typeAnnotation, finalValueToAssign, assignmentExpr, this);
+                        }
+                    }
+                    // END NEW: Type checking for assignments to properties
+
                     if (base instanceof Environment) {
                         base.assign(finalKey as string, finalValueToAssign, target);
                     } else if (finalKey !== null) {
@@ -2377,6 +2420,10 @@ export class Interpreter {
             case "BinaryExpr": {
                 const left = this.evaluateExpr(expr.left, env);
                 const right = this.evaluateExpr(expr.right, env);
+
+                if (typeof left !== 'number' || typeof right !== 'number') {
+                    throw new NovaError(expr, `Cannot perform binary operation on non-number types: ${typeof left} and ${typeof right}`);
+                }
                 switch (expr.operator) {
                     case "+": return left + right;
                     case "%": return left % right;
