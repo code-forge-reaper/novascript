@@ -5,6 +5,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import util from "node:util";
+String.prototype.concat = function (...others) {
+    let result = String(this); // convert wrapper object to primitive string
+    for (const other of others) {
+        result += other + " ";
+    }
+    return result;
+};
+
+String.prototype.format = function (...args) {
+    return util.format(this, ...args);
+}
+
 interface Token {
     type: string;
     // @ts-ignore

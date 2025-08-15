@@ -14,11 +14,11 @@ const requireFromCWD = createRequire(path.join(process.cwd(), 'noop.js'))
 
 try {
 	const interp: Interpreter = new Interpreter(f);
-	interp.exposeJsClass("Test", class{
+	/*interp.exposeJsClass("Test", class{
 		constructor(name){
 			console.log(name)
 		}
-	})
+	})*/
 
 	interp.globals.define("os-import-handler", (name: string) => {
 		try {
