@@ -178,7 +178,7 @@ export interface ImportStmt extends Statement {
     type: "ImportStmt";
     path: string; // Added path property
     alias?: string; // Added alias property
-    body: Statement[];
+    body: Statement[]; // This body will only be populated for .par imports during parsing, then inlined.
     os: boolean
 }
 
@@ -438,9 +438,21 @@ export class ParselParser {
             ) {
                 break;
             }
-            const stmt = this.parseStatement();
-            if (stmt) {
-                statements.push(stmt);
+
+            // Handle import statements directly within blocks for inlining
+            if (token.type === "keyword" && token.value === "import") {
+                this.consumeToken(); // Consume the 'import' keyword
+                const importStmt = this.parseImportStatementInternal();
+                if (importStmt.os) {
+                    statements.push(importStmt); // Keep os imports as nodes for runtime handling
+                } else {
+                    statements.push(...importStmt.body); // Inline .par import statements
+                }
+            } else {
+                const stmt = this.parseStatement();
+                if (stmt) {
+                    statements.push(stmt);
+                }
             }
         }
         return statements;
@@ -450,9 +462,23 @@ export class ParselParser {
     public parse(): Statement[] {
         const statements: Statement[] = [];
         while (this.current < this.tokens.length) {
-            const stmt = this.parseStatement();
-            if (stmt) {
-                statements.push(stmt);
+            const token = this.getNextToken();
+            if (!token) break; // Handle EOF
+
+            // Handle import statements directly at the top level for inlining
+            if (token.type === "keyword" && token.value === "import") {
+                this.consumeToken(); // Consume the 'import' keyword
+                const importStmt = this.parseImportStatementInternal();
+                if (importStmt.os) {
+                    statements.push(importStmt); // Keep os imports as nodes for runtime handling
+                } else {
+                    statements.push(...importStmt.body); // Inline .par import statements
+                }
+            } else {
+                const stmt = this.parseStatement();
+                if (stmt) {
+                    statements.push(stmt);
+                }
             }
         }
         return statements;
@@ -488,7 +514,7 @@ export class ParselParser {
             case "func": return this.parseFuncDeclaration();
             case "def": return this.parseLambdaDeclarationAsStatement();
             case "return": return this.parseReturnStatement();
-            case "import": return this.parseImportStatement();
+            // 'import' keyword is now handled in parse() and parseBlockUntil() directly
             case "using": return this.parseUsingStatement();
             default:
                 // Fallback to expression statement
@@ -506,8 +532,9 @@ export class ParselParser {
         return { type: "UsingStmt", name: what.value, file: usingToken.file, line: usingToken.line, column: usingToken.column };
     }
 
-    parseImportStatement(): ImportStmt {
-        const imp = this.consumeToken(); // consume 'import'
+    // Renamed from parseImportStatement and modified to not consume 'import' keyword
+    private parseImportStatementInternal(): ImportStmt {
+        // The 'import' keyword is consumed by the caller (parse() or parseBlockUntil())
         const pathToken = this.expectType("string");
         const importPath = pathToken.value;
         this.consumeToken(); // consume string
@@ -520,9 +547,12 @@ export class ParselParser {
             this.consumeToken(); // consume the identifier for the alias
         }
 
+        // Create a dummy token for file/line/column info, as the 'import' token was consumed earlier
+        const impTokenLocation = { file: pathToken.file, line: pathToken.line, column: pathToken.column };
+
         if (importPath.startsWith("os:")) {
             const pa = importPath.substring(3);
-            const newImportStmt: ImportStmt = { type: "ImportStmt", path: pa, alias, body: [], os: true, file: imp.file, line: imp.line, column: imp.column };
+            const newImportStmt: ImportStmt = { type: "ImportStmt", path: pa, alias, body: [], os: true, ...impTokenLocation };
             this.importedFiles[importPath] = newImportStmt; // Store with original path for os imports
             return newImportStmt;
         }
@@ -532,9 +562,9 @@ export class ParselParser {
 
         const parser = new ParselParser(fullPath);
         parser.importedFiles = this.importedFiles; // Share importedFiles cache
-        const body = parser.parse();
+        const body = parser.parse(); // This call will now also use the inlining logic recursively
 
-        const newImportStmt: ImportStmt = { type: "ImportStmt", os: false, path: fullPath, alias, body, file: imp.file, line: imp.line, column: imp.column };
+        const newImportStmt: ImportStmt = { type: "ImportStmt", os: false, path: fullPath, alias, body, ...impTokenLocation };
         this.importedFiles[fullPath] = newImportStmt; // Store with full path for file imports
         return newImportStmt;
     }
@@ -1556,6 +1586,7 @@ export class ParselRuntime {
             case "ImportStmt":
                 {
                     const s = stmt as ImportStmt;
+                    // Only process os imports here. .par imports are now inlined during parsing.
                     if (s.os) {
                         if (!this.context.has("os-import-handler")) {
                             throw new ParselError(s, "no 'os-import-handler' defined in runtime")
@@ -1566,18 +1597,8 @@ export class ParselRuntime {
                         ctx.define(name, res)
                         break
                     }
-                    const interp = new ParselRuntime(s.body)
-                    const env = new Environment(this.context);
-                    interp.context = env
-                    interp.parse()
-                    const namespace: Record<string, any> = {}
-
-                    for (const key in env.values) {
-                        namespace[key] = env.values[key]
-                    }
-
-                    ctx.define(s.alias || path.basename(s.path, '.par'), namespace) // Use alias or filename as default
-                    break
+                    // If a .par ImportStmt somehow still makes it here, it's an internal error.
+                    throw new ParselError(s, "Internal Error: .par imports should have been inlined during parsing and not appear in runtime AST.");
                 }
             case "ExitStmt":
                 process.exit(0);

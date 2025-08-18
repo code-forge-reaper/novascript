@@ -11,7 +11,7 @@ import {
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const f = path.resolve(process.argv[2] || "main.nova");
+const f = path.resolve(process.argv[2] || "main.par");
 
 // create a require function based on cwd, not this file
 const requireFromCWD = createRequire(path.join(process.cwd(), 'noop.js'))

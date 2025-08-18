@@ -54,7 +54,7 @@ contexts:
 
   keywords:
     # Declarations
-    - match: \b(var|func|def|return|import|type)\b
+    - match: \b(var|new|func|def|return|import|type)\b
       scope: keyword.declaration.nova
       # import "some module" as alias
     - match: \bas\b\s+(\w+)
@@ -68,6 +68,8 @@ contexts:
       scope: keyword.control.flow.nova
 
     # Types
+    # like: var x number
+    # type Entity = {move:function}
     - match: \b(string|number|function|boolean|void)\b
       scope: storage.type.nova
 

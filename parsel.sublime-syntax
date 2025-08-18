@@ -106,8 +106,8 @@ contexts:
   namespace_definition:
     - match: \b(using)\b\s+(\w+)
       captures:
-        1: entity.name.namespace.nova
-      scope: keyword.declaration.nova
+        1: entity.name.namespace.parsel
+      scope: keyword.declaration.parsel
 
   operators:
     # Two-character operators (assignment, equality, logical, comparison)
