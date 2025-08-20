@@ -463,83 +463,72 @@ class NovaClass {
         this.constructorDef = null;
     }
 
-    // This method will be called to create an instance
-    instantiate(args: any[], instanceToken: Token, instanceObj?: any): any {
-        const instance = instanceObj || {}; // If instanceObj is provided, use it (for super calls)
-
-        // NEW: Link the instance to its NovaClass definition
-        Object.defineProperty(instance, '__novaClass__', {
-            value: this,
-            enumerable: false,
-            configurable: true // Allow re-definition if needed, though not expected
-        });
-
-        // First, handle superclass construction if applicable and this is the top-level call
-        if (this.superClass && !instanceObj) { // Only call superclass constructor if this is the initial instantiation
-            this.superClass.instantiate(args, instanceToken, instance); // Pass the current instance to superclass
+    /**
+     * Private helper: Recursively sets up instance properties and binds instance methods
+     * for this class and its superclasses on a given instance object.
+     * This method does NOT execute constructors.
+     * @param instance The object to set up (passed down the inheritance chain).
+     * @param instanceToken The token for error reporting.
+     * @returns The instance object after setup.
+     */
+    private _setupInstanceMembersRecursively(instance: any, instanceToken: Token): any {
+        // 1. Recursively call superclass to set up its properties and methods on the same instance object.
+        if (this.superClass) {
+            this.superClass._setupInstanceMembersRecursively(instance, instanceToken);
         }
 
-        // Initialize instance properties
+        // 2. Initialize *this class's* instance properties on the instance.
         for (const [propName, propDef] of this.instanceProperties.entries()) {
             let propValue;
             if (propDef.initializer) {
-                // Evaluate initializer in the context of the class definition environment
+                // Evaluate initializer in the context of the class definition environment (this.env).
                 propValue = this.interpreter.evaluateExpr(propDef.initializer, this.env);
             } else {
                 propValue = undefined; // Default value if no initializer
             }
-
             Object.defineProperty(instance, propName, {
                 value: propValue,
-                writable: true,
-                enumerable: true,
-                configurable: true
+                writable: true, enumerable: true, configurable: true
             });
         }
 
-        // Bind instance methods to the instance
+        // 3. Bind *this class's* instance methods to the instance.
         for (const [methodName, methodDef] of this.instanceMethods.entries()) {
-            //console.log(methodName)
-            // Create a JS function that wraps the NovaScript method body
             const novaMethod = (...methodArgs: any[]) => {
-                const methodEnv = new Environment(this.env); // Method's scope
-                methodEnv.define("self", instance); // 'self' refers to the instance
+                const methodEnv = new Environment(this.env);
+                methodEnv.define("self", instance);
 
-                // Handle 'super' call within instance methods
+                // Define 'super' for instance methods
                 if (this.superClass) {
                     methodEnv.define("super", (...superMethodArgs: any[]) => {
-                        const superMethod = this.superClass!.instanceMethods.get(methodName); // Get super method definition
+                        const superMethod = this.superClass!.instanceMethods.get(methodName);
                         if (!superMethod) {
                             throw new NovaError(instanceToken, `Method '${methodName}' not found in superclass '${this.superClass!.name}'.`);
                         }
-                        // Create a temporary function to execute the super method
-                        const tempSuperFunc = (...tempArgs: any[]) => {
-                            const tempSuperEnv = new Environment(this.superClass!.env);
-                            tempSuperEnv.define("self", instance); // 'self' still refers to the current instance
-                            for (let i = 0; i < superMethod.parameters.length; i++) {
-                                const param = superMethod.parameters[i];
-                                let argVal = tempArgs[i];
-                                if (argVal === undefined && param.default !== undefined) {
-                                    argVal = this.interpreter.evaluateExpr(param.default, this.superClass!.env);
-                                } else if (argVal === undefined && param.default === undefined) {
-                                    throw new NovaError(param, `Missing argument for parameter '${param.name}' in super method '${methodName}'.`);
-                                }
-                                if (param.annotationType) {
-                                    checkType(param.annotationType, argVal, param, this.interpreter);
-                                }
-                                tempSuperEnv.define(param.name, argVal);
+                        // Create a temporary execution context for the super method.
+                        const tempSuperEnv = new Environment(this.superClass!.env);
+                        tempSuperEnv.define("self", instance); // 'self' still refers to the current instance
+
+                        for (let i = 0; i < superMethod.parameters.length; i++) {
+                            const param = superMethod.parameters[i];
+                            let argVal = superMethodArgs[i];
+                            if (argVal === undefined && param.default !== undefined) {
+                                argVal = this.interpreter.evaluateExpr(param.default, this.superClass!.env);
+                            } else if (argVal === undefined && param.default === undefined) {
+                                throw new NovaError(param, `Missing argument for parameter '${param.name}' in super method '${methodName}'.`);
                             }
-                            try {
-                                this.interpreter.executeBlock(superMethod.body, tempSuperEnv);
-                            } catch (e) {
-                                if (e instanceof ReturnException) {
-                                    return e.value;
-                                }
-                                throw e;
+                            if (param.annotationType) {
+                                checkType(param.annotationType, argVal, param, this.interpreter);
                             }
-                            return undefined;
-                        };
-                        return tempSuperFunc(...superMethodArgs);
+                            tempSuperEnv.define(param.name, argVal);
+                        }
+                        try {
+                            this.interpreter.executeBlock(superMethod.body, tempSuperEnv);
+                        } catch (e) {
+                            if (e instanceof ReturnException) { return e.value; }
+                            throw e;
+                        }
+                        return undefined;
                     });
                 }
 
@@ -548,7 +537,7 @@ class NovaClass {
                     const param = methodDef.parameters[i];
                     let argVal = methodArgs[i];
                     if (argVal === undefined && param.default !== undefined) {
-                        argVal = this.interpreter.evaluateExpr(param.default, this.env); // Evaluate default in class's env
+                        argVal = this.interpreter.evaluateExpr(param.default, this.env);
                     } else if (argVal === undefined && param.default === undefined) {
                         throw new NovaError(param, `Missing argument for parameter '${param.name}' in method '${methodDef.name}'.`);
                     }
@@ -561,64 +550,108 @@ class NovaClass {
                 try {
                     this.interpreter.executeBlock(methodDef.body, methodEnv);
                 } catch (e) {
-                    if (e instanceof ReturnException) {
-                        return e.value;
-                    }
+                    if (e instanceof ReturnException) { return e.value; }
                     throw e;
                 }
                 return undefined;
             };
             Object.defineProperty(instance, methodName, {
-                value: novaMethod,
-                writable: true,
-                enumerable: true,
-                configurable: true
+                value: novaMethod, writable: true, enumerable: true, configurable: true
+            });
+        }
+        return instance;
+    }
+
+    /**
+     * Private helper: Executes the constructor body for this specific class,
+     * handling 'super()' calls to propagate constructor execution up the chain.
+     * @param instance The instance object being constructed.
+     * @param constructorArgs Arguments passed to *this* constructor.
+     * @param instanceToken The token for error reporting.
+     */
+    private _executeConstructorChain(instance: any, constructorArgs: any[], instanceToken: Token): void {
+        // If this class does not have an explicit constructor, and it has a superclass,
+        // implicitly call the superclass's constructor with the current arguments.
+        if (!this.constructorDef) {
+            if (this.superClass) {
+                this.superClass._executeConstructorChain(instance, constructorArgs, instanceToken);
+            }
+            return; // No constructor body to run for this class.
+        }
+
+        const constructorEnv = new Environment(this.env);
+        constructorEnv.define("self", instance);
+
+        // Define 'super' for constructor's environment.
+        if (this.superClass) {
+            constructorEnv.define("super", (...superArgs: any[]) => {
+                if (!this.superClass) {
+                    throw new NovaError(instanceToken, "Cannot call super() in a class without a superclass.");
+                }
+                // Crucial: Call the superclass's constructor execution method.
+                // This ensures the superclass's 'init' body is run.
+                this.superClass!._executeConstructorChain(instance, superArgs, instanceToken);
+            });
+        } else {
+            // If there's no superclass, calling 'super()' is an error.
+            constructorEnv.define("super", () => {
+                throw new NovaError(instanceToken, "Cannot call super() in a base class constructor.");
             });
         }
 
 
-        // Handle constructor call (only if this is the top-level instantiation)
-        if (!instanceObj) {
-            if (this.constructorDef) {
-                const constructorEnv = new Environment(this.env);
-                constructorEnv.define("self", instance);
-                // Define 'super' for constructor's environment
-                if (this.superClass) {
-                    constructorEnv.define("super", (...superArgs: any[]) => {
-                        if (!this.superClass) { // Should not happen given the check above
-                            throw new NovaError(instanceToken, "Cannot call super() in a class without a superclass.");
-                        }
-                        this.superClass.instantiate(superArgs, instanceToken, instance); // Pass current instance
-                    });
-                }
+        // Handle constructor parameters
+        for (let i = 0; i < this.constructorDef.parameters.length; i++) {
+            const param = this.constructorDef.parameters[i];
+            let argVal = constructorArgs[i];
+            if (argVal === undefined && param.default !== undefined) {
+                argVal = this.interpreter.evaluateExpr(param.default, this.env);
+            } else if (argVal === undefined && param.default === undefined) {
+                throw new NovaError(param, `Missing argument for parameter '${param.name}' in constructor of '${this.name}'.`);
+            }
+            if (param.annotationType) {
+                checkType(param.annotationType, argVal, param, this.interpreter);
+            }
+            constructorEnv.define(param.name, argVal);
+        }
 
-                // Handle constructor parameters
-                for (let i = 0; i < this.constructorDef.parameters.length; i++) {
-                    const param = this.constructorDef.parameters[i];
-                    let argVal = args[i];
-                    if (argVal === undefined && param.default !== undefined) {
-                        argVal = this.interpreter.evaluateExpr(param.default, this.env);
-                    } else if (argVal === undefined && param.default === undefined) {
-                        throw new NovaError(param, `Missing argument for parameter '${param.name}' in constructor of '${this.name}'.`);
-                    }
-                    // Type checking for constructor parameters (already there)
-                    if (param.annotationType) {
-                        checkType(param.annotationType, argVal, param, this.interpreter);
-                    }
-                    constructorEnv.define(param.name, argVal);
-                }
-
-                try {
-                    this.interpreter.executeBlock(this.constructorDef.body, constructorEnv);
-                } catch (e) {
-                    if (e instanceof ReturnException) {
-                        // Constructors don't typically return values, but if they do, ignore it.
-                    } else {
-                        throw e;
-                    }
-                }
+        try {
+            this.interpreter.executeBlock(this.constructorDef.body, constructorEnv);
+        } catch (e) {
+            if (e instanceof ReturnException) {
+                // Constructors don't typically return values, but if they do, ignore it.
+            } else {
+                throw e;
             }
         }
+    }
+
+    /**
+     * Public method to instantiate a new object of this NovaClass.
+     * This orchestrates the two-phase construction process:
+     * 1. Setting up all instance properties and methods recursively up the inheritance chain.
+     * 2. Executing constructors recursively up the inheritance chain (triggered by 'super()').
+     * @param args Arguments passed to the constructor.
+     * @param instanceToken The token associated with the 'new' expression for error reporting.
+     * @returns The newly created and initialized instance.
+     */
+    instantiate(args: any[], instanceToken: Token): any {
+        const instance = {}; // Create the base empty object
+
+        // Attach a hidden reference to the NovaClass definition on the instance.
+        Object.defineProperty(instance, '__novaClass__', {
+            value: this,
+            enumerable: false,
+            configurable: true
+        });
+
+        // 1. Recursively set up all properties and methods from the entire inheritance chain.
+        // This ensures the instance has all inherited members before any constructor code runs.
+        this._setupInstanceMembersRecursively(instance, instanceToken);
+
+        // 2. Recursively execute constructors, starting from the base class's constructor,
+        // and then moving down to the current class's constructor (driven by 'super()').
+        this._executeConstructorChain(instance, args, instanceToken);
 
         return instance;
     }
@@ -637,7 +670,7 @@ export class Interpreter {
         // type rect = {x : number,y: number, width:number, height: number}
         "type",
         // NEW: Class keywords
-        "class", "inherits", "static", "new", "super"
+        "class", "inherits", "static", "new"
     ];
 
     source: string;
@@ -2583,7 +2616,7 @@ export class Interpreter {
                 const args = newInstanceExpr.arguments.map(arg => this.evaluateExpr(arg, env));
 
                 if (targetClass instanceof NovaClass) {
-                    // It's a NovaScript class
+                    // If it's a NovaScript class, call its instantiate method.
                     return targetClass.instantiate(args, newInstanceExpr);
                 } else if (typeof targetClass === 'function' && targetClass.prototype && typeof targetClass.prototype.constructor === 'function') {
                     // It's a JavaScript class/constructor function
