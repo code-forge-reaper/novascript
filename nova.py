@@ -4,10 +4,7 @@ import sys
 import os
 
 sys.path.insert(0, os.getcwd())
-
-
-# Example usage (if this were a script):
-if __name__ == "__main__":
+def main():
     if len(sys.argv) < 2:
         print("Usage: python nova_interpreter.py <nova_script_file.nova>")
         sys.exit(1)
@@ -23,3 +20,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Runtime Error: {e}")
         sys.exit(1)
+
+# Example usage (if this were a script):
+if __name__ == "__main__":
+	main()

@@ -54,7 +54,7 @@ contexts:
 
   keywords:
     # Declarations
-    - match: \b(var|new|func|def|return|import|type)\b
+    - match: \b(var|new|func|def|return|import|define)\b
       scope: keyword.declaration.nova
       # import "some module" as alias
     - match: \bas\b\s+(\w+)
@@ -93,7 +93,7 @@ contexts:
     - match: \b[a-zA-Z_]\w*(?=\()
       scope: entity.name.function.nova
   custom_types:
-    - match: \btype\b\s+(\w+)
+    - match: \bdefine\b\s+(\w+)
       captures:
         1: entity.name.type.nova
       scope: keyword.declaration.nova

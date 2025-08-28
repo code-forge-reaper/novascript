@@ -496,15 +496,15 @@ def init_globals(globals_env):
         @staticmethod
         def info(*args):
             now = datetime.datetime.now()
-            print(f"[info {globals_env.get('Runtime', internal_token)['versionString']}| at: {now.hour}:{now.minute}:{now.second}]:", *args)
+            print(f"[info {globals_env.get('Runtime', internal_token).versionString}| at: {now.hour}:{now.minute}:{now.second}]:", *args)
         @staticmethod
         def warn(*args):
             now = datetime.datetime.now()
-            print(f"[warn {globals_env.get('Runtime', internal_token)['versionString']}| at: {now.hour}:{now.minute}:{now.second}]:", *args, file=sys.stderr)
+            print(f"[warn {globals_env.get('Runtime', internal_token).versionString}| at: {now.hour}:{now.minute}:{now.second}]:", *args, file=sys.stderr)
         @staticmethod
         def error(*args):
             now = datetime.datetime.now()
-            print(f"[error {globals_env.get('Runtime', internal_token)['versionString']}| at: {now.hour}:{now.minute}:{now.second}]:", *args, file=sys.stderr)
+            print(f"[error {globals_env.get('Runtime', internal_token).versionString}| at: {now.hour}:{now.minute}:{now.second}]:", *args, file=sys.stderr)
     globals_env.define("Logger", Logger)
 
     class Is:
@@ -608,10 +608,10 @@ class Interpreter:
     keywords = [
         "var", "if", "else", "elseif", "end", "break", "continue", "func",
         "return", "import", "as", "namespace", "while", "forEach", "for",
-        "do", "in", "try", "errored", "defer",
+        "do", "in", "test", "failed", "defer",
         "switch", "case", "default", "using",
         "def",
-        "type",
+        "define",
         "class", "inherits", "static", "new", "super"
     ]
 
@@ -795,7 +795,7 @@ class Interpreter:
 
     # --- Parsing Helpers ---
     def parse_block_until(self, terminators=None):
-        if terminators is None:
+        if terminators == None:
             terminators = []
         statements = []
         while self.current < len(self.tokens):
@@ -946,7 +946,7 @@ class Interpreter:
                 self.consume_token()
                 return DeferStmt(defer_body, token.file, token.line, token.column)
 
-            elif token.value == "type":
+            elif token.value == "define":
                 self.consume_token() # consume 'type'
                 custom_type_name_token = self.expect_type("identifier")
                 custom_type_name = custom_type_name_token.value
@@ -1036,14 +1036,25 @@ class Interpreter:
 
             elif token.value == "using":
                 self.consume_token()
-                using_name_token = self.expect_type("identifier")
-                self.consume_token()
-                return UsingStmt(using_name_token.value, token.file, token.line, token.column)
+                # Parse the fully qualified name, e.g., "module.sub.name"
+                name_parts = []
+                name_part_token = self.expect_type("identifier")
+                name_parts.append(name_part_token.value)
+                self.consume_token() # Consume the first identifier
 
-            elif token.value == "try":
+                while self.get_next_token() and self.get_next_token().value == ".":
+                    self.consume_token() # Consume the dot
+                    name_part_token = self.expect_type("identifier")
+                    name_parts.append(name_part_token.value)
+                    self.consume_token() # Consume the next identifier
+
+                full_name = ".".join(name_parts)
+                return UsingStmt(full_name, token.file, token.line, token.column)
+
+            elif token.value == "test":
                 self.consume_token()
-                try_block = self.parse_block_until(["errored"])
-                self.expect_token("errored")
+                try_block = self.parse_block_until(["failed"])
+                self.expect_token("failed")
                 self.consume_token()
                 error_var_token = self.expect_type("identifier")
                 error_var = error_var_token.value
@@ -1843,15 +1854,48 @@ class Interpreter:
             env.define(class_def.name, nova_class)
 
         elif stmt.type == "UsingStmt":
-            namespace = env.get(stmt.name, stmt)
-            if isinstance(namespace, Environment):
-                for key, value in namespace.values.items():
+            # Resolve the fully qualified namespace name
+            name_parts = stmt.name.split('.')
+            current_resolved_object = env # Start resolution from current environment
+
+            for i, part in enumerate(name_parts):
+                if isinstance(current_resolved_object, Environment):
+                    # NovaScript Environment: use its get method
+                    next_resolved_part = current_resolved_object.get(part, stmt)
+                elif isinstance(current_resolved_object, dict):
+                    # Python dictionary (e.g., NovaScript object literal, or imported dict-like module): use dict access
+                    next_resolved_part = current_resolved_object.get(part)
+                elif hasattr(current_resolved_object, part):
+                    # Python object (e.g., imported Python module): use getattr
+                    next_resolved_part = getattr(current_resolved_object, part)
+                else:
+                    raise NovaError(stmt, f"Cannot resolve part '{part}' in '{'.'.join(name_parts[:i])}'. Not a namespace, dict, or object with attribute.")
+
+                if next_resolved_part is None:
+                    raise NovaError(stmt, f"Namespace '{stmt.name}' part '{part}' not found.")
+
+                current_resolved_object = next_resolved_part
+
+            # After resolving the full path, current_resolved_object holds the target namespace/object
+            target_namespace = current_resolved_object
+
+            if isinstance(target_namespace, Environment):
+                # Import from NovaScript Environment
+                for key, value in target_namespace.values.items():
                     env.define(key, value)
-            elif isinstance(namespace, dict): # For Python objects exposed as namespaces
-                for key, value in namespace.items():
+            elif isinstance(target_namespace, dict):
+                # Import from Python dictionary
+                for key, value in target_namespace.items():
                     env.define(key, value)
+            elif hasattr(target_namespace, '__dict__'):
+                # Import from Python module or class instance (its __dict__)
+                # Filter out built-in/private attributes if desired, or just import all.
+                # For simplicity, let's import all public attributes.
+                for key, value in target_namespace.__dict__.items():
+                    if not key.startswith('_'): # Avoid importing Python's internal/private attributes
+                        env.define(key, value)
             else:
-                raise NovaError(stmt, f"Cannot 'use' non-namespace value '{stmt.name}'.")
+                raise NovaError(stmt, f"Cannot 'use' value of type {type(target_namespace).__name__}. Expected a namespace, dict, or Python object with attributes.")
 
         else:
             raise NovaError(stmt, f"Unknown statement type: {stmt.type}")
@@ -2129,7 +2173,7 @@ class Interpreter:
 #     if len(sys.argv) < 2:
 #         print("Usage: python nova_interpreter.py <nova_script_file.nova>")
 #         sys.exit(1)
-#     
+#
 #     script_file = sys.argv[1]
 #     try:
 #         interpreter = Interpreter(script_file)

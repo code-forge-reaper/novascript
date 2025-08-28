@@ -1,0 +1,177 @@
+from a scrapped project
+
+
+import "os:@r1tsuu/raylib" as rl
+using rl
+
+InitWindow(800, 600, "raylib [core] example - basic window")
+
+func FPSCamera()
+	var camera = Camera3D(Vector3(0,0,1), Vector3(0,0,0), Vector3(0,1,0), 90, 0, CAMERA_PERSPECTIVE)
+	var yaw = 0
+	var pitch = 0
+	var direction = Vector3Zero()
+
+	func update(delta number, speed = 20)
+		var mspeed = speed * delta
+
+		yaw = yaw - GetMouseDelta().x * delta * 0.5
+		pitch = pitch - GetMouseDelta().y * delta * 0.5
+		var limit = math.PI / 2 - 0.01
+		pitch = math.max(-limit, math.min(limit, pitch))
+		direction = Vector3(
+			math.sin(yaw) * math.cos(pitch),
+			math.sin(pitch),
+			math.cos(yaw) * math.cos(pitch)
+		)
+
+		if IsKeyDown(KEY_W)
+			camera.position = Vector3Add(camera.position, Vector3Scale(direction, mspeed))
+		elseif IsKeyDown(KEY_S)
+			camera.position = Vector3Subtract(camera.position, Vector3Scale(direction, mspeed))
+		end
+
+		var right = Vector3CrossProduct(direction, Vector3(0,1,0))
+		if IsKeyDown(KEY_A)
+			camera.position = Vector3Subtract(camera.position, Vector3Scale(right, mspeed))
+		elseif IsKeyDown(KEY_D)
+			camera.position = Vector3Add(camera.position, Vector3Scale(right, mspeed))
+		end
+
+		camera.target = Vector3Add(camera.position, direction)
+	end
+
+	return {
+		camera : camera,
+		update : update
+	}
+end
+
+func smoothStep(current, target, speed, dt)
+	if math.abs(current - target) < 0.5
+		return target
+	end
+	return current + (target - current) * speed * dt
+end
+
+var cam = FPSCamera()
+var subCam = FPSCamera()
+var subCamTexture = LoadRenderTexture(240,180)
+
+DisableCursor()
+defer
+	UnloadRenderTexture(subCamTexture)
+	CloseWindow()
+end
+
+SetTargetFPS(60)
+
+var cam2width = subCamTexture.texture.width
+var cam2height = -subCamTexture.texture.height
+
+var cam2config = {
+	x: GetScreenWidth() - cam2width * 1.2,
+	y: GetScreenHeight() / 2 - cam2height / 2,
+	width: cam2width,
+	height: cam2height,
+	realX: 0,
+	realY: 0,
+	realWidth: cam2width,
+	realHeight: cam2height,
+	heldUp: false
+}
+
+func update(dt number)
+	defer // there's no reason to use defer here, i could just move everything past the main camera's handler
+		subCam.camera.position = cam.camera.position
+		subCam.camera.target = cam.camera.target
+		subCam.camera.up = cam.camera.up
+		subCam.camera.projection = cam.camera.projection
+
+		if cam2config.heldUp
+			if subCam.camera.fovy > 45
+				subCam.camera.fovy = subCam.camera.fovy - 50 * dt
+			else
+				subCam.camera.fovy = math.floor(subCam.camera.fovy)
+			end
+		else
+			if subCam.camera.fovy < cam.camera.fovy
+				subCam.camera.fovy = subCam.camera.fovy + 50 * dt
+			else
+				subCam.camera.fovy = math.floor(subCam.camera.fovy)
+			end
+		end
+	end
+
+	if cam2config.heldUp
+		cam.update(dt, 5)
+	else
+		cam.update(dt)
+	end
+
+	if IsKeyPressed(KEY_F)
+		cam2config.heldUp = !cam2config.heldUp
+	end
+
+	// Determine target values
+	var targetWidth = 0
+	var targetHeight = 0
+	var targetX = 0
+	var targetY = 0
+
+	if cam2config.heldUp
+		targetWidth = cam2width * 2
+		targetHeight = cam2height * 2
+		targetX = 200
+		targetY = 200 + targetHeight / 5
+	else
+		targetWidth = cam2width
+		targetHeight = cam2height
+		targetX = GetScreenWidth() - cam2width * 1.2
+		targetY = GetScreenHeight() / 2 - cam2height / 2
+	end
+
+	// Smoothly interpolate
+	cam2config.realWidth  = smoothStep(cam2config.realWidth, targetWidth, 10, dt)
+	cam2config.realHeight = smoothStep(cam2config.realHeight, targetHeight, 10, dt)
+	cam2config.realX      = smoothStep(cam2config.realX, targetX, 10, dt)
+	cam2config.realY      = smoothStep(cam2config.realY, targetY, 10, dt)
+end
+
+func draw()
+	defer
+		BeginTextureMode(subCamTexture)
+		BeginMode3D(subCam.camera)
+		ClearBackground(BLACK)
+		DrawCube(Vector3(0, math.sin(GetTime()), 0), 2, 2, 2, RED)
+		EndMode3D()
+		DrawFPS(10, 10)
+		DrawText("zoom: ".concat((2 - (subCam.camera.fovy / cam.camera.fovy)).toFixed(1).toString()), 10, 30, 10, WHITE)
+		EndTextureMode()
+
+		DrawRectangle(cam2config.realX-2, cam2config.realY-2, cam2config.realWidth+4, -cam2config.realHeight+4, WHITE)
+
+		DrawTexturePro(
+			subCamTexture.texture,
+			Rectangle(0, 0, cam2width, cam2height),
+			Rectangle(cam2config.realX, cam2config.realY, cam2config.realWidth, cam2config.realHeight),
+			Vector2(0, 0),
+			0,
+			WHITE
+		)
+		DrawText("Anomaly detector", cam2config.realX, cam2config.realY - 20, 10, WHITE)
+	end
+
+	BeginMode3D(cam.camera)
+	DrawGrid(10, 1)
+	DrawCubeWires(Vector3(0, math.sin(GetTime()), 0), 2, 2, 2, RED)
+	EndMode3D()
+end
+
+while !WindowShouldClose()
+	update(GetFrameTime())
+	BeginDrawing()
+		ClearBackground(BLACK)
+		draw()
+	EndDrawing()
+end

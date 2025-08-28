@@ -2466,7 +2466,7 @@ export class Interpreter {
                 const left = this.evaluateExpr(expr.left, env);
                 const right = this.evaluateExpr(expr.right, env);
 
-                if (typeof left !== 'number' || typeof right !== 'number') {
+                if ((typeof left !== 'number' || typeof right !== 'number')&&!(expr.operator !== "==" || expr.operator !=="!=" )) {
                     throw new NovaError(expr, `Cannot perform binary operation on non-number types: ${typeof left} and ${typeof right}`);
                 }
                 switch (expr.operator) {
