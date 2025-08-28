@@ -1,3 +1,35 @@
+# Node / JS
+node_modules/
 *.mjs
-node_modules
-.vscode
+*.cjs
+*.tsbuildinfo
+
+# VSCode
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# NovaScript / legacy
+legacy/**/*.pyc
+legacy/**/*.swp
+*.swp
+
+# Build / output folders
+dist/
+build/
+out/
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Optional: ignore secrets / config
+.env
