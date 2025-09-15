@@ -14,10 +14,12 @@ contexts:
     - include: namespace_definition
     - include: keywords
     - include: builtins
+    - include: using_stmt
     - include: function_calls
     - include: operators
     - include: types
     - include: custom_types
+    - include: enum_definition
     - include: class
     - match: \b[a-zA-Z_]\w*\b
       scope: variable.other.nova
@@ -78,10 +80,41 @@ contexts:
       scope: constant.language.nova
 
   namespace_definition:
-    - match: \b(namespace|using)\b\s+(\w+)
+    - match: \bscope\b\s+(\w+)
       captures:
         1: entity.name.namespace.nova
       scope: keyword.declaration.nova
+  using_stmt:
+    # using [module.a, module.b, ...]
+    - match: "\\b(using)\\b\\s*(\\[)"
+      captures:
+        1: keyword.declaration.nova
+        2: punctuation.section.brackets.begin.nova
+      push:
+        - meta_scope: meta.using.nova
+        - include: using_stmt_array
+
+    # using module.name.or.more
+    - match: "\\b(using)\\b\\s+([A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*)"
+      captures:
+        1: keyword.declaration.nova
+        2: entity.name.namespace.nova
+
+  using_stmt_array:
+    - meta_content_scope: meta.using.list.nova
+    - match: "\\]"
+      scope: punctuation.section.brackets.end.nova
+      pop: true
+    - match: "\\s*,\\s*"
+      scope: punctuation.separator.comma.nova
+    - match: "([A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*)"
+      captures:
+        1: entity.name.namespace.nova
+    - match: "\\s+"
+      scope: text.whitespace.nova
+    - match: "."
+      scope: invalid.illegal.nova
+
 
   function_definitions:
     - match: \bfunc\b\s+(\w+)
@@ -92,8 +125,16 @@ contexts:
   function_calls:
     - match: \b[a-zA-Z_]\w*(?=\()
       scope: entity.name.function.nova
+
   custom_types:
     - match: \bdefine\b\s+(\w+)
+      captures:
+        1: entity.name.type.nova
+      scope: keyword.declaration.nova
+
+  enum_definition:
+    # enum <name> { <values> }
+    - match: \benum\b\s+(\w+)
       captures:
         1: entity.name.type.nova
       scope: keyword.declaration.nova

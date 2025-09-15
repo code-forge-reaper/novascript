@@ -1,4 +1,4 @@
-// example.nova
+// novascript/legacy/example/example.nova
 
 // --- 1. Basic Syntax and Variables ---
 
@@ -13,7 +13,7 @@ Logger.info("Starting NovaScript Example!")
 // Variable declarations with and without type annotations
 var greeting string = "Hello, NovaScript!"
 var count = 10
-var isActive bool = true
+var isActive boolean = true
 var price number = 99.99
 
 print("Greeting:", greeting)
@@ -28,10 +28,10 @@ var notANumber = NaN
 print("Nothing:", nothing, "Not Defined:", notDefined, "Not a Number:", notANumber)
 
 // String formatting and concatenation (from String.prototype extensions)
-var formattedString = "The value is %d and the name is %s.".format(count, "Item")
+var formattedString = "The value is {} and the name is {}.".format(count, "Item")
 print("Formatted String:", formattedString)
 
-var concatenatedString = "Part1 ".concat("Part2 ", "Part3")
+var concatenatedString = "Part1 " + "Part2 " + "Part3"
 print("Concatenated String:", concatenatedString)
 
 // --- 2. Operators ---
@@ -134,7 +134,7 @@ test
     Runtime.throw("Simulated division by zero error!")
     print("  This line will not be reached if error occurs.")
 failed err
-    Logger.error("  Caught an error:", err.message)
+    Logger.error("  Caught an error:", err)
 end
 
 // Defer statement
@@ -143,13 +143,14 @@ test
     print("  Entering defer block scope.")
     defer
         print("  Deferred statement 1 (executed last).")
+        print("  Still in defer 1 block scope.")
     end
     defer
         print("  Deferred statement 2 (executed first).")
     end
     print("  Exiting defer block scope.")
 failed err
-    Logger.error("  Error in defer scope test:", err.message)
+    Logger.error("  Error in defer scope test:", err)
 end
 
 
@@ -165,7 +166,7 @@ print("Sum (func):", sumResult)
 
 // Function with default parameters and type inference
 func greet(name = "Guest", age = 30)
-    print("Hello, %s! You are %d years old.".format(name, age))
+    print("Hello, {}! You are {} years old.".format(name, age))
 end
 
 greet("Alice")
@@ -208,13 +209,13 @@ print("Modified age:", person.age)
 // --- 6. Custom Types ---
 
 // Define a custom type 'Point'
-type Point = {
+define Point = {
     x: number,
     y: number
 }
 
 // Define another custom type 'Rectangle' that uses 'Point'
-type Rectangle = {
+define Rectangle = {
     topLeft: Point,
     width: number,
     height: number
@@ -241,14 +242,25 @@ class Animal
     func init(name string, sound string)
         self.name = name
         self.sound = sound
-        print("Animal created: %s".format(self.name))
+        print("Animal created: {}".format(self.name))
     end
 
     func makeSound()
-        print("%s says %s!".format(self.name, self.sound))
+        print("{} says {}!".format(self.name, self.sound))
     end
 
     func describe()
-        print("This is an animal named %s.".format(self.name))
+        print("This is an animal named {}.".format(self.name))
     end
 end
+var animal = new Animal("Lion", "Roar")
+class Cat inherits Animal
+    func init()
+        super("Cat", "Meow")
+    end
+end
+var cat = new Cat()
+animal.makeSound()
+animal.describe()
+cat.makeSound()
+cat.describe()

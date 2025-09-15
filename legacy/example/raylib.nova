@@ -1,6 +1,6 @@
-from a scrapped project
-
-
+//from a scrapped project
+// only run this with the legacy ts/js version of nova
+// after running "yarn add @r1tsuu/raylib"
 import "os:@r1tsuu/raylib" as rl
 using rl
 

@@ -1,0 +1,7 @@
+func TEST()
+	var TEST = "hi"
+	return TEST
+end
+
+print(TEST())
+print(TEST())

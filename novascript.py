@@ -1,6 +1,5 @@
 import os
 import sys
-import json
 import math
 import re
 import datetime
@@ -8,18 +7,22 @@ import time
 from urllib.parse import unquote, quote
 
 # --- Exceptions ---
-class ReturnException(Exception):
+class NovaFlowControlException(Exception):
+    """Base class for flow control exceptions that should not be caught by 'test'."""
+    pass
+
+class ReturnException(NovaFlowControlException):
     """A special exception used to implement returning values from functions."""
     def __init__(self, value):
         super().__init__("Return")
         self.value = value
 
-class BreakException(Exception):
+class BreakException(NovaFlowControlException):
     """Special exception to implement break."""
     def __init__(self):
         super().__init__("Break")
 
-class ContinueException(Exception):
+class ContinueException(NovaFlowControlException):
     """Special exception to implement continue."""
     def __init__(self):
         super().__init__("Continue")
@@ -47,6 +50,9 @@ class Token:
         self.file = file
         self.line = line
         self.column = column
+
+    def __str__(self):
+        return f"Token({self.type = }, {self.value = }, {self.file = }, {self.line = }, {self.column = })"
 
 class Statement(Token):
     def __init__(self, type, file, line, column):
@@ -123,6 +129,7 @@ class AssignmentExpr(Expression):
         self.operator = operator
 
 class NewInstance(Expression):
+    # Changed class_target_expr back to class_name to hold a string path
     def __init__(self, class_name, arguments, file, line, column):
         super().__init__("NewInstance", file, line, column)
         self.class_name = class_name
@@ -251,9 +258,15 @@ class ImportStmt(Statement):
         self.filename = filename
         self.alias = alias
 
-class NamespaceStmt(Statement):
+class EnumDef(Statement):
+    def __init__(self, name, values, file, line, column):
+        super().__init__("EnumDef", file, line, column)
+        self.values = values
+        self.name = name
+
+class ScopeStmt(Statement):
     def __init__(self, name, body, file, line, column):
-        super().__init__("NamespaceStmt", file, line, column)
+        super().__init__("ScopeStmt", file, line, column)
         self.name = name
         self.body = body
 
@@ -292,17 +305,27 @@ class Environment:
         self.values = {}
         self.parent = parent
         self.deferred = []
+        self.locked = False
+        self.localsOnly = False
+
+    def lock(self):
+        self.locked = True
+    def unlock(self):
+        self.locked = False
 
     def add_deferred(self, stmt):
+        if self.locked: raise NovaError(stmt, "Cannot add deferred statement to locked environment")
         self.deferred.append(stmt)
 
     def execute_deferred(self, interpreter):
+        if self.locked: raise NovaError(None, "Cannot execute deferred statements in locked environment")
         # Execute in reverse order of deferral
         while self.deferred:
             stmt = self.deferred.pop()
             interpreter.execute_stmt(stmt, self)
 
     def define(self, name, value):
+        if self.locked: raise NovaError(None, "Cannot define variable in locked environment")
         self.values[name] = value
 
     def has(self, name):
@@ -314,9 +337,10 @@ class Environment:
             return False
 
     def assign(self, name, value, tok):
+        if self.locked: raise NovaError(tok, "Cannot assign to variable in locked environment")
         if name in self.values:
             self.values[name] = value
-        elif self.parent:
+        elif self.parent and not self.localsOnly:
             self.parent.assign(name, value, tok)
         else:
             raise NovaError(tok, f"Undefined variable {name}")
@@ -330,6 +354,9 @@ class Environment:
             if tok:
                 raise NovaError(tok, f"Undefined variable {name}")
             raise Exception(f"Undefined variable {name}") # Fallback for internal errors without token
+
+    def __repr__(self):
+        return str(self.values)
 
 # --- Runtime representation of a NovaScript class ---
 class NovaClass:
@@ -346,10 +373,6 @@ class NovaClass:
     def instantiate(self, args, instance_token, instance_obj=None):
         instance = instance_obj if instance_obj is not None else {}
 
-        # First, handle superclass construction if applicable and this is the top-level call
-        if self.super_class and instance_obj is None: # Only call superclass constructor if this is the initial instantiation
-            self.super_class.instantiate(args, instance_token, instance)
-
         # Initialize instance properties
         for prop_name, prop_def in self.instance_properties.items():
             prop_value = None
@@ -365,32 +388,36 @@ class NovaClass:
                 method_env = Environment(self.env) # Method's scope
                 method_env.define("self", instance) # 'self' refers to the instance
 
-                # Handle 'super' call within instance methods
+                # Handle 'super' object for instance methods
                 if self.super_class:
-                    def super_call(*super_method_args, _method_name=_method_name): # Capture method_name for super
-                        super_method = self.super_class.instance_methods.get(_method_name)
-                        if not super_method:
-                            raise NovaError(instance_token, f"Method '{_method_name}' not found in superclass '{self.super_class.name}'.")
+                    super_obj = {}
+                    for super_method_name, super_method_def in self.super_class.instance_methods.items():
+                        def super_method_wrapper(*super_args, _super_method_def=super_method_def, _super_method_name=super_method_name):
+                            # The environment for the super method call should be based on the superclass's definition environment
+                            # but with 'self' bound to the current instance.
+                            super_method_env = Environment(self.super_class.env)
+                            super_method_env.define("self", instance) # 'self' still refers to the current instance
 
-                        def temp_super_func(*temp_args):
-                            temp_super_env = Environment(self.super_class.env)
-                            temp_super_env.define("self", instance) # 'self' still refers to the current instance
-                            for i, param in enumerate(super_method.parameters):
-                                arg_val = temp_args[i] if i < len(temp_args) else None
+                            # Handle parameters for the super method
+                            for i, param in enumerate(_super_method_def.parameters):
+                                arg_val = super_args[i] if i < len(super_args) else None
                                 if arg_val is None and param.default is not None:
+                                    # Evaluate default in the superclass's definition environment
                                     arg_val = self.interpreter.evaluate_expr(param.default, self.super_class.env)
                                 elif arg_val is None and param.default is None:
-                                    raise NovaError(param, f"Missing argument for parameter '{param.name}' in super method '{_method_name}'.")
+                                    raise NovaError(param, f"Missing argument for parameter '{param.name}' in super method '{_super_method_name}'.")
                                 if param.annotation_type:
                                     check_type(param.annotation_type, arg_val, param, self.interpreter)
-                                temp_super_env.define(param.name, arg_val)
+                                super_method_env.define(param.name, arg_val)
+
                             try:
-                                self.interpreter.execute_block(super_method.body, temp_super_env)
+                                self.interpreter.execute_block(_super_method_def.body, super_method_env)
                             except ReturnException as e:
                                 return e.value
                             return None # NovaScript functions return undefined if no explicit return
-                        return temp_super_func(*super_method_args)
-                    method_env.define("super", super_call)
+
+                        super_obj[super_method_name] = super_method_wrapper
+                    method_env.define("super", super_obj) # Define 'super' as the object containing super methods
 
                 # Handle parameters for current method
                 for i, param in enumerate(_method_def.parameters):
@@ -411,39 +438,46 @@ class NovaClass:
 
             instance[method_name] = nova_method
 
-        # Handle constructor call (only if this is the top-level instantiation)
-        if instance_obj is None:
-            if self.constructor_def:
-                constructor_env = Environment(self.env)
-                constructor_env.define("self", instance)
-                # Define 'super' for constructor's environment
-                if self.super_class:
-                    def super_constructor_call(*super_args):
-                        if not self.super_class: # Should not happen given the check above
-                            raise NovaError(instance_token, "Cannot call super() in a class without a superclass.")
-                        self.super_class.instantiate(super_args, instance_token, instance) # Pass current instance
-                    constructor_env.define("super", super_constructor_call)
+        # --- FIX START ---
+        # The constructor should always be called for the current class when its instantiate method is invoked,
+        # regardless of whether it's the top-level instantiation or a call from super().
+        if self.constructor_def:
+            constructor_env = Environment(self.env)
+            constructor_env.define("self", instance)
+            # Define 'super' for constructor's environment IF a superclass exists
+            if self.super_class:
+                def super_constructor_call(*super_args):
+                    if not self.super_class:
+                        raise NovaError(instance_token, "Cannot call super() in a class without a superclass.")
+                    self.super_class.instantiate(super_args, instance_token, instance) # Pass current instance
+                constructor_env.define("super", super_constructor_call)
 
-                # Handle constructor parameters
-                for i, param in enumerate(self.constructor_def.parameters):
-                    arg_val = args[i] if i < len(args) else None
-                    if arg_val is None and param.default is not None:
-                        arg_val = self.interpreter.evaluate_expr(param.default, self.env)
-                    elif arg_val is None and param.default is None:
-                        raise NovaError(param, f"Missing argument for parameter '{param.name}' in constructor of '{self.name}'.")
-                    if param.annotation_type:
-                        check_type(param.annotation_type, arg_val, param, self.interpreter)
-                    constructor_env.define(param.name, arg_val)
+            # Handle constructor parameters
+            for i, param in enumerate(self.constructor_def.parameters):
+                arg_val = args[i] if i < len(args) else None
+                if arg_val is None and param.default is not None:
+                    arg_val = self.interpreter.evaluate_expr(param.default, self.env)
+                elif arg_val is None and param.default is None:
+                    raise NovaError(param, f"Missing argument for parameter '{param.name}' in constructor of '{self.name}'.")
+                if param.annotation_type:
+                    check_type(param.annotation_type, arg_val, param, self.interpreter)
+                constructor_env.define(param.name, arg_val)
 
-                try:
-                    self.interpreter.execute_block(self.constructor_def.body, constructor_env)
-                except ReturnException:
-                    # Constructors don't typically return values, but if they do, ignore it.
-                    pass
+            try:
+                self.interpreter.execute_block(self.constructor_def.body, constructor_env)
+            except ReturnException:
+                # Constructors don't typically return values, but if they do, ignore it.
+                pass
+        # --- FIX END ---
         return instance
 
+VAR_TYPES = ["string","number","boolean","function","list"]
 # --- Helper function for type checking ---
 def check_type(expected, value, token, interpreter):
+    """
+    possible:
+        VAR_TYPES
+    """
     actual_expected = expected
     if expected == "bool":
         actual_expected = "boolean" # Map 'bool' from parser to 'boolean' for Python type checking
@@ -460,9 +494,9 @@ def check_type(expected, value, token, interpreter):
     elif actual_expected == "function":
         if not callable(value):
             raise NovaError(token, f"Type mismatch: expected function, got {type(value).__name__}")
-    elif actual_expected == "void":
-        if value is not None:
-            raise NovaError(token, f"Type mismatch: expected void, got {type(value).__name__}")
+    elif actual_expected == "list":
+        if not isinstance(value, list):
+            raise NovaError(token, f"Type mismatch: expected list, got {type(value).__name__}")
     else:
         # Check for custom types
         custom_type_definition = interpreter.custom_types.get(expected) # Use original 'expected' for lookup
@@ -481,30 +515,22 @@ def check_type(expected, value, token, interpreter):
 # --- Global Initialization ---
 def init_globals(globals_env):
     globals_env.define('print', print)
-    runtime_version = {
-        "major": 0,
-        "minor": 7,
-        "patch": 5
-    }
-
-    # Create a dummy token for internal/bootstrap errors in init_globals
-    internal_token = Token("internal", "init", "internal_init.py", 1, 1)
-
-    globals_env.define("isArray", lambda obj: isinstance(obj, list))
+    globals_env.define('input', input)
+    globals_env.define("tuple", tuple)
 
     class Logger:
         @staticmethod
         def info(*args):
-            now = datetime.datetime.now()
-            print(f"[info {globals_env.get('Runtime', internal_token).versionString}| at: {now.hour}:{now.minute}:{now.second}]:", *args)
+            now = datetime.datetime.now().strftime("%H:%M:%S")
+            print(f"[info at: {now}]:", *args)
         @staticmethod
         def warn(*args):
-            now = datetime.datetime.now()
-            print(f"[warn {globals_env.get('Runtime', internal_token).versionString}| at: {now.hour}:{now.minute}:{now.second}]:", *args, file=sys.stderr)
+            now = datetime.datetime.now().strftime("%H:%M:%S")
+            print(f"[warn at: {now}]:", *args, file=sys.stderr)
         @staticmethod
         def error(*args):
-            now = datetime.datetime.now()
-            print(f"[error {globals_env.get('Runtime', internal_token).versionString}| at: {now.hour}:{now.minute}:{now.second}]:", *args, file=sys.stderr)
+            now = datetime.datetime.now().strftime("%H:%M:%S")
+            print(f"[error at: {now}]:", *args, file=sys.stderr)
     globals_env.define("Logger", Logger)
 
     class Is:
@@ -514,11 +540,26 @@ def init_globals(globals_env):
         def number(n): return isinstance(n, (int, float))
         @staticmethod
         def boolean(b): return isinstance(b, bool)
+        @staticmethod
+        def array(a): return isinstance(a, list)  # renamed to be more idiomatic
+
     globals_env.define("is", Is)
+    class Has:
+        @staticmethod
+        def key(d, k): 
+            return isinstance(d, dict) and k in d
+
+        @staticmethod
+        def value(d, v): 
+            return isinstance(d, dict) and v in d.values()
+
+        @staticmethod
+        def item(c, x): 
+            return x in c  # works for list, str, set, tuple
+
+    globals_env.define("has", Has)
 
     #args = sys.argv[2:] # Skip script name and NovaScript file name
-
-    globals_env.define("json", json)
 
     class Parse:
         @staticmethod
@@ -528,39 +569,42 @@ def init_globals(globals_env):
         @staticmethod
         def str(s): return str(s)
         @staticmethod
-        def bool(s): return bool(s)
-    globals_env.define("parse", Parse)
+        def bool(s):
+            if isinstance(s, str):
+                return s.lower() in ("true", "1", "yes")
+            return bool(s)
+        @staticmethod
+        def array(s): return list(s)
+        @staticmethod
+        def dict(s): return dict(s)
+    globals_env.define("Parse", Parse)
+    globals_env.define("len", len)
 
     globals_env.define("math", math)
+    globals_env.define("NaN", math.nan)
     globals_env.define("null", None)
     globals_env.define("undefined", None)
     globals_env.define("void", None)
-    globals_env.define("NaN", float('nan'))
+    def delete(x,y): # i could not figure out how to make this into a keyword, so this is the next best thing
+        del x[y]
+    globals_env.define("delete", delete)
+    # globals_env.define("includes", lambda x,y: y in x) # replaced by "has.item"
 
     class Runtime:
-        @staticmethod
-        def dump_keys(obj): return list(obj.keys())
-        @staticmethod
-        def dump_values(obj): return list(obj.values())
-        dump = {
-            "keys": dump_keys,
-            "values": dump_values
-        }
-        version = runtime_version
-        versionString = f"v{runtime_version['major']}.{runtime_version['minor']}.{runtime_version['patch']}"
-        currentDirectory = os.getcwd
+        class Dump:# since this is in the Runtime's "body", it is still visible, yell at python, not me
+            @staticmethod
+            def keys(obj): return list(obj.keys())
+            @staticmethod
+            def values(obj): return list(obj.values())
+            @staticmethod
+            def object(obj): return dir(obj)
+
         @staticmethod
         def regex(pattern, options=""): return re.compile(pattern, 0 if 'i' not in options else re.IGNORECASE)
         args = sys.argv[2:]
         @staticmethod
         def exit(code=0): sys.exit(code)
-        @staticmethod
-        def versionAtLeast(maj, min, pat):
-            if runtime_version['major'] > maj: return True
-            if runtime_version['major'] < maj: return False
-            if runtime_version['minor'] > min: return True
-            if runtime_version['minor'] < min: return False
-            return runtime_version['patch'] >= pat
+
         @staticmethod
         def env(key=None):
             if key: return os.environ.get(key)
@@ -574,24 +618,27 @@ def init_globals(globals_env):
 
         class Fs:
             @staticmethod
-            def read(path):
-                with open(path, 'r', encoding='utf8') as f:
+            def read(path, opts={"mode":"r", "encoding":"utf8"}):
+                with open(path, **opts) as f:
                     return f.read()
             @staticmethod
-            def write(path, contents):
-                with open(path, 'w', encoding='utf8') as f:
+            def open(path, opts={"mode":"r", "encoding":"utf8"}):
+                return open(path, **opts) # interpreter turns nova's objects into dicts when passing back to python, so this is safe
+            @staticmethod
+            def write(path, contents, opts={"mode":"r", "encoding":"utf8"}):
+                with open(path, **opts) as f:
                     f.write(contents)
             @staticmethod
             def exists(path):
                 return os.path.exists(path)
-        fs = Fs
+
 
         class Uri:
             @staticmethod
             def decode(s): return unquote(s)
             @staticmethod
             def encode(s): return quote(s)
-        URI = Uri
+
 
         class Time:
             @staticmethod
@@ -599,20 +646,20 @@ def init_globals(globals_env):
             @staticmethod
             def str(): return str(datetime.datetime.now())
             @staticmethod
-            def hrtime(): return str(time.perf_counter_ns()) # High-resolution time in nanoseconds
-        time = Time
+            def hrtime(): return time.perf_counter_ns() # High-resolution time in nanoseconds
+
     globals_env.define('Runtime', Runtime)
+
 
 
 class Interpreter:
     keywords = [
         "var", "if", "else", "elseif", "end", "break", "continue", "func",
-        "return", "import", "as", "namespace", "while", "forEach", "for",
+        "return", "import", "as", "scope", "while", "forEach", "for",
         "do", "in", "test", "failed", "defer",
         "switch", "case", "default", "using",
-        "def",
-        "define",
-        "class", "inherits", "static", "new", "super"
+        "def", "define", "enum",
+        "class", "inherits", "static", "new"
     ]
 
     def __init__(self, file_path):
@@ -623,19 +670,12 @@ class Interpreter:
         self.tokens = self.tokenize(self.source, self.file)
         self.current = 0
         self.globals = Environment()
-        self.functions = {} # Not used directly in TS, but keeping for consistency if needed
         self.imported_files = set()
         self.current_env = None
         self.custom_types = {} # Dictionary for custom types
 
         init_globals(self.globals)
         self.globals.define("__SCRIPT_PATH__", os.path.dirname(os.path.abspath(self.file)))
-
-    def expose_js_class(self, name, py_class):
-        """Exposes a Python class to the NovaScript environment."""
-        if not (isinstance(py_class, type) and hasattr(py_class, '__init__')):
-            raise TypeError(f"Cannot expose '{name}': Provided value is not a valid Python class.")
-        self.globals.define(name, py_class)
 
     # --- Tokenization ---
     def tokenize(self, source, file):
@@ -712,14 +752,34 @@ class Interpreter:
             if matched_operator:
                 continue
 
-            # Numbers (supporting decimals)
+            # Numbers (supporting decimals and hex values)
             if char.isdigit():
                 num = ""
-                while i < length and (source[i].isdigit() or source[i] == '.'):
-                    num += source[i]
-                    i += 1
-                    col += 1
-                tokens.append(Token("number", float(num) if '.' in num else int(num), file, line, start_col))
+                if i + 1 < length and source[i] == '0' and source[i+1] in 'xX':
+                    # 0x1f24 for example
+                    i+=2
+                    col+=2
+                    validHexValues = set("0123456789abcdefABCDEF")
+                    # the way this is wired, prevents stuff like "0x1fhi()", since h is not a valid hex value, it throws right there
+                    while i < length and (source[i].isalnum() or source[i] == '_'):
+                        if source[i] == "_":
+                            i += 1
+                            col +=1
+                            continue
+                        if source[i] in validHexValues:
+                            num += source[i]
+                        else:
+                            raise NovaError(Token("error", "Invalid hex number", file, line, col), "Invalid hex number")
+                        i += 1
+                        col += 1
+
+                    tokens.append(Token("number", int(num, 16), file, line, start_col))
+                else:
+                    while i < length and (source[i].isdigit() or source[i] == '.'):
+                        num += source[i]
+                        i += 1
+                        col += 1
+                    tokens.append(Token("number", float(num) if '.' in num else int(num), file, line, start_col))
                 continue
 
             # Strings: delimited by double quotes.
@@ -781,7 +841,7 @@ class Interpreter:
     def expect_type(self, type_str):
         token = self.get_next_token()
         if not token or token.type != type_str:
-            raise NovaError(token, f"Expected token type {type_str}, got {token.type if token else 'EOF'}")
+            raise NovaError(token, f"Expected token type {type_str}, got {token if token else 'EOF'}")
         return token
 
     def expect_token(self, value):
@@ -887,7 +947,7 @@ class Interpreter:
                         annotation_type = None
                         if self.get_next_token() and self.get_next_token().type == "identifier":
                             type_token = self.get_next_token()
-                            if type_token.value in ["string", "number", "bool", "boolean"] or type_token.value in self.custom_types:
+                            if type_token.value in VAR_TYPES or type_token.value in self.custom_types:
                                 annotation_type = type_token.value
                                 self.consume_token()
 
@@ -999,7 +1059,7 @@ class Interpreter:
                 var_annotation_type = None
                 if (self.get_next_token() and
                     self.get_next_token().type == "identifier" and
-                    (self.get_next_token().value in ["string", "number", "boolean", "void", "bool"] or
+                    (self.get_next_token().value in VAR_TYPES or
                     self.get_next_token().value in self.custom_types)): # Parentheses for clarity
                     var_annotation_type = self.get_next_token().value
                     self.consume_token()
@@ -1036,20 +1096,47 @@ class Interpreter:
 
             elif token.value == "using":
                 self.consume_token()
-                # Parse the fully qualified name, e.g., "module.sub.name"
-                name_parts = []
-                name_part_token = self.expect_type("identifier")
-                name_parts.append(name_part_token.value)
-                self.consume_token() # Consume the first identifier
+                if self.get_next_token().value == "[":
+                    values = []
+                    #print(self.get_next_token())
+                    self.consume_token()
+                    while self.get_next_token() and self.get_next_token().value != "]":
+                        # Parse the fully qualified name, e.g., "module.sub.name"
+                        name_parts = []
+                        name_part_token = self.expect_type("identifier")
+                        name_parts.append(name_part_token.value)
+                        self.consume_token() # Consume the first identifier
 
-                while self.get_next_token() and self.get_next_token().value == ".":
-                    self.consume_token() # Consume the dot
+                        while self.get_next_token() and self.get_next_token().value == ".":
+                            self.consume_token() # Consume the dot
+                            name_part_token = self.expect_type("identifier")
+                            name_parts.append(name_part_token.value)
+                            self.consume_token() # Consume the next identifier
+
+                        full_name = ".".join(name_parts)
+                        values.append(full_name)
+                        if self.get_next_token() and self.get_next_token().value == ",":
+                            self.consume_token()
+                        else:
+                            break
+                    self.expect_token("]")
+                    self.consume_token()
+                    return UsingStmt(values, token.file, token.line, token.column)
+                else:
+                    # Parse the fully qualified name, e.g., "module.sub.name"
+                    name_parts = []
                     name_part_token = self.expect_type("identifier")
                     name_parts.append(name_part_token.value)
-                    self.consume_token() # Consume the next identifier
+                    self.consume_token() # Consume the first identifier
 
-                full_name = ".".join(name_parts)
-                return UsingStmt(full_name, token.file, token.line, token.column)
+                    while self.get_next_token() and self.get_next_token().value == ".":
+                        self.consume_token() # Consume the dot
+                        name_part_token = self.expect_type("identifier")
+                        name_parts.append(name_part_token.value)
+                        self.consume_token() # Consume the next identifier
+
+                    full_name = ".".join(name_parts)
+                    return UsingStmt(full_name, token.file, token.line, token.column)
 
             elif token.value == "test":
                 self.consume_token()
@@ -1144,7 +1231,7 @@ class Interpreter:
                     token.file, token.line, token.column
                 )
 
-            elif token.value == "namespace":
+            elif token.value == "scope":
                 self.consume_token()
                 namespace_name_token = self.expect_type("identifier")
                 namespace_name = namespace_name_token.value
@@ -1152,7 +1239,7 @@ class Interpreter:
                 namespace_body = self.parse_block_until(["end"])
                 self.expect_token("end")
                 self.consume_token()
-                return NamespaceStmt(namespace_name, namespace_body, token.file, token.line, token.column)
+                return ScopeStmt(namespace_name, namespace_body, token.file, token.line, token.column)
 
             elif token.value == "func":
                 self.consume_token()
@@ -1172,7 +1259,7 @@ class Interpreter:
                         annotation_type = None
                         if self.get_next_token() and self.get_next_token().type == "identifier":
                             type_token = self.get_next_token()
-                            if type_token.value in ["string", "number", "bool", "boolean"] or type_token.value in self.custom_types:
+                            if type_token.value in VAR_TYPES or type_token.value in self.custom_types:
                                 annotation_type = type_token.value
                                 self.consume_token()
 
@@ -1214,24 +1301,24 @@ class Interpreter:
                     token.file, token.line, token.column
                 )
 
-            elif token.value == "def": # Lambda statement (def (...) ... end)
-                # This is a statement that *declares* a lambda and assigns it.
-                # The TS code treats `def` as a keyword for both statement and expression.
-                # Here, we'll parse it as a lambda expression and then wrap it in an ExpressionStmt.
-                # The full `def` statement (e.g., `x = def() end`) is handled in parse_primary.
-                # This `def` keyword here is for standalone lambda declarations, which is not typical in NovaScript.
-                # Re-evaluating this based on the TS code:
-                # The `def` keyword in `parseStatement` is for a standalone lambda declaration.
-                # It seems like it's meant to define a lambda and then implicitly assign it or use it.
-                # Given the TS code, it's parsed as a LambdaDecl statement.
-                # For simplicity, if it's a standalone `def` statement, it should likely be assigned to a variable.
-                # The TS code's `LambdaDecl` is an `Expression`.
-                # So if `def` is used as a statement, it's likely an error or a lambda that's immediately executed.
-                # Let's assume it's meant to be an expression that is then part of an ExpressionStmt.
-                # The TS `parseStatement` calls `parseExpression` as a fallback.
-                # So, the `def` keyword should only be handled in `parsePrimary` for expressions.
-                # Removing the `def` case from `parse_statement` and relying on `parse_expression` fallback.
-                pass # Fall through to expression statement
+            elif token.value == "enum":
+                self.consume_token()
+                name = self.expect_type("identifier")
+                self.consume_token()
+                self.expect_token("{")
+                self.consume_token()
+                values = []
+                while self.get_next_token() and self.get_next_token().value != "}":
+                    values.append(self.expect_type("identifier").value)
+                    self.consume_token()
+                self.expect_token("}")
+                self.consume_token()
+
+                if len(values) < 1:
+                    raise NovaError(token, "Enum must have at least one value.")
+
+                return EnumDef(name.value, values, token.file, token.line, token.column)
+
 
             elif token.value == "return":
                 self.consume_token()
@@ -1240,7 +1327,6 @@ class Interpreter:
                 if self.get_next_token() and self.get_next_token().value not in self.keywords:
                     return_expression = self.parse_expression()
                 return ReturnStmt(return_expression, token.file, token.line, token.column)
-
             elif token.value == "import":
                 self.consume_token()
                 file_token = self.expect_type("string")
@@ -1357,7 +1443,7 @@ class Interpreter:
     def parse_unary(self):
         if (self.get_next_token() and
             self.get_next_token().type == "operator" and
-            self.get_next_token().value in ["-", "!"]):
+            self.get_next_token().value in ["-", "!","#"]):
             operator_token = self.consume_token()
             operator = operator_token.value
             right = self.parse_unary()
@@ -1481,9 +1567,23 @@ class Interpreter:
             node = Identifier(token.value, token.file, token.line, token.column)
         elif token.type == "keyword" and token.value == "new":
             self.consume_token() # consume 'new'
-            class_name_token = self.expect_type("identifier")
-            class_name = class_name_token.value
-            self.consume_token() # consume class name
+            # Parse the fully qualified class name, e.g., "module.sub.ClassName"
+            name_parts = []
+            name_part_token = self.expect_type("identifier")
+            name_parts.append(name_part_token.value)
+            # Use the token from the first part of the name for error reporting
+            new_instance_file = name_part_token.file
+            new_instance_line = name_part_token.line
+            new_instance_column = name_part_token.column
+            self.consume_token() # Consume the first identifier
+
+            while self.get_next_token() and self.get_next_token().value == ".":
+                self.consume_token() # Consume the dot
+                name_part_token = self.expect_type("identifier")
+                name_parts.append(name_part_token.value)
+                self.consume_token() # Consume the next identifier
+
+            full_class_name = ".".join(name_parts)
 
             self.expect_token("(")
             self.consume_token()
@@ -1499,8 +1599,8 @@ class Interpreter:
             self.expect_token(")")
             self.consume_token()
             node = NewInstance(
-                class_name, args,
-                class_name_token.file, class_name_token.line, class_name_token.column
+                full_class_name, args,
+                new_instance_file, new_instance_line, new_instance_column
             )
         elif token.value == "def": # Lambda expression (def (...) ... end)
             self.consume_token()
@@ -1517,7 +1617,7 @@ class Interpreter:
                     annotation_type = None
                     if self.get_next_token() and self.get_next_token().type == "identifier":
                         type_token = self.get_next_token()
-                        if type_token.value in ["string", "number", "bool", "boolean"] or type_token.value in self.custom_types:
+                        if type_token.value in VAR_TYPES or type_token.value in self.custom_types:
                             annotation_type = type_token.value
                             self.consume_token()
 
@@ -1620,9 +1720,12 @@ class Interpreter:
         elif stmt.type == "TryStmt":
             try:
                 self.execute_block(stmt.try_block, env)
-            except Exception as e:
+            except NovaFlowControlException:
+                # Re-raise flow control exceptions; they should not be caught by 'test'
+                raise
+            except Exception as e: # Catch all other Python exceptions
                 catch_env = Environment(env)
-                # If e is a NovaError, pass it. Otherwise, wrap it.
+                # If e is a NovaError, use it directly. Otherwise, wrap it.
                 error_to_define = e if isinstance(e, NovaError) else NovaError(stmt, str(e))
                 catch_env.define(stmt.error_var, error_to_define)
                 self.execute_block(stmt.catch_block, catch_env)
@@ -1656,10 +1759,17 @@ class Interpreter:
                     break
                 except ContinueException:
                     continue
+        elif stmt.type == "EnumDef":
+            v = Environment()# no sense copying env here
+            for i in range(len(stmt.values)):
+                v.define(stmt.values[i], i)
+
+            v.lock()
+            env.define(stmt.name, v)
 
         elif stmt.type == "ForEachStmt":
             list_val = self.evaluate_expr(stmt.list, env)
-            if not isinstance(list_val, list):
+            if not isinstance(list_val, (list, dict)):
                 raise NovaError(stmt, f"Cannot iterate over non-array type for forEach loop. Got: {type(list_val).__name__}")
             for item in list_val:
                 loop_env = Environment(env)
@@ -1736,7 +1846,6 @@ class Interpreter:
 
             imported_env = Environment(self.globals)
             imported_interpreter.globals = imported_env # Overwrite globals with the new imported_env
-            imported_interpreter.functions = self.functions # Share functions, though not directly used in TS
             imported_interpreter.imported_files = self.imported_files # Share imported files set
 
             imported_interpreter.interpret()
@@ -1749,8 +1858,9 @@ class Interpreter:
             name = stmt.alias or module_name
             env.define(name, namespace)
 
-        elif stmt.type == "NamespaceStmt":
+        elif stmt.type == "ScopeStmt":
             n_env = Environment(env)
+            n_env.localsOnly = True
             self.execute_block(stmt.body, n_env)
             env.define(stmt.name, n_env)
 
@@ -1775,6 +1885,7 @@ class Interpreter:
         elif stmt.type == "ReturnStmt":
             value = self.evaluate_expr(stmt.expression, env) if stmt.expression else None
             raise ReturnException(value)
+
 
         elif stmt.type == "FuncDecl":
             def func_wrapper(*args):
@@ -1854,48 +1965,56 @@ class Interpreter:
             env.define(class_def.name, nova_class)
 
         elif stmt.type == "UsingStmt":
-            # Resolve the fully qualified namespace name
-            name_parts = stmt.name.split('.')
-            current_resolved_object = env # Start resolution from current environment
+            def handle(name, env):
+                # Resolve the fully qualified namespace name
+                name_parts = name.split('.')
+                current_resolved_object = env # Start resolution from current environment
 
-            for i, part in enumerate(name_parts):
-                if isinstance(current_resolved_object, Environment):
-                    # NovaScript Environment: use its get method
-                    next_resolved_part = current_resolved_object.get(part, stmt)
-                elif isinstance(current_resolved_object, dict):
-                    # Python dictionary (e.g., NovaScript object literal, or imported dict-like module): use dict access
-                    next_resolved_part = current_resolved_object.get(part)
-                elif hasattr(current_resolved_object, part):
-                    # Python object (e.g., imported Python module): use getattr
-                    next_resolved_part = getattr(current_resolved_object, part)
-                else:
-                    raise NovaError(stmt, f"Cannot resolve part '{part}' in '{'.'.join(name_parts[:i])}'. Not a namespace, dict, or object with attribute.")
+                for i, part in enumerate(name_parts):
+                    if isinstance(current_resolved_object, Environment):
+                        # NovaScript Environment: use its get method
+                        next_resolved_part = current_resolved_object.get(part, stmt)
+                    elif isinstance(current_resolved_object, dict):
+                        # Python dictionary (e.g., NovaScript object literal, or imported dict-like module): use dict access
+                        next_resolved_part = current_resolved_object.get(part)
+                    elif hasattr(current_resolved_object, part):
+                        # Python object (e.g., imported Python module): use getattr
+                        next_resolved_part = getattr(current_resolved_object, part)
+                    else:
+                        raise NovaError(stmt, f"Cannot resolve part '{part}' in '{'.'.join(name_parts[:i])}'. Not a namespace, dict, or object with attribute.")
 
-                if next_resolved_part is None:
-                    raise NovaError(stmt, f"Namespace '{stmt.name}' part '{part}' not found.")
+                    if next_resolved_part is None:
+                        raise NovaError(stmt, f"scope '{name}' part '{part}' not found.")
 
-                current_resolved_object = next_resolved_part
+                    current_resolved_object = next_resolved_part
 
-            # After resolving the full path, current_resolved_object holds the target namespace/object
-            target_namespace = current_resolved_object
+                # After resolving the full path, current_resolved_object holds the target namespace/object
+                target_namespace = current_resolved_object
 
-            if isinstance(target_namespace, Environment):
-                # Import from NovaScript Environment
-                for key, value in target_namespace.values.items():
-                    env.define(key, value)
-            elif isinstance(target_namespace, dict):
-                # Import from Python dictionary
-                for key, value in target_namespace.items():
-                    env.define(key, value)
-            elif hasattr(target_namespace, '__dict__'):
-                # Import from Python module or class instance (its __dict__)
-                # Filter out built-in/private attributes if desired, or just import all.
-                # For simplicity, let's import all public attributes.
-                for key, value in target_namespace.__dict__.items():
-                    if not key.startswith('_'): # Avoid importing Python's internal/private attributes
+                if isinstance(target_namespace, Environment):
+                    # Import from NovaScript Environment
+                    for key, value in target_namespace.values.items():
                         env.define(key, value)
+                elif isinstance(target_namespace, dict):
+                    # Import from Python dictionary
+                    for key, value in target_namespace.items():
+                        env.define(key, value)
+                elif hasattr(target_namespace, '__dict__'):
+                    # Import from Python module or class instance (its __dict__)
+                    # Filter out built-in/private attributes if desired, or just import all.
+                    # For simplicity, let's import all public attributes.
+                    for key, value in target_namespace.__dict__.items():
+                        if not key.startswith('_'): # Avoid importing Python's internal/private attributes
+                            env.define(key, value)
+                else:
+                    raise NovaError(stmt, f"Cannot 'use' value of type {type(target_namespace).__name__}. Expected a namespace, dict, or Python object with attributes.")
+            #print(stmt)
+            if isinstance(stmt.name, list):
+                for name in stmt.name:
+                    #print(name)
+                    handle(name, env)
             else:
-                raise NovaError(stmt, f"Cannot 'use' value of type {type(target_namespace).__name__}. Expected a namespace, dict, or Python object with attributes.")
+                handle(stmt.name, env)
 
         else:
             raise NovaError(stmt, f"Unknown statement type: {stmt.type}")
@@ -1995,10 +2114,10 @@ class Interpreter:
                     else: # For other Python objects, use setattr if it's an attribute
                         try:
                             setattr(base, final_key, final_value_to_assign)
-                        except AttributeError:
+                        except (AttributeError, TypeError):
                              # Fallback for dicts that are not NovaScript instances but are being assigned to
                              # This handles object literals or other dicts where direct key assignment is expected
-                            if isinstance(base, dict):
+                            if isinstance(base, dict) or isinstance(base, list):
                                 base[final_key] = final_value_to_assign
                             else:
                                 raise NovaError(target, f"Cannot assign to property '{final_key}' of object of type {type(base).__name__}.")
@@ -2035,6 +2154,14 @@ class Interpreter:
                     raise NovaError(expr, f"Unary '-' operator can only be applied to numbers. Got: {type(right).__name__}")
                 return -right
             elif expr.operator == "!": return not right
+            elif expr.operator == "#":
+                if isinstance(right, (list, str, dict)):
+                    return len(right)
+                elif hasattr(right, "__len__"):
+                    return len(right)
+                else:
+                    raise NovaError(expr, f"Unary '#' cannot be applied to {type(right).__name__}")
+
             else:
                 raise NovaError(expr, f"Unknown unary operator: {expr.operator}")
 
@@ -2081,8 +2208,8 @@ class Interpreter:
         elif expr.type == "ArrayAccess":
             arr = self.evaluate_expr(expr.object, env)
             index = self.evaluate_expr(expr.index, env)
-            if not isinstance(arr, (list, dict)):
-                raise NovaError(expr, f"Cannot access index of non-list/dict: {type(arr).__name__}")
+            if not isinstance(arr, (list, dict, str, tuple)):
+                raise NovaError(expr, f"Cannot access index of non-list/dict/indexible: {type(arr).__name__}")
             if not isinstance(index, (int, str)):
                 raise NovaError(expr, f"List/dict index must be a number or string. Got: {type(index).__name__}")
             try:
@@ -2124,9 +2251,26 @@ class Interpreter:
             return obj
 
         elif expr.type == "NewInstance":
-            class_name = expr.class_name
-            target_class = env.get(class_name, expr)
+            # Resolve the fully qualified class name string
+            name_parts = expr.class_name.split('.')
+            current_resolved_object = env # Start resolution from current environment
 
+            for i, part in enumerate(name_parts):
+                if isinstance(current_resolved_object, Environment):
+                    next_resolved_part = current_resolved_object.get(part, expr)
+                elif isinstance(current_resolved_object, dict):
+                    next_resolved_part = current_resolved_object.get(part)
+                elif hasattr(current_resolved_object, part):
+                    next_resolved_part = getattr(current_resolved_object, part)
+                else:
+                    raise NovaError(expr, f"Cannot resolve part '{part}' in class path '{expr.class_name}'. Previous part was type {type(current_resolved_object).__name__}.")
+
+                if next_resolved_part is None:
+                    raise NovaError(expr, f"Class '{expr.class_name}' part '{part}' not found.")
+
+                current_resolved_object = next_resolved_part
+
+            target_class = current_resolved_object
             args = [self.evaluate_expr(arg, env) for arg in expr.arguments]
 
             if isinstance(target_class, NovaClass):
@@ -2135,9 +2279,9 @@ class Interpreter:
                 try:
                     return target_class(*args)
                 except Exception as e:
-                    raise NovaError(expr, f"Error instantiating Python class '{class_name}': {e}")
+                    raise NovaError(expr, f"Error instantiating Python class '{expr.class_name}' (resolved to {target_class}): {e}")
             else:
-                raise NovaError(expr, f"'{class_name}' is not a constructible class.")
+                raise NovaError(expr, f"'{expr.class_name}' (resolved to {target_class}) is not a constructible class.")
 
         elif expr.type == "LambdaDecl":
             def lambda_func_wrapper(*args):
@@ -2167,20 +2311,3 @@ class Interpreter:
             return lambda_func_wrapper
         else:
             raise NovaError(expr, f"Unknown expression type: {expr.type}")
-
-# Example usage (if this were a script):
-# if __name__ == "__main__":
-#     if len(sys.argv) < 2:
-#         print("Usage: python nova_interpreter.py <nova_script_file.nova>")
-#         sys.exit(1)
-#
-#     script_file = sys.argv[1]
-#     try:
-#         interpreter = Interpreter(script_file)
-#         interpreter.interpret()
-#     except NovaError as e:
-#         print(f"NovaScript Error: {e}")
-#         sys.exit(1)
-#     except Exception as e:
-#         print(f"Runtime Error: {e}")
-#         sys.exit(1)
