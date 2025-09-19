@@ -1664,7 +1664,11 @@ export class ParselRuntime {
                 const f = expr as FunctionCall;
                 const fn = ctx.get(f.name, f);
                 if (typeof fn !== "function") throw new ParselError(f, `${f.name} is not a function`);
-                const args = f.arguments.map(arg => this.evaluateExpression(arg, ctx));
+                const args = f.arguments.map(arg => this.evaluateExpression(arg, ctx))
+                .map(e=>{
+                    if(typeof e == "string") return this.interpolate(e, ctx);
+                    return e
+                })
                 return fn(...args);
             }
             case "PropertyAccess": {
