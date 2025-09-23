@@ -528,6 +528,25 @@ class FuncDecl(Statement):
         body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
         return f"{current_indent}func {self.name}({params_str}) do\n{body_str}\n{current_indent}end"
 
+"""
+// this prints itself
+
+var content = ""
+// more or less temporary scoping
+// or whatever python calls it
+with Runtime.Fs.open("main.nova") as a do
+    defer a.close() end
+    content = a.read()
+end
+print(content)
+"""
+class WithStmt(Statement):
+    def __init__(self, expr, alias, body, file, line, column):
+        super().__init__("WithStmt", file, line, column)
+        self.expr = expr
+        self.alias = alias
+        self.body = body
+
 class LambdaDecl(Expression): # LambdaDecl is an expression that evaluates to a function
     def __init__(self, parameters, body, file, line, column):
         super().__init__("LambdaDecl", file, line, column)
@@ -913,7 +932,8 @@ class Interpreter:
         "do", "in", "test", "failed", "defer",
         "switch", "case", "default", "using",
         "def", "define", "enum", "assert",
-        "class", "inherits", "static", "new"
+        "class", "inherits", "static", "new",
+        "with", "as"
     ]
 
     def __init__(self, file_path):
@@ -1425,6 +1445,20 @@ class Interpreter:
                 self.expect_token("end")
                 self.consume_token()
                 return ForEachStmt(for_each_variable, for_each_list_expr, for_each_body, token.file, token.line, token.column)
+
+            elif token.value == "with":
+                self.consume_token()
+                expr = self.parse_expression()
+                self.expect_token("as")
+                self.consume_token()
+                alias = self.expect_type("identifier").value
+                self.consume_token()
+                self.expect_token("do")
+                self.consume_token()
+                body = self.parse_block_until(["end"])
+                self.expect_token("end")
+                self.consume_token()
+                return WithStmt(expr, alias, body, token.file, token.line, token.column)
 
             elif token.value == "for":
                 self.consume_token()
@@ -1989,6 +2023,31 @@ class Interpreter:
                 error_to_define = e if isinstance(e, NovaError) else NovaError(stmt, str(e))
                 catch_env.define(stmt.error_var, error_to_define)
                 self.execute_block(stmt.catch_block, catch_env)
+        elif stmt.type == "WithStmt":
+            nenv = Environment(env)
+            expression_val = self.evaluate_expr(stmt.expr, env)
+            if getattr(expression_val, "__enter__", None):
+                var = expression_val.__enter__()
+            elif isinstance(expression_val, dict) and "__enter__" in expression_val:
+                var = expression_val["__enter__"]()
+
+            nenv.define(stmt.alias, var)
+            try:
+                self.execute_block(stmt.body, nenv)
+            except Exception as e:
+                handled = False
+                if getattr(expression_val, "__exit__", None):
+                    handled = expression_val.__exit__(type(e), e, e.__traceback__)
+                elif isinstance(expression_val, dict) and "__exit__" in expression_val:
+                    handled = expression_val["__exit__"](type(e), e, e.__traceback__)
+
+                if not handled:
+                    raise
+            else:
+                if getattr(expression_val, "__exit__", None):
+                    expression_val.__exit__(None, None, None)
+                elif isinstance(expression_val, dict) and "__exit__" in expression_val:
+                    expression_val["__exit__"](None, None, None)
 
         elif stmt.type == "IfStmt":
             condition = self.evaluate_expr(stmt.condition, env)

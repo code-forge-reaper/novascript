@@ -675,7 +675,7 @@ export class ParselParser {
     }
 
     private isExpressionStart(token: Token): boolean {
-        // Helper to determine if a token can start an expression for options block
+        // Helper to determine if a token can start an expression
         return token.type === "number" ||
             token.type === "string" ||
             token.type === "boolean" ||
@@ -955,9 +955,9 @@ export class ParselParser {
     private parseReturnStatement(): ReturnStmt {
         const returnToken = this.consumeToken(); // consume 'return'
         let expression: Expression | null = null;
-        // In Ren'Py context, 'return' typically doesn't return a value to the caller,
-        // but rather controls flow. Keeping expression optional for consistency.
-        if (this.getNextToken() && !this.keywords.includes(this.getNextToken()!.value)) {
+        // Check if the next token could possibly start an expression.
+        // If it can, parse the expression. Otherwise, the return statement has no expression.
+        if (this.getNextToken() && this.isExpressionStart(this.getNextToken()!)) {
             expression = this.parseExpression();
         }
         return { type: "ReturnStmt", expression, file: returnToken.file, line: returnToken.line, column: returnToken.column };
@@ -1777,6 +1777,16 @@ export function initGlobals(rt: ParselRuntime) {
         // For simplicity, I'll keep the current logic but note it.
         return was;
     });
+
+    rt.context.define("string", (s) => {
+        return s.toString();
+    });
+    rt.context.define("integer", (n) => {
+        return parseInt(n);
+    })
+    rt.context.define("float", (n) => {
+        return parseFloat(n);
+    })
 
     rt.context.define("input", (prompt?: string) => {
         return input(prompt || "");
