@@ -33,3 +33,4 @@ Thumbs.db
 
 # Optional: ignore secrets / config
 .env
+parsel

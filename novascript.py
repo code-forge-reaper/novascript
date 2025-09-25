@@ -177,6 +177,7 @@ class ObjectLiteral(Expression):
             return "{}"
         props_list = []
         for prop in self.properties:
+            # Assuming prop['key'] is a string and prop['value'] is an Expression
             props_list.append(f"{next_indent}{prop['key']}: {prop['value'].__str__(indent_level + 1)}")
         return f"{{\n{',\n'.join(props_list)}\n{current_indent}}}"
 
@@ -290,11 +291,12 @@ class AssertStmt(Statement):
     def __init__(self, expression, message, file, line, column):
         super().__init__("AssertStmt", file, line, column)
         self.expression = expression
-        self.message = (message if message else "Assert error") + ": "
+        self.message = message
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
-        return f"{current_indent}assert {self.expression.__str__(indent_level)}"
+        msg_str = f' "{self.message}"' if self.message else ""
+        return f"{current_indent}assert {self.expression.__str__(indent_level)}{msg_str}"
 
 class ClassDefinition(Statement):
     def __init__(self, name, superclass_name, body, file, line, column):
@@ -528,24 +530,18 @@ class FuncDecl(Statement):
         body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
         return f"{current_indent}func {self.name}({params_str}) do\n{body_str}\n{current_indent}end"
 
-"""
-// this prints itself
-
-var content = ""
-// more or less temporary scoping
-// or whatever python calls it
-with Runtime.Fs.open("main.nova") as a do
-    defer a.close() end
-    content = a.read()
-end
-print(content)
-"""
 class WithStmt(Statement):
     def __init__(self, expr, alias, body, file, line, column):
         super().__init__("WithStmt", file, line, column)
         self.expr = expr
         self.alias = alias
         self.body = body
+
+    def __str__(self, indent_level=0):
+        current_indent = INDENT_STEP * indent_level
+        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        return f"{current_indent}with {self.expr.__str__(indent_level)} as {self.alias} do\n{body_str}\n{current_indent}end"
+
 
 class LambdaDecl(Expression): # LambdaDecl is an expression that evaluates to a function
     def __init__(self, parameters, body, file, line, column):
@@ -850,8 +846,13 @@ def init_globals(globals_env):
         def array(s): return list(s)
         @staticmethod
         def dict(s): return dict(s)
+        @staticmethod
+        def char(i): return chr(i)
+        @staticmethod
+        def toChar(s): return ord(s)
     globals_env.define("Parse", Parse)
     globals_env.define("len", len)
+    globals_env.define("slice", lambda s,i,j: s[i:j])
 
     globals_env.define("math", math)
     globals_env.define("NaN", math.nan)
@@ -898,7 +899,7 @@ def init_globals(globals_env):
             def open(path, opts={"mode":"r", "encoding":"utf8"}):
                 return open(path, **opts) # interpreter turns nova's objects into dicts when passing back to python, so this is safe
             @staticmethod
-            def write(path, contents, opts={"mode":"r", "encoding":"utf8"}):
+            def write(path, contents, opts={"mode":"w", "encoding":"utf8"}):
                 with open(path, **opts) as f:
                     f.write(contents)
             @staticmethod
@@ -1016,7 +1017,7 @@ class Interpreter:
                     matched_operator = True
                 else:
                     # Other single-character punctuation/operators
-                    other_single_ops = "()[]{},:#"
+                    other_single_ops = "()[]{},:#$"
                     if other_single_ops.find(char) != -1: # Use find for string check
                         tokens.append(Token("operator", char, file, line, start_col))
                         i += 1
@@ -1896,6 +1897,33 @@ class Interpreter:
                 full_class_name, args,
                 new_instance_file, new_instance_line, new_instance_column
             )
+        elif token.value == "$":
+            dollar_token = self.consume_token() # Consume '$'
+            identifier_token = self.expect_type("identifier")
+            identifier_name = identifier_token.value
+            self.consume_token() # Consume the identifier
+
+            # Construct 'self.<identifier>'
+            self_identifier = Identifier("self", dollar_token.file, dollar_token.line, dollar_token.column)
+            property_access = PropertyAccess(
+                self_identifier,
+                identifier_name,
+                identifier_token.file, identifier_token.line, identifier_token.column
+            )
+
+            # Construct '<identifier>' for the right-hand side
+            value_identifier = Identifier(
+                identifier_name,
+                identifier_token.file, identifier_token.line, identifier_token.column
+            )
+
+            # Construct 'self.<identifier> = <identifier>'
+            node = AssignmentExpr(
+                property_access,
+                value_identifier,
+                "=", # The assignment operator
+                dollar_token.file, dollar_token.line, dollar_token.column
+            )
         elif token.value == "def": # Lambda expression (def (...) ... end)
             self.consume_token()
             self.expect_token("(")
@@ -2030,6 +2058,8 @@ class Interpreter:
                 var = expression_val.__enter__()
             elif isinstance(expression_val, dict) and "__enter__" in expression_val:
                 var = expression_val["__enter__"]()
+            else:
+                var = expression_val
 
             nenv.define(stmt.alias, var)
             try:
