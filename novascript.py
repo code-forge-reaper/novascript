@@ -428,7 +428,18 @@ class WhileStmt(Statement):
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
         body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
-        return f"{current_indent}while {self.condition.__str__(indent_level)} do\n{body_str}\n{current_indent}end"
+        return f"{current_indent}while {self.condition.__str__(indent_level)}\n{body_str}\n{current_indent}end"
+
+class UntilStmt(Statement):
+    def __init__(self, condition, body, file, line, column):
+        super().__init__("UntilStmt", file, line, column)
+        self.condition = condition
+        self.body = body
+
+    def __str__(self, indent_level=0):
+        current_indent = INDENT_STEP * indent_level
+        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        return f"{current_indent}until {self.condition.__str__(indent_level)}\n{body_str}\n{current_indent}end"
 
 class ForEachStmt(Statement):
     def __init__(self, variable, list, body, file, line, column):
@@ -630,6 +641,7 @@ class Environment:
 # --- Runtime representation of a NovaScript class ---
 class NovaClass:
     def __init__(self, name, super_class, interpreter, env):
+        # super_class can be None, a NovaClass instance, or a Python type/class
         self.name = name
         self.super_class = super_class
         self.interpreter = interpreter
@@ -660,32 +672,51 @@ class NovaClass:
                 # Handle 'super' object for instance methods
                 if self.super_class:
                     super_obj = {}
-                    for super_method_name, super_method_def in self.super_class.instance_methods.items():
-                        def super_method_wrapper(*super_args, _super_method_def=super_method_def, _super_method_name=super_method_name):
-                            # The environment for the super method call should be based on the superclass's definition environment
-                            # but with 'self' bound to the current instance.
-                            super_method_env = Environment(self.super_class.env)
-                            super_method_env.define("self", instance) # 'self' still refers to the current instance
+                    if isinstance(self.super_class, NovaClass):
+                        # Case 1: NovaScript Superclass
+                        for super_method_name, super_method_def in self.super_class.instance_methods.items():
+                            def super_method_wrapper(*super_args, _super_method_def=super_method_def, _super_method_name=super_method_name):
+                                # The environment for the super method call should be based on the superclass's definition environment
+                                # but with 'self' bound to the current instance.
+                                super_method_env = Environment(self.super_class.env)
+                                super_method_env.define("self", instance) # 'self' still refers to the current instance
 
-                            # Handle parameters for the super method
-                            for i, param in enumerate(_super_method_def.parameters):
-                                arg_val = super_args[i] if i < len(super_args) else None
-                                if arg_val is None and param.default is not None:
-                                    # Evaluate default in the superclass's definition environment
-                                    arg_val = self.interpreter.evaluate_expr(param.default, self.super_class.env)
-                                elif arg_val is None and param.default is None:
-                                    raise NovaError(param, f"Missing argument for parameter '{param.name}' in super method '{_super_method_name}'.")
-                                if param.annotation_type:
-                                    check_type(param.annotation_type, arg_val, param, self.interpreter)
-                                super_method_env.define(param.name, arg_val)
+                                # Handle parameters for the super method
+                                for i, param in enumerate(_super_method_def.parameters):
+                                    arg_val = super_args[i] if i < len(super_args) else None
+                                    if arg_val is None and param.default is not None:
+                                        # Evaluate default in the superclass's definition environment
+                                        arg_val = self.interpreter.evaluate_expr(param.default, self.super_class.env)
+                                    elif arg_val is None and param.default is None:
+                                        raise NovaError(param, f"Missing argument for parameter '{param.name}' in super method '{_super_method_name}'.")
+                                    if param.annotation_type:
+                                        check_type(param.annotation_type, arg_val, param, self.interpreter)
+                                    super_method_env.define(param.name, arg_val)
 
-                            try:
-                                self.interpreter.execute_block(_super_method_def.body, super_method_env)
-                            except ReturnException as e:
-                                return e.value
-                            return None # NovaScript functions return undefined if no explicit return
+                                try:
+                                    self.interpreter.execute_block(_super_method_def.body, super_method_env)
+                                except ReturnException as e:
+                                    return e.value
+                                return None # NovaScript functions return undefined if no explicit return
 
-                        super_obj[super_method_name] = super_method_wrapper
+                            super_obj[super_method_name] = super_method_wrapper
+                    elif isinstance(self.super_class, type):
+                        # Case 2: Python Superclass
+                        # Expose public methods of the Python superclass
+                        for attr_name in dir(self.super_class):
+                            if not attr_name.startswith('_'): # Skip private/magic methods
+                                attr = getattr(self.super_class, attr_name)
+                                if callable(attr):
+                                    def python_super_method_wrapper(*super_args, _attr_name=attr_name):
+                                        super_method = getattr(self.super_class, _attr_name)
+                                        try:
+                                            # Call the Python method, passing the NovaScript instance (dict) as 'self'
+                                            return super_method(instance, *super_args)
+                                        except Exception as e:
+                                            # Wrap Python exceptions
+                                            raise NovaError(instance_token, f"Error calling super Python method '{_attr_name}': {e}")
+                                    super_obj[attr_name] = python_super_method_wrapper
+
                     method_env.define("super", super_obj) # Define 'super' as the object containing super methods
 
                 # Handle parameters for current method
@@ -707,18 +738,31 @@ class NovaClass:
 
             instance[method_name] = nova_method
 
-        # --- FIX START ---
         # The constructor should always be called for the current class when its instantiate method is invoked,
         # regardless of whether it's the top-level instantiation or a call from super().
         if self.constructor_def:
             constructor_env = Environment(self.env)
             constructor_env.define("self", instance)
+            
             # Define 'super' for constructor's environment IF a superclass exists
             if self.super_class:
-                def super_constructor_call(*super_args):
-                    if not self.super_class:
-                        raise NovaError(instance_token, "Cannot call super() in a class without a superclass.")
-                    self.super_class.instantiate(super_args, instance_token, instance) # Pass current instance
+                if isinstance(self.super_class, NovaClass):
+                    def super_constructor_call(*super_args):
+                        if not self.super_class:
+                            raise NovaError(instance_token, "Cannot call super() in a class without a superclass.")
+                        self.super_class.instantiate(super_args, instance_token, instance) # Pass current instance
+                elif isinstance(self.super_class, type):
+                    def super_constructor_call(*super_args):
+                        if not self.super_class:
+                            raise NovaError(instance_token, "Cannot call super() in a class without a superclass.")
+                        try:
+                            # Call Python superclass's __init__ method
+                            self.super_class.__init__(instance, *super_args)
+                        except Exception as e:
+                            raise NovaError(instance_token, f"Error calling superclass Python constructor: {e}")
+                else:
+                    raise NovaError(instance_token, f"Internal error: Invalid superclass type {type(self.super_class).__name__}.")
+                    
                 constructor_env.define("super", super_constructor_call)
 
             # Handle constructor parameters
@@ -737,10 +781,9 @@ class NovaClass:
             except ReturnException:
                 # Constructors don't typically return values, but if they do, ignore it.
                 pass
-        # --- FIX END ---
         return instance
 
-VAR_TYPES = ["string","number","boolean","function","list"]
+VAR_TYPES = ["string","number","bool","function","list"]
 # --- Helper function for type checking ---
 def check_type(expected, value, token, interpreter):
     """
@@ -748,18 +791,15 @@ def check_type(expected, value, token, interpreter):
         VAR_TYPES
     """
     actual_expected = expected
-    if expected == "bool":
-        actual_expected = "boolean" # Map 'bool' from parser to 'boolean' for Python type checking
-
     if actual_expected == "number":
         if not isinstance(value, (int, float)):
             raise NovaError(token, f"Type mismatch: expected number, got {type(value).__name__}")
     elif actual_expected == "string":
         if not isinstance(value, str):
             raise NovaError(token, f"Type mismatch: expected string, got {type(value).__name__}")
-    elif actual_expected == "boolean":
+    elif actual_expected == "bool":
         if not isinstance(value, bool):
-            raise NovaError(token, f"Type mismatch: expected boolean, got {type(value).__name__}")
+            raise NovaError(token, f"Type mismatch: expected bool, got {type(value).__name__}")
     elif actual_expected == "function":
         if not callable(value):
             raise NovaError(token, f"Type mismatch: expected function, got {type(value).__name__}")
@@ -808,6 +848,10 @@ def init_globals(globals_env):
         @staticmethod
         def number(n): return isinstance(n, (int, float))
         @staticmethod
+        def int(n): return isinstance(n, (int))
+        @staticmethod
+        def float(n): return isinstance(n, (float))
+        @staticmethod
         def boolean(b): return isinstance(b, bool)
         @staticmethod
         def array(a): return isinstance(a, list)  # renamed to be more idiomatic
@@ -850,14 +894,44 @@ def init_globals(globals_env):
         def char(i): return chr(i)
         @staticmethod
         def toChar(s): return ord(s)
+        @staticmethod
+        def bytes(s): return bytes(s)
+        @staticmethod
+        def toBytes(s, enc="utf8"):
+            import struct
+            # Already bytes/bytearray → pass through
+            if isinstance(s, (bytes, bytearray)):
+                return bytearray(s)
+            
+            # int → single byte
+            if isinstance(s, int):
+                return bytearray([s & 0xFF])
+            
+            # float → 8-byte little-endian double
+            if isinstance(s, float):
+                return bytearray(struct.pack("<d", s))
+            
+            # iterable of ints → convert each to byte
+            if isinstance(s, (list, tuple)):
+                return bytearray([x & 0xFF for x in s])
+            
+            # string → encode
+            if isinstance(s, str):
+                return bytearray(s, enc)
+            
+            raise TypeError(f"Parse.toBytes: unsupported type {type(s)}")
+
     globals_env.define("Parse", Parse)
     globals_env.define("len", len)
+    globals_env.define("hex", hex)
+    globals_env.define("fhex", float.hex)
+    globals_env.define("json", json)
     globals_env.define("slice", lambda s,i,j: s[i:j])
 
     globals_env.define("math", math)
     globals_env.define("NaN", math.nan)
     globals_env.define("null", None)
-    globals_env.define("undefined", None)
+    globals_env.define("undefined", object())
     globals_env.define("void", None)
     def delete(x,y): # i could not figure out how to make this into a keyword, so this is the next best thing
         del x[y]
@@ -929,7 +1003,7 @@ def init_globals(globals_env):
 class Interpreter:
     keywords = [
         "var", "if", "else", "elseif", "end", "break", "continue", "func",
-        "return", "import", "as", "scope", "while", "forEach", "for",
+        "return", "import", "as", "scope", "while", "until", "forEach", "for",
         "do", "in", "test", "failed", "defer",
         "switch", "case", "default", "using",
         "def", "define", "enum", "assert",
@@ -1162,15 +1236,30 @@ class Interpreter:
         superclass_name = None
         if self.get_next_token() and self.get_next_token().value == "inherits":
             self.consume_token() # consume 'inherits'
-            super_name_token = self.expect_type("identifier")
-            superclass_name = super_name_token.value
-            self.consume_token() # consume superclass name
+            
+            # --- MODIFIED LOGIC START ---
+            # Parse the fully qualified superclass name, e.g., "module.sub.ClassName"
+            name_parts = []
+            
+            name_part_token = self.expect_type("identifier")
+            name_parts.append(name_part_token.value)
+            self.consume_token() # Consume the first identifier
+
+            while self.get_next_token() and self.get_next_token().value == ".":
+                self.consume_token() # Consume the dot
+                name_part_token = self.expect_type("identifier")
+                name_parts.append(name_part_token.value)
+                self.consume_token() # Consume the next identifier
+
+            superclass_name = ".".join(name_parts)
+            # --- MODIFIED LOGIC END ---
 
         has_initializer = False
         body = []
         while self.get_next_token() and self.get_next_token().value != "end":
             member_token = self.get_next_token()
             is_static = False
+            #print(member_token)
             if member_token.type == "keyword" and member_token.value == "static":
                 self.consume_token() # consume 'static'
                 is_static = True
@@ -1288,10 +1377,22 @@ class Interpreter:
                     t = self.consume_token().value
                 return AssertStmt(assert_expr, t, token.file, token.line, token.column)
             elif token.value == "define":
-                self.consume_token() # consume 'type'
+                self.consume_token() # consume 'define'
                 custom_type_name_token = self.expect_type("identifier")
                 custom_type_name = custom_type_name_token.value
+                copyFroms = []
                 self.consume_token() # consume type name
+                if self.get_next_token().value == ":":
+                    self.consume_token()
+                    self.expect_token("[")
+                    self.consume_token() # [
+                    while self.get_next_token() and self.get_next_token().value!="]":
+                        self.expect_type("identifier")
+                        copyFroms.append(self.consume_token())
+
+
+                    self.expect_token("]")
+                    self.consume_token()
 
                 self.expect_token("=")
                 self.consume_token() # consume '='
@@ -1321,6 +1422,18 @@ class Interpreter:
 
                 self.expect_token("}")
                 self.consume_token() # consume '}'
+                #for k in properties:
+                #    print("before",k)
+                for t in copyFroms:
+                    #print(t)
+                    tt = self.custom_types[t.value]
+                    for k in tt.properties:
+                        if not k in properties:
+                            properties.append(k)
+                #        print("during", k)
+                    #properties.extend(tt.properties)
+                #for k in properties:
+                #    print("after", k)
                 custom_type_stmt = CustomTypeDeclStmt(
                     custom_type_name, properties,
                     token.file, token.line, token.column
@@ -1490,6 +1603,13 @@ class Interpreter:
                 self.expect_token("end")
                 self.consume_token()
                 return WhileStmt(while_condition, while_body, token.file, token.line, token.column)
+            elif token.value == "until":
+                self.consume_token()
+                while_condition = self.parse_expression()
+                while_body = self.parse_block_until(["end"])
+                self.expect_token("end")
+                self.consume_token()
+                return UntilStmt(while_condition, while_body, token.file, token.line, token.column)
 
             elif token.value == "break":
                 self.consume_token()
@@ -2108,6 +2228,14 @@ class Interpreter:
                     break
                 except ContinueException:
                     continue
+        elif stmt.type == "UntilStmt":
+            while not self.evaluate_expr(stmt.condition, env):
+                try:
+                    self.execute_block(stmt.body, Environment(env))
+                except BreakException:
+                    break
+                except ContinueException:
+                    continue
         elif stmt.type == "EnumDef":
             v = Environment()# no sense copying env here
             for i in range(len(stmt.values)):
@@ -2265,7 +2393,35 @@ class Interpreter:
 
         elif stmt.type == "ClassDefinition":
             class_def = stmt
-            nova_class = NovaClass(class_def.name, None, self, env) # Superclass will be resolved later
+            super_class = None
+            if class_def.superclass_name:
+                # Resolve the fully qualified superclass name
+                name_parts = class_def.superclass_name.split('.')
+                current_resolved_object = env
+                for i, part in enumerate(name_parts):
+                    if isinstance(current_resolved_object, Environment):
+                        next_resolved_part = current_resolved_object.get(part, class_def)
+                    elif isinstance(current_resolved_object, dict):
+                        next_resolved_part = current_resolved_object.get(part)
+                    elif hasattr(current_resolved_object, part):
+                        next_resolved_part = getattr(current_resolved_object, part)
+                    else:
+                        raise NovaError(class_def, f"Cannot resolve part '{part}' in superclass path '{class_def.superclass_name}'.")
+
+                    if next_resolved_part is None:
+                        raise NovaError(class_def, f"Superclass '{class_def.superclass_name}' part '{part}' not found.")
+
+                    current_resolved_object = next_resolved_part
+                
+                super_class = current_resolved_object
+
+                # Allow NovaClass or Python type/class as superclass
+                if not isinstance(super_class, (NovaClass, type)):
+                    raise NovaError(class_def, f"Superclass '{class_def.superclass_name}' resolved to type {type(super_class).__name__}, which is not a class.")
+
+
+            # Pass the resolved super_class to NovaClass
+            nova_class = NovaClass(class_def.name, super_class, self, env)
 
             # Populate static members, instance properties/methods
             for member in class_def.body:
@@ -2303,13 +2459,6 @@ class Interpreter:
                         nova_class.static_members[member.name] = static_method_wrapper
                     else:
                         nova_class.instance_methods[member.name] = member
-
-            # Resolve superclass if exists
-            if class_def.superclass_name:
-                super_class = env.get(class_def.superclass_name, class_def)
-                if not isinstance(super_class, NovaClass):
-                    raise NovaError(class_def, f"Superclass '{class_def.superclass_name}' not found or is not a class.")
-                nova_class.super_class = super_class
 
             env.define(class_def.name, nova_class)
         elif stmt.type == "AssertStmt":
@@ -2429,7 +2578,10 @@ class Interpreter:
 
                 if op == "+=": final_value_to_assign = current_value + assigned_value
                 elif op == "-=": final_value_to_assign = current_value - assigned_value
-                elif op == "*=": final_value_to_assign = current_value * assigned_value
+                elif op == "*=": 
+                    if isinstance(current_value, (int, float)) and not isinstance(assigned_value,(int, float)):
+                        raise NovaError(expr, f"If you wanted to repeat '{current_value}' {assigned_value} times, you'd to '\"{assigned_value}\" * {current_value}'")
+                    final_value_to_assign = current_value * assigned_value
                 elif op == "/=":
                     if assigned_value == 0:
                         raise NovaError(expr, "Division by zero in compound assignment.")
@@ -2634,6 +2786,7 @@ class Interpreter:
             if isinstance(target_class, NovaClass):
                 return target_class.instantiate(args, expr)
             elif isinstance(target_class, type) and hasattr(target_class, '__init__'): # It's a Python class
+                # For Python classes, we instantiate them directly.
                 try:
                     return target_class(*args)
                 except Exception as e:

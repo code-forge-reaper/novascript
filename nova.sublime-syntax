@@ -66,13 +66,13 @@ contexts:
 
 
     # Control flow
-    - match: \b(for|break|continue|forEach|while|do|in|end|else|elseif|if|test|failed|defer)\b
+    - match: \b(for|break|continue|forEach|while|until|do|in|end|else|elseif|if|test|failed|defer)\b
       scope: keyword.control.flow.nova
 
     # Types
     # like: var x number
     # type Entity = {move:function}
-    - match: \b(string|number|function|boolean|void)\b
+    - match: \b(string|number|function|bool|void)\b
       scope: storage.type.nova
 
     # builtin

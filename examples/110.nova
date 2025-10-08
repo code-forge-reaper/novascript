@@ -1,0 +1,53 @@
+var current = "000010000"
+
+func change(str, targetPos, value)
+	var buff = Parse.array(str)
+	buff[targetPos] = value
+	return "".join(buff)
+end
+
+func rule(c)
+	var vals = {
+		"111": "0",
+		"110": "1",
+		"101": "1",
+		"100": "0",
+		"011": "1",
+		"010": "1",
+		"001": "1",
+		"000": "0"
+	}
+	var c = "".join(c)
+	return vals[c]
+end
+
+func calc(cells)
+	var next = cells
+	var size = len(cells)
+
+	for i = 0, size - 1 do
+		// wrap-around indexing
+		var leftIndex = i - 1
+		if leftIndex < 0
+				leftIndex = size - 1
+		end
+		var rightIndex = i + 1
+		if rightIndex >= size
+				rightIndex = 0
+		end
+		var left = cells[leftIndex]
+		var center = cells[i]
+		var right = cells[rightIndex]
+		var c = [left, center, right]
+		var val = rule(c)
+		next = change(next, i, val)
+	end
+
+	return next
+end
+
+for gen = 0, 10 do
+	print(current)
+	current = calc(current)
+end
+

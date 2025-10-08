@@ -98,6 +98,16 @@ forEach fruit in fruits do
     print("  Fruit:", fruit)
 end
 
+// forEach loop (object iteration)
+var actions = {
+  hi: "hello",
+  bye: "goodbye"
+}
+// js style loop thingy
+forEach k in actions do
+  print(k, actions[k])
+end
+
 // Break and Continue
 print("Break and Continue example:")
 for m = 0, 5 do
