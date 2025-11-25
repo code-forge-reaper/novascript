@@ -1004,13 +1004,24 @@ def check_type(expected, value, token, interpreter):
                     token,
                     f"Type mismatch: expected custom type '{expected}', got {type(value).__name__}",
                 )
+            missing = []
+
+            # Collect missing properties
             for prop_def in custom_type_definition.properties:
                 if prop_def.name not in value:
-                    raise NovaError(
-                        token,
-                        f"Type mismatch: custom type '{expected}' is missing property '{prop_def.name}'",
-                    )
-                # Recursively check property type
+                    missing.append(prop_def)
+
+            if missing:
+                missing_list = ""
+                for f in missing:
+                    missing_list+= f"\n- {f.name} ({f.type})"
+                raise NovaError(
+                    token,
+                    f"Type mismatch: custom type '{expected}' is missing properties: {missing_list}",
+                )
+
+            # Now check each property type
+            for prop_def in custom_type_definition.properties:
                 check_type(prop_def.type, value[prop_def.name], token, interpreter)
         else:
             raise NovaError(token, f"Unknown type: {expected}")
@@ -1259,9 +1270,9 @@ def init_globals(globals_env):
 
 def opToName(op):
     def up(st):
-        s = st
+        s = list(st)
         s[0] = s[0].upper()
-        return s
+        return "".join(s)
 
     matches = {
         "+": up("add"),
@@ -3396,8 +3407,12 @@ class Interpreter:
             left = self.evaluate_expr(expr.left, env)
             right = self.evaluate_expr(expr.right, env)
             if isinstance(left, dict):
-                return left[opToName(expr.operator)](right)
-            if expr.operator == "+":
+                op = opToName(expr.operator)
+                v = left[op](right)
+                #print(f"{op = } {left[op](right) = }")
+                #print(f"{left[op]}")
+                return v
+            elif expr.operator == "+":
                 return left + right
             elif expr.operator == "%":
                 return left % right
