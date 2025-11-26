@@ -1014,7 +1014,7 @@ def check_type(expected, value, token, interpreter):
             if missing:
                 missing_list = ""
                 for f in missing:
-                    missing_list+= f"\n- {f.name} ({f.type})"
+                    missing_list += f"\n- {f.name} ({f.type})"
                 raise NovaError(
                     token,
                     f"Type mismatch: custom type '{expected}' is missing properties: {missing_list}",
@@ -1331,7 +1331,6 @@ class Interpreter:
         "static",
         "new",
         "with",
-        "as",
     ]
 
     def __init__(self, file_path):
@@ -3409,8 +3408,8 @@ class Interpreter:
             if isinstance(left, dict):
                 op = opToName(expr.operator)
                 v = left[op](right)
-                #print(f"{op = } {left[op](right) = }")
-                #print(f"{left[op]}")
+                # print(f"{op = } {left[op](right) = }")
+                # print(f"{left[op]}")
                 return v
             elif expr.operator == "+":
                 return left + right

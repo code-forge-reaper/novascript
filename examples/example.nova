@@ -1,0 +1,276 @@
+// novascript/legacy/example/example.nova
+
+// --- 1. Basic Syntax and Variables ---
+
+// Single-line comment
+/*
+ * Multi-line comment.
+ * This script demonstrates various features of NovaScript.
+ */
+
+Logger.info("Starting NovaScript Example!")
+
+// Variable declarations with and without type annotations
+var greeting string = "Hello, NovaScript!"
+var count = 10
+var isActive bool = true
+var price number = 99.99
+
+print("Greeting:", greeting)
+print("Count:", count)
+print("Is Active:", isActive)
+print("Price:", price)
+
+// Null, Undefined, NaN
+var nothing = null
+var notDefined = undefined
+var notANumber = NaN
+print("Nothing:", nothing, "Not Defined:", notDefined, "Not a Number:", notANumber)
+
+// String formatting and concatenation (from String.prototype extensions)
+var formattedString = "The value is {} and the name is {}.".format(count, "Item")
+print("Formatted String:", formattedString)
+
+var concatenatedString = "Part1 " + "Part2 " + "Part3"
+print("Concatenated String:", concatenatedString)
+
+// --- 2. Operators ---
+
+// Arithmetic
+var sum = count + price
+var difference = count - price
+var product = count * price
+var quotient = count / 2
+var remainder = count % 3
+print("Sum:", sum, "Diff:", difference, "Prod:", product, "Quot:", quotient, "Rem:", remainder)
+
+// Comparison
+print("Count > 5:", count > 5)
+print("Price <= 100:", price <= 100)
+print("Greeting == 'Hello, NovaScript!':", greeting == "Hello, NovaScript!")
+print("Is Active != false:", isActive != false)
+
+// Logical
+var complexCondition = (count > 5 && isActive) || (price < 50)
+print("Complex Condition:", complexCondition)
+
+// Assignment and Compound Assignment
+var x = 5
+x += 3 // x is now 8
+print("x after +=:", x)
+x *= 2 // x is now 16
+print("x after *=:", x)
+
+// --- 3. Control Flow ---
+
+// If-Elseif-Else
+var temperature = 25
+if (temperature > 30)
+    print("It's hot!")
+elseif (temperature > 20)
+    print("It's warm.")
+else
+    print("It's cold.")
+end
+
+// While loop
+var i = 0
+while (i < 3)
+    print("While loop iteration:", i)
+    i += 1
+end
+
+// For loop (numeric range)
+print("For loop (1 to 5, step 1):")
+for j = 1, 5 do
+    print("  For loop iteration:", j)
+end
+
+print("For loop (10 to 2, step -2):")
+for k = 10, 2, -2 do
+    print("  For loop iteration:", k)
+end
+
+// ForEach loop (array iteration)
+var fruits = ["apple", "banana", "cherry"]
+print("ForEach loop:")
+forEach fruit in fruits do
+    print("  Fruit:", fruit)
+end
+
+// forEach loop (object iteration)
+var actions = {
+  hi: "hello",
+  bye: "goodbye"
+}
+// js style loop thingy
+forEach k in actions do
+  print(k, actions[k])
+end
+
+// Break and Continue
+print("Break and Continue example:")
+for m = 0, 5 do
+    if m == 2
+        print("  Skipping 2 (continue)")
+        continue
+    end
+    if m == 4
+        print("  Breaking at 4")
+        break
+    end
+    print("  Current m:", m)
+end
+
+// Switch-Case-Default
+var day = "Wednesday"
+switch day
+    case "Monday" do
+        print("Start of the week.")
+    end
+    case "Wednesday" do
+        print("Mid-week.")
+    end
+    default do
+        print("Another day.")
+    end
+end
+
+// Test-Failed (Try-Catch)
+print("Test-Failed example:")
+test
+    print("  Inside test block.")
+    // This will now correctly trigger the 'failed' block
+    Runtime.throw("Simulated division by zero error!")
+    print("  This line will not be reached if error occurs.")
+failed err
+    Logger.error("  Caught an error:", err)
+end
+
+// Defer statement
+print("Defer example:")
+test
+    print("  Entering defer block scope.")
+    defer
+        print("  Deferred statement 1 (executed last).")
+        print("  Still in defer 1 block scope.")
+    end
+    defer
+        print("  Deferred statement 2 (executed first).")
+    end
+    print("  Exiting defer block scope.")
+failed err
+    Logger.error("  Error in defer scope test:", err)
+end
+
+
+// --- 4. Functions ---
+
+// Function declaration with parameters and return
+func add(a number, b number)
+    return a + b
+end
+
+var sumResult = add(5, 7)
+print("Sum (func):", sumResult)
+
+// Function with default parameters and type inference
+func greet(name = "Guest", age = 30)
+    print("Hello, {}! You are {} years old.".format(name, age))
+end
+
+greet("Alice")
+greet()
+greet("Bob", 25)
+
+// Lambda function (anonymous function)
+var multiply = def (x, y)
+    return x * y
+end
+
+print("Multiply (lambda):", multiply(4, 6))
+
+// --- 5. Data Structures ---
+
+// Array literals
+var numbers = [10, 20, 30, 40]
+print("Numbers array:", numbers)
+print("First element:", numbers[0])
+numbers[1] = 25 // Modify element
+print("Modified array:", numbers)
+
+
+// Object literals
+var person = {
+    name: "John Doe",
+    age: 30,
+    isStudent: false,
+    address: {
+        street: "123 Main St",
+        city: "Anytown"
+    }
+}
+print("Person object:", person)
+print("Person name:", person.name)
+print("Person city:", person.address.city)
+person.age = 31 // Modify property
+print("Modified age:", person.age)
+
+// --- 6. Custom Types ---
+
+// Define a custom type 'Point'
+define Point = {
+    x: number,
+    y: number
+}
+
+// Define another custom type 'Rectangle' that uses 'Point'
+define Rectangle = {
+    topLeft: Point,
+    width: number,
+    height: number
+}
+
+// Create an instance of a custom type
+var p1 Point = { x: 10, y: 20 }
+print("Point p1:", p1.x, p1.y)
+
+var rect1 Rectangle = {
+    topLeft: { x: 0, y: 0 },
+    width: 100,
+    height: 50
+}
+print("Rectangle rect1:", rect1.topLeft.x, rect1.topLeft.y, rect1.width, rect1.height)
+
+// --- 7. Classes ---
+
+// Base Class Definition
+class Animal
+    var name: string
+    var sound: string
+
+    func init(name string, sound string)
+        self.name = name
+        self.sound = sound
+        print("Animal created: {}".format(self.name))
+    end
+
+    func makeSound()
+        print("{} says {}!".format(self.name, self.sound))
+    end
+
+    func describe()
+        print("This is an animal named {}.".format(self.name))
+    end
+end
+var animal = new Animal("Lion", "Roar")
+class Cat inherits Animal
+    func init()
+        super("Cat", "Meow")
+    end
+end
+var cat = new Cat()
+animal.makeSound()
+animal.describe()
+cat.makeSound()
+cat.describe()
