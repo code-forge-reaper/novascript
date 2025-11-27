@@ -8,33 +8,24 @@ from urllib.parse import unquote, quote
 import struct
 
 
-# --- Exceptions ---
-class NovaFlowControlException(Exception):
-    """Base class for flow control exceptions that should not be caught by 'test'."""
+# --- Control Flow Classes ---
+class ControlFlow:
+    """Base class for control flow signals"""
 
     pass
 
 
-class ReturnException(NovaFlowControlException):
-    """A special exception used to implement returning values from functions."""
-
+class ReturnFlow(ControlFlow):
     def __init__(self, value):
-        super().__init__("Return")
         self.value = value
 
 
-class BreakException(NovaFlowControlException):
-    """Special exception to implement break."""
-
-    def __init__(self):
-        super().__init__("Break")
+class BreakFlow(ControlFlow):
+    pass
 
 
-class ContinueException(NovaFlowControlException):
-    """Special exception to implement continue."""
-
-    def __init__(self):
-        super().__init__("Continue")
+class ContinueFlow(ControlFlow):
+    pass
 
 
 class NovaError(Exception):
@@ -588,14 +579,17 @@ class ScopeStmt(Statement):
 
 
 class SwitchStmt(Statement):
-    def __init__(self, expression, cases, file, line, column):
+    def __init__(self, expression, cases, strict: bool, file, line, column):
         super().__init__("SwitchStmt", file, line, column)
         self.expression = expression
         self.cases = cases
+        self.strict = strict
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
         cases_str = "\n".join(case.__str__(indent_level + 1) for case in self.cases)
+        if self.strict:
+            return f"{current_indent}switch strict {self.expression.__str__(indent_level)} do\n{cases_str}\n{current_indent}end"
         return f"{current_indent}switch {self.expression.__str__(indent_level)} do\n{cases_str}\n{current_indent}end"
 
 
@@ -671,7 +665,7 @@ class UsingStmt(Statement):
 # --- Environment for variable scoping ---
 class Environment:
     def __init__(self, parent=None):
-        self.values = {}
+        self.values = {"true": True, "false": False}
         self.parent = parent
         self.deferred = []
         self.locked = False
@@ -699,11 +693,15 @@ class Environment:
             interpreter.execute_stmt(stmt, self)
 
     def define(self, name, value):
+        if name == "true" or name == "false":
+            raise ValueError(f"cannot overwrite constant: {name}")
         if self.locked:
             raise NovaError(None, "Cannot define variable in locked environment")
         self.values[name] = value
 
     def has(self, name):
+        if name == "true" or name == "false":
+            raise ValueError(f"cannot overwrite constant: {name}")
         if name in self.values:
             return True
         elif self.parent:
@@ -820,13 +818,12 @@ class NovaClass:
                                         )
                                     super_method_env.define(param.name, arg_val)
 
-                                try:
-                                    self.interpreter.execute_block(
-                                        _super_method_def.body, super_method_env
-                                    )
-                                except ReturnException as e:
-                                    return e.value
-                                return None  # NovaScript functions return undefined if no explicit return
+                                result = self.interpreter.execute_block(
+                                    _super_method_def.body, super_method_env
+                                )
+                                if isinstance(result, ReturnFlow):
+                                    return result.value
+                                return self.interpreter.globals.get("undefined")
 
                             super_obj[super_method_name] = super_method_wrapper
                     elif isinstance(self.super_class, type):
@@ -879,13 +876,10 @@ class NovaClass:
                         )
                     method_env.define(param.name, arg_val)
 
-                try:
-                    self.interpreter.execute_block(_method_def.body, method_env)
-                except ReturnException as e:
-                    return e.value
-                return (
-                    None  # NovaScript functions return undefined if no explicit return
-                )
+                result = self.interpreter.execute_block(_method_def.body, method_env)
+                if isinstance(result, ReturnFlow):
+                    return result.value
+                return self.interpreter.globals.get("undefined")
 
             instance[method_name] = nova_method
 
@@ -948,17 +942,15 @@ class NovaClass:
                     check_type(param.annotation_type, arg_val, param, self.interpreter)
                 constructor_env.define(param.name, arg_val)
 
-            try:
-                self.interpreter.execute_block(
-                    self.constructor_def.body, constructor_env
-                )
-            except ReturnException:
-                # Constructors don't typically return values, but if they do, ignore it.
-                pass
+            result = self.interpreter.execute_block(
+                self.constructor_def.body, constructor_env
+            )
+            # Constructors don't typically return values, but if they do, ignore it.
+        # print(instance, self.name)
         return instance
 
 
-VAR_TYPES = ["string", "number", "bool", "function", "list"]
+VAR_TYPES = ["string", "number", "bool", "function", "list", "any"]
 
 
 # --- Helper function for type checking ---
@@ -968,6 +960,8 @@ def check_type(expected, value, token, interpreter):
         VAR_TYPES
     """
     actual_expected = expected
+    if actual_expected == "any":
+        return value
     if actual_expected == "number":
         if not isinstance(value, (int, float)):
             raise NovaError(
@@ -1033,6 +1027,12 @@ def init_globals(globals_env):
     globals_env.define("print", print)
     globals_env.define("input", input)
     globals_env.define("tuple", tuple)
+
+    def shift(x: list):
+        v = x.pop(0)
+        return v
+
+    globals_env.define("shift", shift)
 
     class Logger:
         @staticmethod
@@ -1276,13 +1276,16 @@ def opToName(op):
 
     matches = {
         "+": up("add"),
+        "-=": up("setDec"),
+        "+=": up("setInc"),
+        "*=": up("setMul"),
         "-": up("sub"),
         "*": up("mul"),
         "/": up("div"),
         "%": up("mod"),
         "^": up("xor"),
-        "&": up("and"),
-        "|": up("or"),
+        "&&": up("and"),
+        "||": up("or"),
         "<<": up("lshift"),
         ">>": up("rshift"),
         "==": up("eq"),
@@ -1319,6 +1322,7 @@ class Interpreter:
         "failed",
         "defer",
         "switch",
+        "strict",
         "case",
         "default",
         "using",
@@ -1535,11 +1539,7 @@ class Interpreter:
                     id_str += source[i]
                     i += 1
                     col += 1
-                if id_str == "true" or id_str == "false":
-                    tokens.append(
-                        Token("boolean", id_str == "true", file, line, start_col)
-                    )
-                elif id_str in self.keywords:
+                if id_str in self.keywords:
                     tokens.append(Token("keyword", id_str, file, line, start_col))
                 else:
                     tokens.append(Token("identifier", id_str, file, line, start_col))
@@ -1919,8 +1919,15 @@ class Interpreter:
 
             elif token.value == "switch":
                 self.consume_token()
+                strict = False
+                if (self.get_next_token()
+                 and self.get_next_token().type == "keyword"
+                 and self.get_next_token().value == "strict"):
+                    self.consume_token()
+                    strict = True
                 switch_expr = self.parse_expression()
                 cases = []
+
                 while (
                     self.get_next_token()
                     and self.get_next_token().type == "keyword"
@@ -1949,7 +1956,7 @@ class Interpreter:
                 self.expect_token("end")
                 self.consume_token()
                 return SwitchStmt(
-                    switch_expr, cases, token.file, token.line, token.column
+                    switch_expr, cases, strict, token.file, token.line, token.column
                 )
 
             elif token.value == "using":
@@ -2271,10 +2278,7 @@ class Interpreter:
                 self.consume_token()
                 return_expression = None
                 # Check if the next token is not a keyword (indicating end of statement or start of expression)
-                if (
-                    self.get_next_token()
-                    and self.get_next_token().value not in self.keywords
-                ):
+                if self.get_next_token() and self.get_next_token().value:
                     return_expression = self.parse_expression()
                 return ReturnStmt(
                     return_expression, token.file, token.line, token.column
@@ -2566,10 +2570,7 @@ class Interpreter:
             )
             raise NovaError(last_token, "Unexpected end of input")
 
-        if token.type == "boolean":
-            self.consume_token()
-            node = Literal(token.value, token.file, token.line, token.column)
-        elif token.type == "number" or token.type == "string":
+        if token.type == "number" or token.type == "string":
             self.consume_token()
             node = Literal(token.value, token.file, token.line, token.column)
         elif token.value == "[":
@@ -2785,7 +2786,10 @@ class Interpreter:
 
         try:
             for stmt in statements:
-                self.execute_stmt(stmt, env)
+                result = self.execute_stmt(stmt, env)
+                if isinstance(result, ControlFlow):
+                    return result
+            return None
         finally:
             # Execute deferred statements in reverse order
             env.execute_deferred(self)
@@ -2813,17 +2817,18 @@ class Interpreter:
             self.evaluate_expr(stmt.expression, env)
 
         elif stmt.type == "BreakStmt":
-            raise BreakException()
+            return BreakFlow()
 
         elif stmt.type == "ContinueStmt":
-            raise ContinueException()
+            return ContinueFlow()
 
         elif stmt.type == "TryStmt":
             try:
-                self.execute_block(stmt.try_block, env)
-            except NovaFlowControlException:
-                # Re-raise flow control exceptions; they should not be caught by 'test'
-                raise
+                result = self.execute_block(stmt.try_block, env)
+                if isinstance(result, ControlFlow) and not isinstance(
+                    result, ReturnFlow
+                ):
+                    return result
             except Exception as e:  # Catch all other Python exceptions
                 catch_env = Environment(env)
                 # If e is a NovaError, use it directly. Otherwise, wrap it.
@@ -2831,7 +2836,9 @@ class Interpreter:
                     e if isinstance(e, NovaError) else NovaError(stmt, str(e))
                 )
                 catch_env.define(stmt.error_var, error_to_define)
-                self.execute_block(stmt.catch_block, catch_env)
+                result = self.execute_block(stmt.catch_block, catch_env)
+                if isinstance(result, ControlFlow):
+                    return result
         elif stmt.type == "WithStmt":
             nenv = Environment(env)
             expression_val = self.evaluate_expr(stmt.expr, env)
@@ -2844,7 +2851,9 @@ class Interpreter:
 
             nenv.define(stmt.alias, var)
             try:
-                self.execute_block(stmt.body, nenv)
+                result = self.execute_block(stmt.body, nenv)
+                if isinstance(result, ControlFlow):
+                    return result
             except Exception as e:
                 handled = False
                 if getattr(expression_val, "__exit__", None):
@@ -2863,41 +2872,49 @@ class Interpreter:
         elif stmt.type == "IfStmt":
             condition = self.evaluate_expr(stmt.condition, env)
             if condition:
-                self.execute_block(stmt.then_block, Environment(env))
+                result = self.execute_block(stmt.then_block, Environment(env))
+                if isinstance(result, ControlFlow):
+                    return result
             elif stmt.else_if:
                 matched = False
-                # Create a new environment for the elseif chain
-                # The TS code creates a new env for elseif chain, then new env for block.
-                # This seems to imply the elseif chain itself shares an env, but its blocks get new ones.
-                # Let's simplify: each block gets its own new env.
                 for elseif_block in stmt.else_if:
                     elseif_condition = self.evaluate_expr(
                         elseif_block["condition"], env
                     )
                     if elseif_condition:
-                        self.execute_block(elseif_block["body"], Environment(env))
+                        result = self.execute_block(
+                            elseif_block["body"], Environment(env)
+                        )
+                        if isinstance(result, ControlFlow):
+                            return result
                         matched = True
                         break
                 if not matched and stmt.else_block:
-                    self.execute_block(stmt.else_block, Environment(env))
+                    result = self.execute_block(stmt.else_block, Environment(env))
+                    if isinstance(result, ControlFlow):
+                        return result
             elif stmt.else_block:
-                self.execute_block(stmt.else_block, Environment(env))
+                result = self.execute_block(stmt.else_block, Environment(env))
+                if isinstance(result, ControlFlow):
+                    return result
 
         elif stmt.type == "WhileStmt":
             while self.evaluate_expr(stmt.condition, env):
-                try:
-                    self.execute_block(stmt.body, Environment(env))
-                except BreakException:
+                result = self.execute_block(stmt.body, Environment(env))
+                if isinstance(result, BreakFlow):
                     break
-                except ContinueException:
+                elif isinstance(result, ReturnFlow):
+                    return result
+                elif isinstance(result, ContinueFlow):
                     continue
         elif stmt.type == "UntilStmt":
             while not self.evaluate_expr(stmt.condition, env):
-                try:
-                    self.execute_block(stmt.body, Environment(env))
-                except BreakException:
+                result = self.execute_block(stmt.body, Environment(env))
+                if isinstance(result, BreakFlow):
                     break
-                except ContinueException:
+                elif isinstance(result, ReturnFlow):
+                    return result
+                elif isinstance(result, ContinueFlow):
                     continue
         elif stmt.type == "EnumDef":
             v = Environment()  # no sense copying env here
@@ -2917,11 +2934,12 @@ class Interpreter:
             for item in list_val:
                 loop_env = Environment(env)
                 loop_env.define(stmt.variable, item)
-                try:
-                    self.execute_block(stmt.body, loop_env)
-                except BreakException:
+                result = self.execute_block(stmt.body, loop_env)
+                if isinstance(result, BreakFlow):
                     break
-                except ContinueException:
+                elif isinstance(result, ReturnFlow):
+                    return result
+                elif isinstance(result, ContinueFlow):
                     continue
 
         elif stmt.type == "ForStmt":
@@ -2945,11 +2963,12 @@ class Interpreter:
                 ):
                     loop_env = Environment(env)
                     loop_env.define(stmt.variable, current_val)
-                    try:
-                        self.execute_block(stmt.body, loop_env)
-                    except BreakException:
+                    result = self.execute_block(stmt.body, loop_env)
+                    if isinstance(result, BreakFlow):
                         break
-                    except ContinueException:
+                    elif isinstance(result, ReturnFlow):
+                        return result
+                    elif isinstance(result, ContinueFlow):
                         current_val += step
                         continue
                     current_val += step
@@ -2957,11 +2976,12 @@ class Interpreter:
                 for i in range(start, end + (1 if step > 0 else -1), step):
                     loop_env = Environment(env)
                     loop_env.define(stmt.variable, i)
-                    try:
-                        self.execute_block(stmt.body, loop_env)
-                    except BreakException:
+                    result = self.execute_block(stmt.body, loop_env)
+                    if isinstance(result, BreakFlow):
                         break
-                    except ContinueException:
+                    elif isinstance(result, ReturnFlow):
+                        return result
+                    elif isinstance(result, ContinueFlow):
                         continue
 
         elif stmt.type == "ImportStmt":
@@ -3032,8 +3052,10 @@ class Interpreter:
         elif stmt.type == "ScopeStmt":
             n_env = Environment(env)
             n_env.localsOnly = True
-            self.execute_block(stmt.body, n_env)
+            result = self.execute_block(stmt.body, n_env)
             env.define(stmt.name, n_env)
+            if isinstance(result, ControlFlow):
+                return result
 
         elif stmt.type == "SwitchStmt":
             value = self.evaluate_expr(stmt.expression, env)
@@ -3046,18 +3068,25 @@ class Interpreter:
                 else:
                     case_val = self.evaluate_expr(case.case_expr, env)
                     if value == case_val:
-                        self.execute_block(case.body, Environment(env))
+                        result = self.execute_block(case.body, Environment(env))
+                        if isinstance(result, ControlFlow):
+                            return result
                         matched = True
                         break  # Exit switch after first match
 
-            if not matched and default_case_body:
-                self.execute_block(default_case_body, Environment(env))
+            if not matched and default_case_body and not stmt.strict:
+                result = self.execute_block(default_case_body, Environment(env))
+                if isinstance(result, ControlFlow):
+                    return result
+
+            if stmt.strict and not matched:
+                raise NovaError(
+                    stmt, f"Switch statement did not match any case for value: {value}"
+                )
 
         elif stmt.type == "ReturnStmt":
-            value = (
-                self.evaluate_expr(stmt.expression, env) if stmt.expression else None
-            )
-            raise ReturnException(value)
+            value = self.evaluate_expr(stmt.expression, env)
+            return ReturnFlow(value)
 
         elif stmt.type == "FuncDecl":
 
@@ -3082,11 +3111,10 @@ class Interpreter:
 
                     func_env.define(param.name, arg_val)
 
-                try:
-                    self.execute_block(stmt.body, func_env)
-                except ReturnException as e:
-                    return e.value
-                return None  # Functions without explicit return return None (undefined)
+                result = self.execute_block(stmt.body, func_env)
+                if isinstance(result, ReturnFlow):
+                    return result.value
+                return self.globals.get("undefined")
 
             env.define(stmt.name, func_wrapper)
 
@@ -3171,11 +3199,10 @@ class Interpreter:
                                         param.annotation_type, arg_val, param, self
                                     )
                                 method_env.define(param.name, arg_val)
-                            try:
-                                self.execute_block(_member.body, method_env)
-                            except ReturnException as e:
-                                return e.value
-                            return None
+                            result = self.execute_block(_member.body, method_env)
+                            if isinstance(result, ReturnFlow):
+                                return result.value
+                            return self.globals.get("undefined")
 
                         nova_class.static_members[member.name] = static_method_wrapper
                     else:
@@ -3405,20 +3432,27 @@ class Interpreter:
         elif expr.type == "BinaryExpr":
             left = self.evaluate_expr(expr.left, env)
             right = self.evaluate_expr(expr.right, env)
+
+            # Handle operator overloading for custom objects (dicts)
             if isinstance(left, dict):
                 op = opToName(expr.operator)
-                v = left[op](right)
-                # print(f"{op = } {left[op](right) = }")
-                # print(f"{left[op]}")
-                return v
-            elif expr.operator == "+":
+                if op in left and callable(left[op]):
+                    try:
+                        return left[op](right)
+                    except Exception as e:
+                        raise NovaError(
+                            expr, f"Error calling overloaded operator '{op}': {e}"
+                        )
+                # If no operator overloading found, fall through to normal operations
+
+            # Normal binary operations
+            if expr.operator == "+":
                 return left + right
             elif expr.operator == "%":
                 return left % right
             elif expr.operator == "-":
                 return left - right
             elif expr.operator == "*":
-                # print(f"{left, right, expr.operator, type(left), type(right) = }")
                 if isinstance(left, (int, float)) and not isinstance(
                     right, (int, float)
                 ):
@@ -3654,11 +3688,10 @@ class Interpreter:
 
                     func_env.define(param.name, arg_val)
 
-                try:
-                    self.execute_block(expr.body, func_env)
-                except ReturnException as e:
-                    return e.value
-                return None  # Functions without explicit return return None
+                result = self.execute_block(expr.body, func_env)
+                if isinstance(result, ReturnFlow):
+                    return result.value
+                return self.globals.get("undefined")
 
             return lambda_func_wrapper
         else:
