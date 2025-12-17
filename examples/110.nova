@@ -1,4 +1,4 @@
-var current = "000010000"
+var current = "000000001"
 
 func change(str, targetPos, value)
 	var buff = Parse.array(str)
@@ -29,11 +29,11 @@ func calc(cells)
 		// wrap-around indexing
 		var leftIndex = i - 1
 		if leftIndex < 0
-				leftIndex = size - 1
+			leftIndex = size - 1
 		end
 		var rightIndex = i + 1
 		if rightIndex >= size
-				rightIndex = 0
+			rightIndex = 0
 		end
 		var left = cells[leftIndex]
 		var center = cells[i]

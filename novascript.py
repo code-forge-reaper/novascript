@@ -118,6 +118,11 @@ class BinaryExpr(Expression):
         return f"({self.left.__str__(indent_level)} {self.operator} {self.right.__str__(indent_level)})"
 
 
+class PipeExpr(BinaryExpr):
+    def __init__(self, left, right, file, line, column):
+        super().__init__("|>", left, right, file, line, column)
+
+
 class UnaryExpr(Expression):
     def __init__(self, operator, right, file, line, column):
         super().__init__("UnaryExpr", file, line, column)
@@ -518,6 +523,19 @@ class ForEachStmt(Statement):
         current_indent = INDENT_STEP * indent_level
         body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
         return f"{current_indent}forEach {self.variable} in {self.list.__str__(indent_level)} do\n{body_str}\n{current_indent}end"
+
+
+# wraps "@thing\ndef _():..."
+class Decorator(Statement):
+    def __init__(self, expr, body, file, line, column):
+        super().__init__("Decorator", file, line, column)
+        self.expr = expr
+        self.body = body
+
+    def __str__(self, indent_level=0):
+        current_indent = INDENT_STEP * indent_level
+        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        return f"{current_indent}@{self.expr.__str__(indent_level)} do\n{body_str}\n{current_indent}end"
 
 
 class ForStmt(Statement):
@@ -1024,7 +1042,16 @@ def check_type(expected, value, token, interpreter):
 
 # --- Global Initialization ---
 def init_globals(globals_env):
-    globals_env.define("print", print)
+    def pprint(*stuff):
+        for id, obj in enumerate(stuff):
+            end = "" if id == len(stuff) - 1 else " "
+            if isinstance(obj, dict) and "Str" in obj:
+                print(obj["Str"](), end=end)
+            else:
+                print(obj, end=end)
+        print()
+
+    globals_env.define("print", pprint)
     globals_env.define("input", input)
     globals_env.define("tuple", tuple)
 
@@ -1077,7 +1104,11 @@ def init_globals(globals_env):
         def array(a):
             return isinstance(a, list)  # renamed to be more idiomatic
 
-    globals_env.define("is", Is)
+        @staticmethod
+        def callable(c):
+            return callable(c)
+
+    globals_env.define("Is", Is)
 
     class Has:
         @staticmethod
@@ -1092,7 +1123,7 @@ def init_globals(globals_env):
         def item(c, x):
             return x in c  # works for list, str, set, tuple
 
-    globals_env.define("has", Has)
+    globals_env.define("Has", Has)
 
     # args = sys.argv[2:] # Skip script name and NovaScript file name
 
@@ -1104,6 +1135,12 @@ def init_globals(globals_env):
         @staticmethod
         def float(s):
             return float(s)
+
+        @staticmethod
+        def number(s):
+            if not isinstance(s, int) or not s.isdigit():
+                raise ValueError(f"Invalid number: {s}")
+            return int(s) if not "." in s else float(s)
 
         @staticmethod
         def str(s):
@@ -1219,8 +1256,7 @@ def init_globals(globals_env):
         def throw(reason, *rest):
             if rest:
                 reason = reason.format(*rest)  # Pythonic way to format
-            runtime_throw_token = Token("runtime", "throw", "runtime_internal.py", 0, 0)
-            raise NovaError(runtime_throw_token, reason)
+            raise Exception(reason)
 
         class Fs:
             @staticmethod
@@ -1420,6 +1456,7 @@ class Interpreter:
                 ">=",
                 "&&",
                 "||",
+                "|>",
             ]
             current_two_char = char + next_char
 
@@ -1432,7 +1469,7 @@ class Interpreter:
                 matched_operator = True
             else:
                 # Single-character operators that might be part of two-char ops, or stand alone
-                potential_single_ops = "=+-*/%<>!."
+                potential_single_ops = "=+-*/%<>!.|"
                 if char in potential_single_ops:
                     tokens.append(Token("operator", char, file, line, start_col))
                     i += 1
@@ -1440,7 +1477,7 @@ class Interpreter:
                     matched_operator = True
                 else:
                     # Other single-character punctuation/operators
-                    other_single_ops = "()[]{},:#$"
+                    other_single_ops = "()[]{},:#$@"
                     if other_single_ops.find(char) != -1:  # Use find for string check
                         tokens.append(Token("operator", char, file, line, start_col))
                         i += 1
@@ -1920,9 +1957,11 @@ class Interpreter:
             elif token.value == "switch":
                 self.consume_token()
                 strict = False
-                if (self.get_next_token()
-                 and self.get_next_token().type == "keyword"
-                 and self.get_next_token().value == "strict"):
+                if (
+                    self.get_next_token()
+                    and self.get_next_token().type == "keyword"
+                    and self.get_next_token().value == "strict"
+                ):
                     self.consume_token()
                     strict = True
                 switch_expr = self.parse_expression()
@@ -2344,7 +2383,7 @@ class Interpreter:
         return expr  # If no assignment operator, it's just a logical OR expression
 
     def parse_logical_or(self):
-        expr = self.parse_logical_and()
+        expr = self.parse_pipeFn()
         while (
             self.get_next_token()
             and self.get_next_token().type == "operator"
@@ -2352,7 +2391,7 @@ class Interpreter:
         ):
             operator_token = self.consume_token()
             operator = operator_token.value
-            right = self.parse_logical_and()
+            right = self.parse_pipeFn()
             # Corrected: operator_token.token.line should be operator_token.line
             expr = BinaryExpr(
                 operator,
@@ -2376,6 +2415,25 @@ class Interpreter:
             right = self.parse_equality()
             expr = BinaryExpr(
                 operator,
+                expr,
+                right,
+                operator_token.file,
+                operator_token.line,
+                operator_token.column,
+            )
+        return expr
+
+    def parse_pipeFn(self):
+        expr = self.parse_equality()
+        while (
+            self.get_next_token()
+            and self.get_next_token().type == "operator"
+            and self.get_next_token().value == "|>"
+        ):
+            operator_token = self.consume_token()
+            operator = operator_token.value
+            right = self.parse_equality()
+            expr = PipeExpr(
                 expr,
                 right,
                 operator_token.file,
@@ -2409,7 +2467,7 @@ class Interpreter:
         while (
             self.get_next_token()
             and self.get_next_token().type == "operator"
-            and self.get_next_token().value in ["<", "<=", ">", ">=", "<<", ">>"]
+            and self.get_next_token().value in ["<", "<=", ">", ">=", "<<", ">>", "|"]
         ):
             operator_token = self.consume_token()
             operator = operator_token.value
@@ -2559,6 +2617,78 @@ class Interpreter:
                 break  # No more chained access/calls
         return expr
 
+    def parse_def(self):
+        self.expect_token("def")
+        token = self.consume_token()
+        self.expect_token("(")
+        self.consume_token()
+
+        parameters = []
+        if self.get_next_token() and self.get_next_token().value != ")":
+            while True:
+                param_token = self.expect_type("identifier")
+                param_name = param_token.value
+                self.consume_token()
+
+                annotation_type = None
+                if self.get_next_token() and self.get_next_token().type == "identifier":
+                    type_token = self.get_next_token()
+                    if (
+                        type_token.value in VAR_TYPES
+                        or type_token.value in self.custom_types
+                    ):
+                        annotation_type = type_token.value
+                        self.consume_token()
+
+                default_expr = None
+                if self.get_next_token() and self.get_next_token().value == "=":
+                    self.consume_token()
+                    default_expr = self.parse_expression()
+                    if annotation_type:
+                        raise NovaError(
+                            token,
+                            "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.",
+                        )
+
+                    if default_expr.type == "Literal":
+                        inferred_type = type(default_expr.value).__name__
+                        if inferred_type == "str":
+                            annotation_type = "string"
+                        elif inferred_type in ["int", "float"]:
+                            annotation_type = "number"
+                        elif inferred_type == "bool":
+                            annotation_type = "bool"
+                        else:
+                            annotation_type = None
+                    else:
+                        annotation_type = None
+
+                parameters.append(
+                    Parameter(
+                        param_name,
+                        annotation_type,
+                        default_expr,
+                        param_token.file,
+                        param_token.line,
+                        param_token.column,
+                        param_token.type,
+                        param_token.value,
+                    )
+                )
+
+                if self.get_next_token() and self.get_next_token().value == ",":
+                    self.consume_token()
+                else:
+                    break
+
+        self.expect_token(")")
+        self.consume_token()
+        body = self.parse_block_until(["end"])
+        self.expect_token("end")
+        self.consume_token()
+
+        return LambdaDecl(parameters, body, token.file, token.line, token.column)
+
     def parse_primary(self):
         node = None
         token = self.get_next_token()
@@ -2652,6 +2782,14 @@ class Interpreter:
                 new_instance_line,
                 new_instance_column,
             )
+        elif token.value == "@":
+            at_token = self.consume_token()  # Consume '@'
+            wrapper = self.parse_expression()
+            body = self.parse_def()
+            return Decorator(
+                wrapper, body, at_token.file, at_token.line, at_token.column
+            )
+
         elif token.value == "$":
             dollar_token = self.consume_token()  # Consume '$'
             identifier_token = self.expect_type("identifier")
@@ -2688,78 +2826,8 @@ class Interpreter:
                 dollar_token.column,
             )
         elif token.value == "def":  # Lambda expression (def (...) ... end)
-            self.consume_token()
-            self.expect_token("(")
-            self.consume_token()
+            return self.parse_def()
 
-            parameters = []
-            if self.get_next_token() and self.get_next_token().value != ")":
-                while True:
-                    param_token = self.expect_type("identifier")
-                    param_name = param_token.value
-                    self.consume_token()
-
-                    annotation_type = None
-                    if (
-                        self.get_next_token()
-                        and self.get_next_token().type == "identifier"
-                    ):
-                        type_token = self.get_next_token()
-                        if (
-                            type_token.value in VAR_TYPES
-                            or type_token.value in self.custom_types
-                        ):
-                            annotation_type = type_token.value
-                            self.consume_token()
-
-                    default_expr = None
-                    if self.get_next_token() and self.get_next_token().value == "=":
-                        self.consume_token()
-                        default_expr = self.parse_expression()
-                        if annotation_type:
-                            raise NovaError(
-                                token,
-                                "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.",
-                            )
-
-                        if default_expr.type == "Literal":
-                            inferred_type = type(default_expr.value).__name__
-                            if inferred_type == "str":
-                                annotation_type = "string"
-                            elif inferred_type in ["int", "float"]:
-                                annotation_type = "number"
-                            elif inferred_type == "bool":
-                                annotation_type = "bool"
-                            else:
-                                annotation_type = None
-                        else:
-                            annotation_type = None
-
-                    parameters.append(
-                        Parameter(
-                            param_name,
-                            annotation_type,
-                            default_expr,
-                            param_token.file,
-                            param_token.line,
-                            param_token.column,
-                            param_token.type,
-                            param_token.value,
-                        )
-                    )
-
-                    if self.get_next_token() and self.get_next_token().value == ",":
-                        self.consume_token()
-                    else:
-                        break
-
-            self.expect_token(")")
-            self.consume_token()
-            body = self.parse_block_until(["end"])
-            self.expect_token("end")
-            self.consume_token()
-
-            return LambdaDecl(parameters, body, token.file, token.line, token.column)
         elif token.value == "(":
             self.consume_token()
             node = self.parse_expression()
@@ -2918,6 +2986,7 @@ class Interpreter:
                     continue
         elif stmt.type == "EnumDef":
             v = Environment()  # no sense copying env here
+            v.values = {}
             for i in range(len(stmt.values)):
                 v.define(stmt.values[i], i)
 
@@ -2926,7 +2995,9 @@ class Interpreter:
 
         elif stmt.type == "ForEachStmt":
             list_val = self.evaluate_expr(stmt.list, env)
-            if not isinstance(list_val, (list, dict)):
+            if not isinstance(list_val, (list, dict)) and not hasattr(
+                list_val, "__iter__"
+            ):
                 raise NovaError(
                     stmt,
                     f"Cannot iterate over non-array type for forEach loop. Got: {type(list_val).__name__}",
@@ -2988,31 +3059,40 @@ class Interpreter:
             file_path = stmt.filename
 
             if file_path.startswith("os:"):
-                # 1. Strip the 'os:' prefix to get the module path
                 module_path = file_path[3:]
 
                 if not env.has("os-import-handler"):
                     raise NovaError(
                         stmt,
-                        "os-import-handler is not defined, your runtime should define it, interpreter.globals.define('os-import-handler', handler)",
+                        "os-import-handler is not defined, your runtime should define it.",
                     )
 
                 handler = env.get("os-import-handler", stmt)
-                # 2. Call the handler with the module path
                 result = handler(module_path)
 
-                # 3. Determine the variable name for the imported result.
-                #    Priority 1: Use the explicit alias (e.g., 'import os:json as j' -> name = 'j')
-                if stmt.alias:
-                    name = stmt.alias
-                else:
-                    # Priority 2: Use the base name of the module path, stripping file extension (e.g., 'os:foo/bar.csv' -> name = 'bar')
-                    base_name = os.path.basename(module_path)
-                    name, _ = os.path.splitext(base_name)
+                last = module_path.rsplit("/", 1)[-1]  # after final "/"
+                name = os.path.splitext(last)[0]  # strip extension
 
-                # 4. Define the ENTIRE result object under the determined name.
-                #    This is the standard 'import X as Y' behavior.
-                env.define(name, result)
+                # Now bubble ONLY the last logical item from the handler result
+                # If result is a dict → use the last key
+                # If result has attributes → use the last attribute name
+                # Otherwise → it's already a final object
+                final_value = result
+
+                if isinstance(result, dict) and result:
+                    # Pick the last key in sorted order OR insertion order
+                    last_key = next(reversed(result))
+                    final_value = result[last_key]
+
+                else:
+                    # Try attribute bubble (optional)
+                    last_attr = name
+                    if hasattr(result, last_attr):
+                        final_value = getattr(result, last_attr)
+                if stmt.alias:
+                    # Explicit alias wins
+                    name = stmt.alias
+                env.define(name, final_value)
                 return
 
             file_path += ".nova"
@@ -3046,7 +3126,7 @@ class Interpreter:
                 namespace[key] = value
 
             module_name = os.path.splitext(os.path.basename(file_path))[0]
-            name = stmt.alias or module_name
+            name = stmt.alias or module_name.rsplit("/", 1)[-1]
             env.define(name, namespace)
 
         elif stmt.type == "ScopeStmt":
@@ -3332,6 +3412,7 @@ class Interpreter:
             )
 
     def evaluate_expr(self, expr, env):
+        # print(expr)
         if expr.type == "Literal":
             return expr.value
         elif expr.type == "Identifier":
@@ -3448,7 +3529,17 @@ class Interpreter:
             # Normal binary operations
             if expr.operator == "+":
                 return left + right
+            elif expr.operator == "|":
+                return left | right
             elif expr.operator == "%":
+                if isinstance(left, str):
+                    if not isinstance(right, list):
+                        raise NovaError(
+                            expr,
+                            "'%' formatting is only available when right side is an array",
+                        )
+                    left = left.format(*right)
+                    return left
                 return left % right
             elif expr.operator == "-":
                 return left - right
@@ -3458,7 +3549,7 @@ class Interpreter:
                 ):
                     raise NovaError(
                         expr,
-                        f"If you wanted to repeat '{left}' {right} times, you'd to '\"{right}\" * {left}'",
+                        f"If you wanted to repeat '{left}' {right} times, you'd do '\"{right}\" * {left}'",
                     )
                 return left * right
             elif expr.operator == "/":
@@ -3485,6 +3576,10 @@ class Interpreter:
                 return left and right
             elif expr.operator == "||":
                 return left or right
+            elif expr.operator == "|>":
+                if not callable(right):
+                    raise NovaError(expr, f"right side of pipe expr must be a function")
+                return right(left)
             else:
                 raise NovaError(expr, f"Unknown binary operator: {expr.operator}")
 
@@ -3662,6 +3757,13 @@ class Interpreter:
                     f"'{expr.class_name}' (resolved to {target_class}) is not a constructible class.",
                 )
 
+        elif expr.type == "Decorator":
+            value = self.evaluate_expr(expr.expr, env)
+            # print(value)
+            body = self.evaluate_expr(expr.body, env)
+            # print(body)
+            return value(body)
+
         elif expr.type == "LambdaDecl":
 
             def lambda_func_wrapper(*args):
@@ -3694,5 +3796,6 @@ class Interpreter:
                 return self.globals.get("undefined")
 
             return lambda_func_wrapper
+
         else:
             raise NovaError(expr, f"Unknown expression type: {expr.type}")

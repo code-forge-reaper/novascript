@@ -1,0 +1,5 @@
+{
+	"cmd": ["nova.py", "$file"],
+	"selector": "source.nova",
+	"interactive": true
+}
