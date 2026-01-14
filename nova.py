@@ -12,6 +12,11 @@ def main():
         sys.exit(1)
 
     script_file = sys.argv[1]
+    if script_file == "-":
+        if sys.platform == "linux":
+            script_file = "/dev/stdin"
+        else:
+            raise ValueError("cannot set stdin as the file on this platform")
     interpreter = Interpreter(script_file)
     interpreter.globals.define("os-import-handler", __import__)
     interpreter.interpret()

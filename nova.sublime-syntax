@@ -144,7 +144,7 @@ contexts:
       scope: constant.language.nova
 
   types: # the "keyword.declaration.nova" is just here because i don't know what else to label it as
-    - match: \b(switch|case|default)\b
+    - match: \b(switch|strict|case|default)\b
       captures:
         1: keyword.declaration.nova
       scope: keyword.declaration.nova

@@ -38,8 +38,8 @@ class NovaError(Exception):
         column = getattr(token, "column", 0) if token else 0
         token_value = getattr(token, "value", "N/A") if token else "N/A"
 
-        message = f"{file}:{line}:{column} {user_message or 'unknown error at token: ' + str(token_value)}"
-        super().__init__(message)
+        self.message = f"{file}:{line}:{column} {user_message or 'unknown error at token: ' + str(token_value)}"
+        super().__init__(self.message)
         self.line = line
         self.column = column
         self.file = file
@@ -1113,15 +1113,17 @@ def init_globals(globals_env):
     class Has:
         @staticmethod
         def key(d, k):
-            return isinstance(d, dict) and k in d
+            if not isinstance(d, dict):
+                raise TypeError(f"Expected dict, got {type(d).__name__}")
+            return k in d
 
         @staticmethod
         def value(d, v):
-            return isinstance(d, dict) and v in d.values()
+            return v in d.values()
 
         @staticmethod
-        def item(c, x):
-            return x in c  # works for list, str, set, tuple
+        def item(target, what):
+            return what in target  # works for list, str, set, tuple
 
     globals_env.define("Has", Has)
 
@@ -1138,8 +1140,8 @@ def init_globals(globals_env):
 
         @staticmethod
         def number(s):
-            if not isinstance(s, int) or not s.isdigit():
-                raise ValueError(f"Invalid number: {s}")
+            if not isinstance(s, str):
+                raise ValueError(f"this function expects a string, got {type(s)}")
             return int(s) if not "." in s else float(s)
 
         @staticmethod
@@ -1171,6 +1173,9 @@ def init_globals(globals_env):
         @staticmethod
         def bytes(s):
             return bytes(s)
+
+        def undefined(s):
+            return s == globals_env.get("undefined")
 
         @staticmethod
         def toBytes(s, enc="utf8"):
@@ -1237,14 +1242,14 @@ def init_globals(globals_env):
                 return dir(obj)
 
         @staticmethod
-        def regex(pattern, options=""):
-            return re.compile(pattern, 0 if "i" not in options else re.IGNORECASE)
-
-        args = sys.argv[2:]
-
-        @staticmethod
         def exit(code=0):
             sys.exit(code)
+
+        args = sys.argv[1:]
+
+        @staticmethod
+        def regex(pattern, options=""):
+            return re.compile(pattern, 0 if "i" not in options else re.IGNORECASE)
 
         @staticmethod
         def env(key=None):
@@ -1258,50 +1263,73 @@ def init_globals(globals_env):
                 reason = reason.format(*rest)  # Pythonic way to format
             raise Exception(reason)
 
-        class Fs:
-            @staticmethod
-            def read(path, opts={"mode": "r", "encoding": "utf8"}):
-                with open(path, **opts) as f:
-                    return f.read()
+    class Fs:
+        @staticmethod
+        def read(path, opts={"mode": "r", "encoding": "utf8"}):
+            with open(path, **opts) as f:
+                return f.read()
 
-            @staticmethod
-            def open(path, opts={"mode": "r", "encoding": "utf8"}):
-                return open(
-                    path, **opts
-                )  # interpreter turns nova's objects into dicts when passing back to python, so this is safe
+        @staticmethod
+        def open(path, opts={"mode": "r", "encoding": "utf8"}):
+            return open(
+                path, **opts
+            )  # interpreter turns nova's objects into dicts when passing back to python, so this is safe
 
-            @staticmethod
-            def write(path, contents, opts={"mode": "w", "encoding": "utf8"}):
-                with open(path, **opts) as f:
-                    f.write(contents)
+        @staticmethod
+        def write(path, contents, opts={"mode": "w", "encoding": "utf8"}):
+            with open(path, **opts) as f:
+                f.write(contents)
 
-            @staticmethod
-            def exists(path):
-                return os.path.exists(path)
+        @staticmethod
+        def exists(path):
+            return os.path.exists(path)
 
-        class Uri:
-            @staticmethod
-            def decode(s):
-                return unquote(s)
+        @staticmethod
+        def listdir(path="."):
+            return os.listdir(path)
 
-            @staticmethod
-            def encode(s):
-                return quote(s)
+    class Uri:
+        @staticmethod
+        def decode(s):
+            return unquote(s)
 
-        class Time:
-            @staticmethod
-            def now():
-                return int(time.time() * 1000)  # Milliseconds since epoch
+        @staticmethod
+        def encode(s):
+            return quote(s)
 
-            @staticmethod
-            def str():
-                return str(datetime.datetime.now())
+    class Time:
+        @staticmethod
+        def now(res="ns"):
+            if res == "ns":
+                return time.time_ns()
+            elif res == "ms":
+                return time.time_ns() // 1_000_000
+            elif res == "sec":
+                return time.time()
+            else:
+                raise ValueError(...)
 
-            @staticmethod
-            def hrtime():
+        @staticmethod
+        def str():
+            return str(datetime.datetime.now())
+
+        @staticmethod
+        def sleep(secs):
+            return time.sleep(secs)
+
+        @staticmethod
+        def monotonic(resolution="ns"):
+            if resolution == "ns":
                 return time.perf_counter_ns()  # High-resolution time in nanoseconds
+            elif resolution == "sec":
+                return time.perf_counter_ns() / 1_000_000_000
+            else:
+                raise ValueError(f"unknown {resolution =}")
 
     globals_env.define("Runtime", Runtime)
+    globals_env.define("Uri", Uri)
+    globals_env.define("Fs", Fs)
+    globals_env.define("Time", Time)
 
 
 def opToName(op):
@@ -1320,8 +1348,6 @@ def opToName(op):
         "/": up("div"),
         "%": up("mod"),
         "^": up("xor"),
-        "&&": up("and"),
-        "||": up("or"),
         "<<": up("lshift"),
         ">>": up("rshift"),
         "==": up("eq"),
@@ -1389,6 +1415,7 @@ class Interpreter:
         self.globals.define(
             "__SCRIPT_PATH__", os.path.dirname(os.path.abspath(self.file))
         )
+        self.globals.define("__SCRIPT_NAME__", file_path)
 
     # --- Tokenization ---
     def tokenize(self, source, file):
@@ -1637,7 +1664,7 @@ class Interpreter:
                 token.type == "operator" and token.value in terminators
             ):
                 break
-            stmt = self.parse_statement()
+            stmt = self._parse_statement()
             if stmt:  # CustomTypeDeclStmt returns None
                 statements.append(stmt)
         return statements
@@ -1765,6 +1792,11 @@ class Interpreter:
                             ):
                                 annotation_type = type_token.value
                                 self.consume_token()
+                            else:
+                                raise NovaError(
+                                    type_token,
+                                    f"Invalid type annotation: {type_token.value}",
+                                )
 
                         default_expr = None
                         if self.get_next_token() and self.get_next_token().value == "=":
@@ -1831,6 +1863,9 @@ class Interpreter:
         )
 
     # --- Parsing Statements and Expressions ---
+    def _parse_statement(self):
+        return self.parse_statement()
+
     def parse_statement(self):
         token = self.get_next_token()
         if not token:
@@ -1841,6 +1876,9 @@ class Interpreter:
             )
             raise NovaError(last_token, "Unexpected end of input")
 
+        return self._builtinHandler(token)
+
+    def _builtinHandler(self, token):
         if token.type == "keyword":
             if token.value == "defer":
                 self.consume_token()
@@ -2383,7 +2421,7 @@ class Interpreter:
         return expr  # If no assignment operator, it's just a logical OR expression
 
     def parse_logical_or(self):
-        expr = self.parse_pipeFn()
+        expr = self.parse_logical_and()
         while (
             self.get_next_token()
             and self.get_next_token().type == "operator"
@@ -2391,7 +2429,7 @@ class Interpreter:
         ):
             operator_token = self.consume_token()
             operator = operator_token.value
-            right = self.parse_pipeFn()
+            right = self.parse_logical_and()
             # Corrected: operator_token.token.line should be operator_token.line
             expr = BinaryExpr(
                 operator,
@@ -2404,7 +2442,7 @@ class Interpreter:
         return expr
 
     def parse_logical_and(self):
-        expr = self.parse_equality()
+        expr = self.parse_pipeFn()
         while (
             self.get_next_token()
             and self.get_next_token().type == "operator"
@@ -2412,7 +2450,7 @@ class Interpreter:
         ):
             operator_token = self.consume_token()
             operator = operator_token.value
-            right = self.parse_equality()
+            right = self.parse_pipeFn()
             expr = BinaryExpr(
                 operator,
                 expr,
@@ -2846,14 +2884,19 @@ class Interpreter:
         except Exception as err:
             # Ensure deferred statements still execute
             self.globals.execute_deferred(self)
-            raise err
+            if isinstance(err, NovaError):
+                print(f"{err.file}:{err.line}:{err.column}: {err.message}")
+                exit()
+            else:
+                raise err
 
     def execute_block(self, statements, env):
         previous_env = self.current_env
         self.current_env = env
-
+        current = None
         try:
             for stmt in statements:
+                current = stmt
                 result = self.execute_stmt(stmt, env)
                 if isinstance(result, ControlFlow):
                     return result
@@ -3084,9 +3127,9 @@ class Interpreter:
                     last_key = next(reversed(result))
                     final_value = result[last_key]
 
-                else:
+                elif last != name:
                     # Try attribute bubble (optional)
-                    last_attr = name
+                    last_attr = last
                     if hasattr(result, last_attr):
                         final_value = getattr(result, last_attr)
                 if stmt.alias:
@@ -3112,6 +3155,9 @@ class Interpreter:
             imported_interpreter.custom_types = self.custom_types
 
             imported_env = Environment(self.globals)
+            imported_env.define("__SCRIPT_NAME__", file_path)
+            imported_env.define("__SCRIPT_PATH__", full_path)
+
             imported_interpreter.globals = (
                 imported_env  # Overwrite globals with the new imported_env
             )
@@ -3374,9 +3420,10 @@ class Interpreter:
 
             if base_object is None:
                 raise NovaError(target_expr, "Cannot assign to index of None value.")
-            if not isinstance(
-                base_object, (list, dict)
+            if not isinstance(base_object, (list, dict)) and not hasattr(
+                base_object, "__setitem__"
             ):  # Python lists/dicts for arrays/objects
+                # print(dir(base_object))
                 raise NovaError(
                     target_expr,
                     f"Cannot assign to index of non-list/dict: {type(base_object).__name__}",
@@ -3487,6 +3534,7 @@ class Interpreter:
                 resolved = self.resolve_assignment_target(target, env)
                 base = resolved["base"]
                 final_key = resolved["final_key"]
+                # print(resolved)
                 if isinstance(base, Environment):
                     base.assign(final_key, final_value_to_assign, target)
                 elif final_key is not None:
@@ -3499,9 +3547,12 @@ class Interpreter:
                         except (AttributeError, TypeError):
                             # Fallback for dicts that are not NovaScript instances but are being assigned to
                             # This handles object literals or other dicts where direct key assignment is expected
-                            if isinstance(base, dict) or isinstance(base, list):
+                            if (
+                                isinstance(base, dict) or isinstance(base, list)
+                            ) or final_key in base:
                                 base[final_key] = final_value_to_assign
                             else:
+                                # print(dir(base))
                                 raise NovaError(
                                     target,
                                     f"Cannot assign to property '{final_key}' of object of type {type(base).__name__}.",
@@ -3511,6 +3562,16 @@ class Interpreter:
             return final_value_to_assign  # Return the value that was assigned
 
         elif expr.type == "BinaryExpr":
+            if expr.operator == "&&":
+                f = self.evaluate_expr(expr.left, env)
+                if not f:
+                    return f
+                return self.evaluate_expr(expr.right, env)
+            elif expr.operator == "||":
+                f = self.evaluate_expr(expr.left, env)
+                if f:
+                    return f
+                return self.evaluate_expr(expr.right, env)
             left = self.evaluate_expr(expr.left, env)
             right = self.evaluate_expr(expr.right, env)
 
@@ -3572,10 +3633,6 @@ class Interpreter:
                 return left > right
             elif expr.operator == ">=":
                 return left >= right
-            elif expr.operator == "&&":
-                return left and right
-            elif expr.operator == "||":
-                return left or right
             elif expr.operator == "|>":
                 if not callable(right):
                     raise NovaError(expr, f"right side of pipe expr must be a function")
@@ -3737,15 +3794,15 @@ class Interpreter:
 
             target_class = current_resolved_object
             args = [self.evaluate_expr(arg, env) for arg in expr.arguments]
-
+            c = None
             if isinstance(target_class, NovaClass):
-                return target_class.instantiate(args, expr)
+                c = target_class.instantiate(args, expr)
             elif isinstance(target_class, type) and hasattr(
                 target_class, "__init__"
             ):  # It's a Python class
                 # For Python classes, we instantiate them directly.
                 try:
-                    return target_class(*args)
+                    c = target_class(*args)
                 except Exception as e:
                     raise NovaError(
                         expr,
@@ -3756,6 +3813,14 @@ class Interpreter:
                     expr,
                     f"'{expr.class_name}' (resolved to {target_class}) is not a constructible class.",
                 )
+            if self.custom_types.get(expr.class_name):
+                check_type(
+                    expr.class_name,
+                    c,
+                    expr,
+                    self,
+                )
+            return c
 
         elif expr.type == "Decorator":
             value = self.evaluate_expr(expr.expr, env)
