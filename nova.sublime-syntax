@@ -14,6 +14,7 @@ contexts:
     - include: namespace_definition
     - include: keywords
     - include: builtins
+    - include: decorators
     - include: using_stmt
     - include: function_calls
     - include: operators
@@ -66,7 +67,7 @@ contexts:
 
 
     # Control flow
-    - match: \b(for|break|continue|forEach|while|until|do|in|end|else|elseif|if|test|failed|defer)\b
+    - match: \b(for|break|continue|foreach|while|until|do|in|end|else|elseif|if|test|failed|defer)\b
       scope: keyword.control.flow.nova
 
     # Types
@@ -85,8 +86,8 @@ contexts:
         1: entity.name.namespace.nova
       scope: keyword.declaration.nova
   using_stmt:
-    # using [module.a, module.b, ...]
-    - match: "\\b(using)\\b\\s*(\\[)"
+    # using [module.a, module.b, ...] | using {v: 24}
+    - match: "\\b(using)\\b\\s*(\\[|{)"
       captures:
         1: keyword.declaration.nova
         2: punctuation.section.brackets.begin.nova
@@ -123,8 +124,13 @@ contexts:
       scope: keyword.declaration.function.nova
 
   function_calls:
-    - match: \b[a-zA-Z_]\w*(?=\()
+    - match: \b[a-zA-Z_]\w*(?=\()\b
       scope: entity.name.function.nova
+
+  decorators:
+    - match: \@(\w+)
+      captures:
+        1: entity.name.function.nova
 
   custom_types:
     - match: \bdefine\b\s+(\w+)

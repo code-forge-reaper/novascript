@@ -94,7 +94,7 @@ end
 // ForEach loop (array iteration)
 var fruits = ["apple", "banana", "cherry"]
 print("ForEach loop:")
-forEach fruit in fruits do
+foreach fruit in fruits do
     print("  Fruit:", fruit)
 end
 
@@ -104,7 +104,7 @@ var actions = {
   bye: "goodbye"
 }
 // js style loop thingy
-forEach k in actions do
+foreach k in actions do
   print(k, actions[k])
 end
 
@@ -274,3 +274,66 @@ animal.makeSound()
 animal.describe()
 cat.makeSound()
 cat.describe()
+
+// this test the "switch" statement, as well as arrow/pipe("|>")
+test
+    var v = 24
+    for i=0, 10 do
+        v += i
+        switch strict v
+            case 24 do
+                print("  v is 24")
+            end
+            case 25 do
+                print("  v is 25")
+            end
+        end
+    end
+failed e
+    e |> print
+end
+test
+    v = 10
+    for i=0, 10 do
+        v += i
+        switch v
+            case 24 do
+                print("  v is 24")
+            end
+            case 25 do
+                print("  v is 25")
+            end
+            default do
+                print("  v is neither 24 nor 25, it is", v)
+            end
+        end
+    end
+failed e
+    e |> print
+end
+class Temp1
+	var max = 30
+	var min = 10
+	var current = 15
+end
+
+class Temp2
+	func init(max number, min number, current number)
+		$max
+		$min
+		$current
+	end
+end
+
+var ob = {x:24,y:0,z:0}
+using ob
+print(z = y = x *= 42) // 1008
+print(x) // 1008
+print(y) // 1008
+print(z) // 1008
+
+
+// TODO: add metadata that makes it so typing isn't thrown to the wind
+var s string = "hello"
+s = 42
+print(s)

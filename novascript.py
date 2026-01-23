@@ -4,680 +4,10 @@ import math
 import re
 import datetime
 import time, json
+import codecs
 from urllib.parse import unquote, quote
 import struct
-
-
-# --- Control Flow Classes ---
-class ControlFlow:
-    """Base class for control flow signals"""
-
-    pass
-
-
-class ReturnFlow(ControlFlow):
-    def __init__(self, value):
-        self.value = value
-
-
-class BreakFlow(ControlFlow):
-    pass
-
-
-class ContinueFlow(ControlFlow):
-    pass
-
-
-class NovaError(Exception):
-    """Custom error class for NovaScript, including location information."""
-
-    def __init__(self, token, user_message=None):
-        # Provide fallback values if token is None or lacks properties
-        file = getattr(token, "file", "unknown_file") if token else "unknown_file"
-        line = getattr(token, "line", 0) if token else 0
-        column = getattr(token, "column", 0) if token else 0
-        token_value = getattr(token, "value", "N/A") if token else "N/A"
-
-        self.message = f"{file}:{line}:{column} {user_message or 'unknown error at token: ' + str(token_value)}"
-        super().__init__(self.message)
-        self.line = line
-        self.column = column
-        self.file = file
-
-
-# Helper for indentation in __str__ methods
-INDENT_STEP = "  "
-
-
-# --- AST Node Base Classes ---
-class Token:
-    def __init__(self, type, value, file, line, column):
-        self.type = type
-        self.value = value
-        self.file = file
-        self.line = line
-        self.column = column
-
-    def __str__(self, indent_level=0):
-        # Generic representation for debugging, concrete nodes will override for source reconstruction
-        return f"Token(type='{self.type}', value={repr(self.value)}, file='{self.file}', line={self.line}, column={self.column})"
-
-
-class Statement(Token):
-    def __init__(self, type, file, line, column):
-        super().__init__(type, None, file, line, column)
-
-    def __str__(self, indent_level=0):
-        # Generic statement, concrete statements will override
-        return f"{INDENT_STEP * indent_level}[{self.__class__.__name__} Statement]"
-
-
-class Expression(Token):
-    def __init__(self, type, file, line, column):
-        super().__init__(type, None, file, line, column)
-
-    def __str__(self, indent_level=0):
-        # Generic expression, concrete expressions will override
-        return f"[{self.__class__.__name__} Expression]"
-
-
-# --- Specific AST Node Classes ---
-class Literal(Expression):
-    def __init__(self, value, file, line, column):
-        super().__init__("Literal", file, line, column)
-        self.value = value
-
-    def __str__(self, indent_level=0):
-        if isinstance(self.value, str):
-            return f'"{self.value}"'
-        if self.value is None:
-            return "null"  # Assuming 'null' for None in NovaScript
-        if isinstance(self.value, bool):
-            return "true" if self.value else "false"
-        return str(self.value)
-
-
-class Identifier(Expression):
-    def __init__(self, name, file, line, column):
-        super().__init__("Identifier", file, line, column)
-        self.name = name
-
-    def __str__(self, indent_level=0):
-        return self.name
-
-
-class BinaryExpr(Expression):
-    def __init__(self, operator, left, right, file, line, column):
-        super().__init__("BinaryExpr", file, line, column)
-        self.operator = operator
-        self.left = left
-        self.right = right
-
-    def __str__(self, indent_level=0):
-        # Add parentheses to ensure correct precedence during reconstruction
-        return f"({self.left.__str__(indent_level)} {self.operator} {self.right.__str__(indent_level)})"
-
-
-class PipeExpr(BinaryExpr):
-    def __init__(self, left, right, file, line, column):
-        super().__init__("|>", left, right, file, line, column)
-
-
-class UnaryExpr(Expression):
-    def __init__(self, operator, right, file, line, column):
-        super().__init__("UnaryExpr", file, line, column)
-        self.operator = operator
-        self.right = right
-
-    def __str__(self, indent_level=0):
-        return f"{self.operator}{self.right.__str__(indent_level)}"
-
-
-class FuncCall(Expression):
-    def __init__(self, name, arguments, file, line, column):
-        super().__init__("FuncCall", file, line, column)
-        self.name = name
-        self.arguments = arguments
-
-    def __str__(self, indent_level=0):
-        args_str = ", ".join(arg.__str__(indent_level) for arg in self.arguments)
-        return f"{self.name}({args_str})"
-
-
-class MethodCall(Expression):
-    def __init__(self, object, method, arguments, file, line, column):
-        super().__init__("MethodCall", file, line, column)
-        self.object = object
-        self.method = method
-        self.arguments = arguments
-
-    def __str__(self, indent_level=0):
-        args_str = ", ".join(arg.__str__(indent_level) for arg in self.arguments)
-        return f"{self.object.__str__(indent_level)}.{self.method}({args_str})"
-
-
-class PropertyAccess(Expression):
-    def __init__(self, object, property, file, line, column):
-        super().__init__("PropertyAccess", file, line, column)
-        self.object = object
-        self.property = property
-
-    def __str__(self, indent_level=0):
-        return f"{self.object.__str__(indent_level)}.{self.property}"
-
-
-class ArrayAccess(Expression):
-    def __init__(self, object, index, file, line, column):
-        super().__init__("ArrayAccess", file, line, column)
-        self.object = object
-        self.index = index
-
-    def __str__(self, indent_level=0):
-        return (
-            f"{self.object.__str__(indent_level)}[{self.index.__str__(indent_level)}]"
-        )
-
-
-class ArrayLiteral(Expression):
-    def __init__(self, elements, file, line, column):
-        super().__init__("ArrayLiteral", file, line, column)
-        self.elements = elements
-
-    def __str__(self, indent_level=0):
-        elements_str = ", ".join(elem.__str__(indent_level) for elem in self.elements)
-        return f"[{elements_str}]"
-
-
-class ObjectLiteral(Expression):
-    def __init__(self, properties, file, line, column):
-        super().__init__("ObjectLiteral", file, line, column)
-        self.properties = properties
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        next_indent = INDENT_STEP * (indent_level + 1)
-
-        if not self.properties:
-            return "{}"
-
-        props_list = []
-        for prop in self.properties:
-            props_list.append(
-                f"{next_indent}{prop['key']}: {prop['value'].__str__(indent_level + 1)}"
-            )
-
-        # build the joined string OUTSIDE the f-string expression
-        joined = ",\n".join(props_list)
-
-        return f"{{\n{joined}\n{current_indent}}}"
-
-
-class AssignmentExpr(Expression):
-    def __init__(self, target, value, operator, file, line, column):
-        super().__init__("AssignmentExpr", file, line, column)
-        self.target = target
-        self.value = value
-        self.operator = operator
-
-    def __str__(self, indent_level=0):
-        return f"{self.target.__str__(indent_level)} {self.operator} {self.value.__str__(indent_level)}"
-
-
-class NewInstance(Expression):
-    # Changed class_target_expr back to class_name to hold a string path
-    def __init__(self, class_name, arguments, file, line, column):
-        super().__init__("NewInstance", file, line, column)
-        self.class_name = class_name
-        self.arguments = arguments
-
-    def __str__(self, indent_level=0):
-        args_str = ", ".join(arg.__str__(indent_level) for arg in self.arguments)
-        return f"new {self.class_name}({args_str})"
-
-
-class Parameter(Token):
-    def __init__(self, name, annotation_type, default, file, line, column, type, value):
-        super().__init__(type, value, file, line, column)
-        self.name = name
-        self.annotation_type = annotation_type
-        self.default = default
-
-    def __str__(self, indent_level=0):
-        param_str = self.name
-        if self.annotation_type:
-            param_str += f": {self.annotation_type}"
-        if self.default:
-            param_str += f" = {self.default.__str__(indent_level)}"
-        return param_str
-
-
-class Case:
-    def __init__(self, case_expr, body):
-        self.case_expr = case_expr
-        self.body = body
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
-        if self.case_expr:
-            return f"{current_indent}case {self.case_expr.__str__(indent_level)} do\n{body_str}\n{current_indent}end"
-        else:  # Default case
-            return f"{current_indent}default do\n{body_str}\n{current_indent}end"
-
-
-class DeferStmt(Statement):
-    def __init__(self, body, file, line, column):
-        super().__init__("DeferStmt", file, line, column)
-        self.body = body
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
-        return f"{current_indent}defer do\n{body_str}\n{current_indent}end"
-
-
-class VarDeclStmt(Statement):
-    def __init__(self, name, type_annotation, initializer, file, line, column):
-        super().__init__("VarDecl", file, line, column)
-        self.name = name
-        self.type_annotation = type_annotation
-        self.initializer = initializer
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        var_str = f"var {self.name}"
-        if self.type_annotation:
-            var_str += f": {self.type_annotation}"
-        var_str += f" = {self.initializer.__str__(indent_level)}"
-        return f"{current_indent}{var_str}"
-
-
-class CustomTypeProperty:
-    def __init__(self, name, type):
-        self.name = name
-        self.type = type
-
-    def __str__(self, indent_level=0):
-        return f"{INDENT_STEP * indent_level}{self.name}: {self.type}"
-
-
-class CustomType:  # This is a runtime representation, not an AST node directly
-    def __init__(self, name, properties, file, line, column):
-        self.name = name
-        self.properties = properties
-        self.file = file
-        self.line = line
-        self.column = column
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        props_str = ",\n".join(
-            prop.__str__(indent_level + 1) for prop in self.properties
-        )
-        return (
-            f"{current_indent}define {self.name} = {{\n{props_str}\n{current_indent}}}"
-        )
-
-
-class CustomTypeDeclStmt(Statement):
-    def __init__(self, name, definition, file, line, column):
-        super().__init__("CustomTypeDecl", file, line, column)
-        self.name = name
-        self.definition = definition  # List of CustomTypeProperty objects
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        props_str = ",\n".join(
-            prop.__str__(indent_level + 1) for prop in self.definition
-        )
-        return (
-            f"{current_indent}define {self.name} = {{\n{props_str}\n{current_indent}}}"
-        )
-
-
-class AssertStmt(Statement):
-    def __init__(self, expression, message, file, line, column):
-        super().__init__("AssertStmt", file, line, column)
-        self.expression = expression
-        self.message = message
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        msg_str = f' "{self.message}"' if self.message else ""
-        return (
-            f"{current_indent}assert {self.expression.__str__(indent_level)}{msg_str}"
-        )
-
-
-class ClassDefinition(Statement):
-    def __init__(self, name, superclass_name, body, file, line, column):
-        super().__init__("ClassDefinition", file, line, column)
-        self.name = name
-        self.superclass_name = superclass_name
-        self.body = body
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        next_indent = INDENT_STEP * (indent_level + 1)
-        class_str = f"{current_indent}class {self.name}"
-        if self.superclass_name:
-            class_str += f" inherits {self.superclass_name}"
-        class_str += " do\n"
-        for member in self.body:
-            class_str += member.__str__(indent_level + 1) + "\n"
-        class_str += f"{current_indent}end"
-        return class_str
-
-
-class MethodDefinition(Statement):
-    def __init__(
-        self, name, parameters, body, is_static, is_constructor, file, line, column
-    ):
-        super().__init__("MethodDefinition", file, line, column)
-        self.name = name
-        self.parameters = parameters
-        self.body = body
-        self.is_static = is_static
-        self.is_constructor = is_constructor
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        params_str = ", ".join(p.__str__(indent_level) for p in self.parameters)
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
-        static_prefix = "static " if self.is_static else ""
-        name = "init" if self.is_constructor else self.name
-        return f"{current_indent}{static_prefix}func {name}({params_str}) do\n{body_str}\n{current_indent}end"
-
-
-class PropertyDefinition(Statement):
-    def __init__(
-        self, name, type_annotation, initializer, is_static, file, line, column
-    ):
-        super().__init__("PropertyDefinition", file, line, column)
-        self.name = name
-        self.type_annotation = type_annotation
-        self.initializer = initializer
-        self.is_static = is_static
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        static_prefix = "static " if self.is_static else ""
-        prop_str = f"{current_indent}{static_prefix}var {self.name}"
-        if self.type_annotation:
-            prop_str += f": {self.type_annotation}"
-        if self.initializer:
-            prop_str += f" = {self.initializer.__str__(indent_level)}"
-        return prop_str
-
-
-class ExpressionStmt(Statement):
-    def __init__(self, expression, file, line, column):
-        super().__init__("ExpressionStmt", file, line, column)
-        self.expression = expression
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        return f"{current_indent}{self.expression.__str__(indent_level)}"
-
-
-class BreakStmt(Statement):
-    def __init__(self, file, line, column):
-        super().__init__("BreakStmt", file, line, column)
-
-    def __str__(self, indent_level=0):
-        return f"{INDENT_STEP * indent_level}break"
-
-
-class ContinueStmt(Statement):
-    def __init__(self, file, line, column):
-        super().__init__("ContinueStmt", file, line, column)
-
-    def __str__(self, indent_level=0):
-        return f"{INDENT_STEP * indent_level}continue"
-
-
-class TryStmt(Statement):
-    def __init__(self, try_block, error_var, catch_block, file, line, column):
-        super().__init__("TryStmt", file, line, column)
-        self.try_block = try_block
-        self.error_var = error_var
-        self.catch_block = catch_block
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        try_body_str = "\n".join(
-            stmt.__str__(indent_level + 1) for stmt in self.try_block
-        )
-        catch_body_str = "\n".join(
-            stmt.__str__(indent_level + 1) for stmt in self.catch_block
-        )
-        return (
-            f"{current_indent}test do\n"
-            f"{try_body_str}\n"
-            f"{current_indent}failed {self.error_var} do\n"
-            f"{catch_body_str}\n"
-            f"{current_indent}end"
-        )
-
-
-class IfStmt(Statement):
-    def __init__(self, condition, then_block, else_block, else_if, file, line, column):
-        super().__init__("IfStmt", file, line, column)
-        self.condition = condition
-        self.then_block = then_block
-        self.else_block = else_block
-        self.else_if = else_if
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        s = f"{current_indent}if {self.condition.__str__(indent_level)} do\n"
-        s += "\n".join(stmt.__str__(indent_level + 1) for stmt in self.then_block)
-
-        if self.else_if:
-            for elseif_block in self.else_if:
-                s += f"\n{current_indent}elseif {elseif_block['condition'].__str__(indent_level)} do\n"
-                s += "\n".join(
-                    stmt.__str__(indent_level + 1) for stmt in elseif_block["body"]
-                )
-
-        if self.else_block:
-            s += f"\n{current_indent}else do\n"
-            s += "\n".join(stmt.__str__(indent_level + 1) for stmt in self.else_block)
-
-        s += f"\n{current_indent}end"
-        return s
-
-
-class WhileStmt(Statement):
-    def __init__(self, condition, body, file, line, column):
-        super().__init__("WhileStmt", file, line, column)
-        self.condition = condition
-        self.body = body
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
-        return f"{current_indent}while {self.condition.__str__(indent_level)}\n{body_str}\n{current_indent}end"
-
-
-class UntilStmt(Statement):
-    def __init__(self, condition, body, file, line, column):
-        super().__init__("UntilStmt", file, line, column)
-        self.condition = condition
-        self.body = body
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
-        return f"{current_indent}until {self.condition.__str__(indent_level)}\n{body_str}\n{current_indent}end"
-
-
-class ForEachStmt(Statement):
-    def __init__(self, variable, list, body, file, line, column):
-        super().__init__("ForEachStmt", file, line, column)
-        self.variable = variable
-        self.list = list
-        self.body = body
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
-        return f"{current_indent}forEach {self.variable} in {self.list.__str__(indent_level)} do\n{body_str}\n{current_indent}end"
-
-
-# wraps "@thing\ndef _():..."
-class Decorator(Statement):
-    def __init__(self, expr, body, file, line, column):
-        super().__init__("Decorator", file, line, column)
-        self.expr = expr
-        self.body = body
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
-        return f"{current_indent}@{self.expr.__str__(indent_level)} do\n{body_str}\n{current_indent}end"
-
-
-class ForStmt(Statement):
-    def __init__(self, variable, start, end, step, body, file, line, column):
-        super().__init__("ForStmt", file, line, column)
-        self.variable = variable
-        self.start = start
-        self.end = end
-        self.step = step
-        self.body = body
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        step_str = f", {self.step.__str__(indent_level)}" if self.step else ""
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
-        return (
-            f"{current_indent}for {self.variable} = {self.start.__str__(indent_level)}, "
-            f"{self.end.__str__(indent_level)}{step_str} do\n"
-            f"{body_str}\n"
-            f"{current_indent}end"
-        )
-
-
-class ImportStmt(Statement):
-    def __init__(self, filename, alias, file, line, column):
-        super().__init__("ImportStmt", file, line, column)
-        self.filename = filename
-        self.alias = alias
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        alias_str = f" as {self.alias}" if self.alias else ""
-        return f'{current_indent}import "{self.filename}"{alias_str}'
-
-
-class EnumDef(Statement):
-    def __init__(self, name, values, file, line, column):
-        super().__init__("EnumDef", file, line, column)
-        self.values = values
-        self.name = name
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        next_indent = INDENT_STEP * (indent_level + 1)
-        values_str = ",\n".join(f"{next_indent}{value}" for value in self.values)
-        return f"{current_indent}enum {self.name} {{\n{values_str}\n{current_indent}}}"
-
-
-class ScopeStmt(Statement):
-    def __init__(self, name, body, file, line, column):
-        super().__init__("ScopeStmt", file, line, column)
-        self.name = name
-        self.body = body
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
-        return f"{current_indent}scope {self.name} do\n{body_str}\n{current_indent}end"
-
-
-class SwitchStmt(Statement):
-    def __init__(self, expression, cases, strict: bool, file, line, column):
-        super().__init__("SwitchStmt", file, line, column)
-        self.expression = expression
-        self.cases = cases
-        self.strict = strict
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        cases_str = "\n".join(case.__str__(indent_level + 1) for case in self.cases)
-        if self.strict:
-            return f"{current_indent}switch strict {self.expression.__str__(indent_level)} do\n{cases_str}\n{current_indent}end"
-        return f"{current_indent}switch {self.expression.__str__(indent_level)} do\n{cases_str}\n{current_indent}end"
-
-
-class ReturnStmt(Statement):
-    def __init__(self, expression, file, line, column):
-        super().__init__("ReturnStmt", file, line, column)
-        self.expression = expression
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        expr_str = (
-            f" {self.expression.__str__(indent_level)}" if self.expression else ""
-        )
-        return f"{current_indent}return{expr_str}"
-
-
-class FuncDecl(Statement):
-    def __init__(self, name, parameters, body, file, line, column):
-        super().__init__("FuncDecl", file, line, column)
-        self.name = name
-        self.parameters = parameters
-        self.body = body
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        params_str = ", ".join(p.__str__(indent_level) for p in self.parameters)
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
-        return f"{current_indent}func {self.name}({params_str}) do\n{body_str}\n{current_indent}end"
-
-
-class WithStmt(Statement):
-    def __init__(self, expr, alias, body, file, line, column):
-        super().__init__("WithStmt", file, line, column)
-        self.expr = expr
-        self.alias = alias
-        self.body = body
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
-        return f"{current_indent}with {self.expr.__str__(indent_level)} as {self.alias} do\n{body_str}\n{current_indent}end"
-
-
-class LambdaDecl(
-    Expression
-):  # LambdaDecl is an expression that evaluates to a function
-    def __init__(self, parameters, body, file, line, column):
-        super().__init__("LambdaDecl", file, line, column)
-        self.parameters = parameters
-        self.body = body
-
-    def __str__(self, indent_level=0):
-        params_str = ", ".join(p.__str__(indent_level) for p in self.parameters)
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
-        # Lambda is an expression, so it doesn't get the outer indent, but its body does.
-        return f"def ({params_str}) do\n{body_str}\n{INDENT_STEP * indent_level}end"
-
-
-class UsingStmt(Statement):
-    def __init__(self, name, file, line, column):
-        super().__init__("UsingStmt", file, line, column)
-        self.name = name
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        if isinstance(self.name, list):
-            names_str = ", ".join(self.name)
-            return f"{current_indent}using [{names_str}]"
-        else:
-            return f"{current_indent}using {self.name}"
+from nodes import *
 
 
 # --- Environment for variable scoping ---
@@ -718,16 +48,16 @@ class Environment:
         self.values[name] = value
 
     def has(self, name):
-        if name == "true" or name == "false":
-            raise ValueError(f"cannot overwrite constant: {name}")
         if name in self.values:
             return True
-        elif self.parent:
+        elif self.parent and not self.localsOnly:
             return self.parent.has(name)
         else:
             return False
 
     def assign(self, name, value, tok):
+        if name == "true" or name == "false":
+            raise ValueError(f"cannot overwrite constant: {name}")
         if self.locked:
             raise NovaError(tok, "Cannot assign to variable in locked environment")
         if name in self.values:
@@ -750,7 +80,12 @@ class Environment:
             )  # Fallback for internal errors without token
 
     def __repr__(self):
-        return str(self.values)
+        v = {}
+        for k in self.values:
+            vv = self.values[k]
+            if k not in ["true", "false"]:
+                v[k] = vv
+        return str(v)
 
 
 # --- Runtime representation of a NovaScript class ---
@@ -1042,16 +377,16 @@ def check_type(expected, value, token, interpreter):
 
 # --- Global Initialization ---
 def init_globals(globals_env):
-    def pprint(*stuff):
-        for id, obj in enumerate(stuff):
-            end = "" if id == len(stuff) - 1 else " "
-            if isinstance(obj, dict) and "Str" in obj:
-                print(obj["Str"](), end=end)
-            else:
-                print(obj, end=end)
-        print()
-
-    globals_env.define("print", pprint)
+    # def pprint(*stuff):
+    #    for id, obj in enumerate(stuff):
+    #        end = "" if id == len(stuff) - 1 else " "
+    #        if isinstance(obj, dict) and "Str" in obj:
+    #            print(obj["Str"](), end=end)
+    #        else:
+    #            print(obj, end=end)
+    #    print()
+    # globals_env.define("print", pprint)
+    globals_env.define("print", print)
     globals_env.define("input", input)
     globals_env.define("tuple", tuple)
 
@@ -1124,6 +459,9 @@ def init_globals(globals_env):
         @staticmethod
         def item(target, what):
             return what in target  # works for list, str, set, tuple
+
+        @staticmethod
+        def attr(target, what): return hasattr(target, what)
 
     globals_env.define("Has", Has)
 
@@ -1300,14 +638,16 @@ def init_globals(globals_env):
     class Time:
         @staticmethod
         def now(res="ns"):
+            t = time.time_ns()
+
             if res == "ns":
-                return time.time_ns()
+                return t
             elif res == "ms":
-                return time.time_ns() // 1_000_000
+                return t / 1_000_000
             elif res == "sec":
-                return time.time()
+                return t / 1_000_000_000
             else:
-                raise ValueError(...)
+                raise ValueError(f"unknown {res=}")
 
         @staticmethod
         def str():
@@ -1321,10 +661,12 @@ def init_globals(globals_env):
         def monotonic(resolution="ns"):
             if resolution == "ns":
                 return time.perf_counter_ns()  # High-resolution time in nanoseconds
+            elif resolution == "ms":
+                return time.perf_counter_ns() / 1_000_000
             elif resolution == "sec":
                 return time.perf_counter_ns() / 1_000_000_000
             else:
-                raise ValueError(f"unknown {resolution =}")
+                raise ValueError(f"unknown {resolution = }")
 
     globals_env.define("Runtime", Runtime)
     globals_env.define("Uri", Uri)
@@ -1357,7 +699,7 @@ def opToName(op):
         "<=": up("le"),
         ">=": up("ge"),
     }
-    return matches[op]
+    return matches.get(op, None)
 
 
 class Interpreter:
@@ -1370,13 +712,14 @@ class Interpreter:
         "break",
         "continue",
         "func",
+        "local",
         "return",
         "import",
         "as",
         "scope",
         "while",
         "until",
-        "forEach",
+        "foreach",
         "for",
         "do",
         "in",
@@ -1397,6 +740,7 @@ class Interpreter:
         "static",
         "new",
         "with",
+        "explode",
     ]
 
     def __init__(self, file_path):
@@ -1496,7 +840,7 @@ class Interpreter:
                 matched_operator = True
             else:
                 # Single-character operators that might be part of two-char ops, or stand alone
-                potential_single_ops = "=+-*/%<>!.|"
+                potential_single_ops = "=+-*/%^<>!.|"
                 if char in potential_single_ops:
                     tokens.append(Token("operator", char, file, line, start_col))
                     i += 1
@@ -1572,10 +916,23 @@ class Interpreter:
                             str_val += "\\"
                         elif source[i] == '"':
                             str_val += '"'
+                        elif source[i] == "0":
+                            str_val += "\\0"
                         else:
-                            str_val += source[
-                                i
-                            ]  # Unrecognized escape sequence, just add char
+                            raise NovaError(
+                                Token(
+                                    "error",
+                                    "Invalid escape sequence",
+                                    file,
+                                    line,
+                                    col,
+                                ),
+                                "Invalid escape sequence",
+                            )
+                        # else:
+                        #    str_val += source[
+                        #        i
+                        #    ]  # Unrecognized escape sequence, just add char
                     else:
                         str_val += source[i]
                     i += 1
@@ -1593,6 +950,7 @@ class Interpreter:
                         Token("error", "Unterminated string", file, line, col),
                         "Unterminated string literal",
                     )
+                str_val = codecs.decode(str_val, "unicode-escape")
                 tokens.append(Token("string", str_val, file, line, start_col))
                 continue
 
@@ -1645,6 +1003,89 @@ class Interpreter:
         if token.value != value:
             raise NovaError(token, f"Expected token '{value}', got {token.value}")
         return token
+    def build_fn(self, token):
+        self.consume_token()
+        func_name_token = self.expect_type("identifier")
+        func_name = func_name_token.value
+        self.consume_token()
+        self.expect_token("(")
+        self.consume_token()
+
+        func_parameters = []
+        if self.get_next_token() and self.get_next_token().value != ")":
+            while True:
+                param_token = self.expect_type("identifier")
+                param_name = param_token.value
+                self.consume_token()
+
+                annotation_type = None
+                if (
+                    self.get_next_token()
+                    and self.get_next_token().type == "identifier"
+                ):
+                    type_token = self.get_next_token()
+                    if (
+                        type_token.value in VAR_TYPES
+                        or type_token.value in self.custom_types
+                    ):
+                        annotation_type = type_token.value
+                        self.consume_token()
+
+                default_expr = None
+                if self.get_next_token() and self.get_next_token().value == "=":
+                    self.consume_token()
+                    default_expr = self.parse_expression()
+                    if annotation_type:
+                        raise NovaError(
+                            token,
+                            "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.",
+                        )
+
+                    if default_expr.type == "Literal":
+                        inferred_type = type(default_expr.value).__name__
+                        if inferred_type == "str":
+                            annotation_type = "string"
+                        elif inferred_type in ["int", "float"]:
+                            annotation_type = "number"
+                        elif inferred_type == "bool":
+                            annotation_type = "bool"
+                        else:
+                            annotation_type = None
+                    else:
+                        annotation_type = None
+
+                func_parameters.append(
+                    Parameter(
+                        param_name,
+                        annotation_type,
+                        default_expr,
+                        param_token.file,
+                        param_token.line,
+                        param_token.column,
+                        param_token.type,
+                        param_token.value,
+                    )
+                )
+
+                if self.get_next_token() and self.get_next_token().value == ",":
+                    self.consume_token()
+                else:
+                    break
+
+        self.expect_token(")")
+        self.consume_token()
+        func_body = self.parse_block_until(["end"])
+        self.expect_token("end")
+        self.consume_token()
+
+        return FuncDecl(
+            func_name,
+            func_parameters,
+            func_body,
+            token.file,
+            token.line,
+            token.column,
+        )
 
     # --- Parsing Helpers ---
     def parse_block_until(self, terminators=None):
@@ -1845,10 +1286,10 @@ class Interpreter:
                     f"Unexpected token in class body: {member_token.value}",
                 )
 
-        if not has_initializer:
-            raise NovaError(
-                class_token, "this class has no `init` initializer function"
-            )
+        # if not has_initializer:
+        #     raise NovaError(
+        #         class_token, "this class has no `init` initializer function"
+        #     )
 
         self.expect_token("end")
         self.consume_token()  # consume 'end'
@@ -1890,6 +1331,8 @@ class Interpreter:
                 self.consume_token()
                 assert_expr = self.parse_expression()
                 t = None
+                self.expect_token(",")
+                self.consume_token()
                 if self.get_next_token() and self.get_next_token().type == "string":
                     t = self.consume_token().value
                 return AssertStmt(assert_expr, t, token.file, token.line, token.column)
@@ -2038,34 +1481,40 @@ class Interpreter:
 
             elif token.value == "using":
                 self.consume_token()
-                if self.get_next_token().value == "[":
-                    values = []
+                if self.get_next_token().value in ["[", "{"]:
+                    #print(values, self.get_next_token())
                     # print(self.get_next_token())
-                    self.consume_token()
-                    while self.get_next_token() and self.get_next_token().value != "]":
-                        # Parse the fully qualified name, e.g., "module.sub.name"
-                        name_parts = []
-                        name_part_token = self.expect_type("identifier")
-                        name_parts.append(name_part_token.value)
-                        self.consume_token()  # Consume the first identifier
-
-                        while (
-                            self.get_next_token() and self.get_next_token().value == "."
-                        ):
-                            self.consume_token()  # Consume the dot
+                    token = self.get_next_token()
+                    if token.value == "[":
+                        self.consume_token()
+                        values = []
+                        while self.get_next_token() and self.get_next_token().value != "]":
+                            # Parse the fully qualified name, e.g., "module.sub.name"
+                            name_parts = []
                             name_part_token = self.expect_type("identifier")
                             name_parts.append(name_part_token.value)
-                            self.consume_token()  # Consume the next identifier
+                            self.consume_token()  # Consume the first identifier
 
-                        full_name = ".".join(name_parts)
-                        values.append(full_name)
-                        if self.get_next_token() and self.get_next_token().value == ",":
-                            self.consume_token()
-                        else:
-                            break
-                    self.expect_token("]")
-                    self.consume_token()
-                    return UsingStmt(values, token.file, token.line, token.column)
+                            while (
+                                self.get_next_token() and self.get_next_token().value == "."
+                            ):
+                                self.consume_token()  # Consume the dot
+                                name_part_token = self.expect_type("identifier")
+                                name_parts.append(name_part_token.value)
+                                self.consume_token()  # Consume the next identifier
+
+                            full_name = ".".join(name_parts)
+                            values.append(full_name)
+                            if self.get_next_token() and self.get_next_token().value == ",":
+                                self.consume_token()
+                            else:
+                                break
+                        self.expect_token("]")
+                        self.consume_token()
+                        return UsingStmt(values, token.file, token.line, token.column)
+                    else:
+                        values = self.parse_expression()
+                        return UsingStmt(values, token.file, token.line, token.column)
                 else:
                     # Parse the fully qualified name, e.g., "module.sub.name"
                     name_parts = []
@@ -2102,7 +1551,7 @@ class Interpreter:
                     token.column,
                 )
 
-            elif token.value == "forEach":
+            elif token.value == "foreach":
                 self.consume_token()
                 for_each_var_token = self.expect_type("identifier")
                 for_each_variable = for_each_var_token.value
@@ -2199,6 +1648,8 @@ class Interpreter:
             elif token.value == "if":
                 self.consume_token()
                 if_condition = self.parse_expression()
+                if if_condition.type in ["AssignmentExpr"]:
+                    raise NovaError(if_condition, "you cannot do assinment ops in 'if' condition")
                 then_block = self.parse_block_until(["else", "elseif", "end"])
 
                 else_if_blocks = []
@@ -2211,6 +1662,8 @@ class Interpreter:
                 ):
                     self.consume_token()
                     elseif_condition = self.parse_expression()
+                    if elseif_condition.type in ["AssignmentExpr"]:
+                        raise NovaError(if_condition, "you cannot do assinment ops in 'elseif' condition")
                     elseif_body = self.parse_block_until(["else", "elseif", "end"])
                     else_if_blocks.append(
                         {"condition": elseif_condition, "body": elseif_body}
@@ -2250,88 +1703,10 @@ class Interpreter:
                 )
 
             elif token.value == "func":
+                return self.build_fn(token)
+            elif token.value == "local":
                 self.consume_token()
-                func_name_token = self.expect_type("identifier")
-                func_name = func_name_token.value
-                self.consume_token()
-                self.expect_token("(")
-                self.consume_token()
-
-                func_parameters = []
-                if self.get_next_token() and self.get_next_token().value != ")":
-                    while True:
-                        param_token = self.expect_type("identifier")
-                        param_name = param_token.value
-                        self.consume_token()
-
-                        annotation_type = None
-                        if (
-                            self.get_next_token()
-                            and self.get_next_token().type == "identifier"
-                        ):
-                            type_token = self.get_next_token()
-                            if (
-                                type_token.value in VAR_TYPES
-                                or type_token.value in self.custom_types
-                            ):
-                                annotation_type = type_token.value
-                                self.consume_token()
-
-                        default_expr = None
-                        if self.get_next_token() and self.get_next_token().value == "=":
-                            self.consume_token()
-                            default_expr = self.parse_expression()
-                            if annotation_type:
-                                raise NovaError(
-                                    token,
-                                    "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.",
-                                )
-
-                            if default_expr.type == "Literal":
-                                inferred_type = type(default_expr.value).__name__
-                                if inferred_type == "str":
-                                    annotation_type = "string"
-                                elif inferred_type in ["int", "float"]:
-                                    annotation_type = "number"
-                                elif inferred_type == "bool":
-                                    annotation_type = "bool"
-                                else:
-                                    annotation_type = None
-                            else:
-                                annotation_type = None
-
-                        func_parameters.append(
-                            Parameter(
-                                param_name,
-                                annotation_type,
-                                default_expr,
-                                param_token.file,
-                                param_token.line,
-                                param_token.column,
-                                param_token.type,
-                                param_token.value,
-                            )
-                        )
-
-                        if self.get_next_token() and self.get_next_token().value == ",":
-                            self.consume_token()
-                        else:
-                            break
-
-                self.expect_token(")")
-                self.consume_token()
-                func_body = self.parse_block_until(["end"])
-                self.expect_token("end")
-                self.consume_token()
-
-                return FuncDecl(
-                    func_name,
-                    func_parameters,
-                    func_body,
-                    token.file,
-                    token.line,
-                    token.column,
-                )
+                return LocalFuncDecl(self.build_fn(self.get_next_token()), token.file, token.line,token.column)
 
             elif token.value == "enum":
                 self.consume_token()
@@ -2341,7 +1716,10 @@ class Interpreter:
                 self.consume_token()
                 values = []
                 while self.get_next_token() and self.get_next_token().value != "}":
-                    values.append(self.expect_type("identifier").value)
+                    v = self.expect_type("identifier").value
+                    if v in values:
+                        raise NovaError(token, "Enum values must be unique.")
+                    values.append(v)
                     self.consume_token()
                 self.expect_token("}")
                 self.consume_token()
@@ -2545,7 +1923,7 @@ class Interpreter:
         while (
             self.get_next_token()
             and self.get_next_token().type == "operator"
-            and self.get_next_token().value in ["*", "/", "%"]
+            and self.get_next_token().value in ["*", "/", "%", "^"]
         ):
             operator_token = self.consume_token()
             operator = operator_token.value
@@ -2643,7 +2021,18 @@ class Interpreter:
                 args = []
                 if self.get_next_token() and self.get_next_token().value != ")":
                     while True:
-                        args.append(self.parse_expression())
+                        if self.get_next_token().value == "explode":
+                            token = self.consume_token()
+                            args.append(
+                                ExplodeExpr(
+                                    self.parse_expression(),
+                                    token.file,
+                                    token.line,
+                                    token.column,
+                                )
+                            )
+                        else:
+                            args.append(self.parse_expression())
                         if self.get_next_token() and self.get_next_token().value == ",":
                             self.consume_token()
                         else:
@@ -2740,7 +2129,8 @@ class Interpreter:
 
         if token.type == "number" or token.type == "string":
             self.consume_token()
-            node = Literal(token.value, token.file, token.line, token.column)
+            c = token.value
+            node = Literal(c, token.file, token.line, token.column)
         elif token.value == "[":
             self.consume_token()
             elements = []
@@ -2823,8 +2213,10 @@ class Interpreter:
         elif token.value == "@":
             at_token = self.consume_token()  # Consume '@'
             wrapper = self.parse_expression()
-            body = self.parse_def()
-            return Decorator(
+            # body = self.parse_def()
+            body = self.parse_expression()
+            #print(wrapper.__dict__, body.__dict__)
+            return DecoratorExpr(
                 wrapper, body, at_token.file, at_token.line, at_token.column
             )
 
@@ -2893,10 +2285,8 @@ class Interpreter:
     def execute_block(self, statements, env):
         previous_env = self.current_env
         self.current_env = env
-        current = None
         try:
             for stmt in statements:
-                current = stmt
                 result = self.execute_stmt(stmt, env)
                 if isinstance(result, ControlFlow):
                     return result
@@ -3055,7 +2445,6 @@ class Interpreter:
                     return result
                 elif isinstance(result, ContinueFlow):
                     continue
-
         elif stmt.type == "ForStmt":
             start = self.evaluate_expr(stmt.start, env)
             end = self.evaluate_expr(stmt.end, env)
@@ -3111,30 +2500,20 @@ class Interpreter:
                     )
 
                 handler = env.get("os-import-handler", stmt)
-                result = handler(module_path)
-
-                last = module_path.rsplit("/", 1)[-1]  # after final "/"
-                name = os.path.splitext(last)[0]  # strip extension
-
-                # Now bubble ONLY the last logical item from the handler result
-                # If result is a dict → use the last key
-                # If result has attributes → use the last attribute name
-                # Otherwise → it's already a final object
+                result = handler(module_path.replace("/", "."))
+                last = module_path.rsplit("/", 1)[-1]
+                name = os.path.splitext(last)[0]
+                parts = module_path.split("/")
                 final_value = result
+                for p in parts[1:]:
+                    if isinstance(final_value, dict):
+                        final_value = final_value[p]
+                    else:
+                        final_value = getattr(final_value, p)
 
-                if isinstance(result, dict) and result:
-                    # Pick the last key in sorted order OR insertion order
-                    last_key = next(reversed(result))
-                    final_value = result[last_key]
-
-                elif last != name:
-                    # Try attribute bubble (optional)
-                    last_attr = last
-                    if hasattr(result, last_attr):
-                        final_value = getattr(result, last_attr)
                 if stmt.alias:
-                    # Explicit alias wins
                     name = stmt.alias
+
                 env.define(name, final_value)
                 return
 
@@ -3213,6 +2592,12 @@ class Interpreter:
         elif stmt.type == "ReturnStmt":
             value = self.evaluate_expr(stmt.expression, env)
             return ReturnFlow(value)
+        elif stmt.type == "LocalFuncDecl":
+            _env = Environment(env)
+            _env.localsOnly = True
+            self.execute_stmt(stmt.fn, _env)
+            env.define(stmt.fn.name,_env.get(stmt.fn.name))
+
 
         elif stmt.type == "FuncDecl":
 
@@ -3342,6 +2727,11 @@ class Interpreter:
         elif stmt.type == "UsingStmt":
 
             def handle(name, env):
+                if isinstance(name, ObjectLiteral):
+                    val = self.evaluate_expr(name, env)
+                    for k, v in val.items():
+                        env.define(k, v)
+                    return
                 # Resolve the fully qualified namespace name
                 name_parts = name.split(".")
                 current_resolved_object = (
@@ -3578,7 +2968,7 @@ class Interpreter:
             # Handle operator overloading for custom objects (dicts)
             if isinstance(left, dict):
                 op = opToName(expr.operator)
-                if op in left and callable(left[op]):
+                if op and op in left and callable(left[op]):
                     try:
                         return left[op](right)
                     except Exception as e:
@@ -3602,6 +2992,8 @@ class Interpreter:
                     left = left.format(*right)
                     return left
                 return left % right
+            elif expr.operator == "^":
+                return left ^ right
             elif expr.operator == "-":
                 return left - right
             elif expr.operator == "*":
@@ -3623,14 +3015,14 @@ class Interpreter:
                 return left != right
             elif expr.operator == "<":
                 return left < right
+            elif expr.operator == ">":
+                return left > right
             elif expr.operator == ">>":
                 return left >> right
             elif expr.operator == "<<":
                 return left << right
             elif expr.operator == "<=":
                 return left <= right
-            elif expr.operator == ">":
-                return left > right
             elif expr.operator == ">=":
                 return left >= right
             elif expr.operator == "|>":
@@ -3668,7 +3060,17 @@ class Interpreter:
             func = env.get(expr.name, expr)
             if not callable(func):
                 raise NovaError(expr, f"{expr.name} is not a function")
-            args = [self.evaluate_expr(arg, env) for arg in expr.arguments]
+            args = []
+            for arg in expr.arguments:
+                if arg.type == "ExplodeExpr":
+                    v = self.evaluate_expr(arg.args, env)
+                    if isinstance(v, list):
+                        args.extend(v)
+                    else:
+                        args.append(v)
+                else:
+                    v = self.evaluate_expr(arg, env)
+                    args.append(v)
             return func(*args)
 
         elif expr.type == "MethodCall":
@@ -3712,7 +3114,7 @@ class Interpreter:
         elif expr.type == "ArrayAccess":
             arr = self.evaluate_expr(expr.object, env)
             index = self.evaluate_expr(expr.index, env)
-            if not isinstance(arr, (list, dict, str, tuple)):
+            if not isinstance(arr, (list, dict, str, tuple)) and not hasattr(arr, "__getitem__"):
                 raise NovaError(
                     expr,
                     f"Cannot access index of non-list/dict/indexible: {type(arr).__name__}",
@@ -3822,13 +3224,6 @@ class Interpreter:
                 )
             return c
 
-        elif expr.type == "Decorator":
-            value = self.evaluate_expr(expr.expr, env)
-            # print(value)
-            body = self.evaluate_expr(expr.body, env)
-            # print(body)
-            return value(body)
-
         elif expr.type == "LambdaDecl":
 
             def lambda_func_wrapper(*args):
@@ -3861,6 +3256,19 @@ class Interpreter:
                 return self.globals.get("undefined")
 
             return lambda_func_wrapper
-
+        elif expr.type == "DecoratorExpr":
+            #print(expr.__dict__)
+            value = self.evaluate_expr(expr.expr, env)
+            if not callable(value):
+                raise NovaError(expr.expr, "Expected to return a function")
+            #print(f"{value = }")
+            body = self.evaluate_expr(expr.body, env)
+            
+            if not callable(body):
+                raise NovaError(expr.body, "Expected to be a function")
+            #print(f"{body = }")
+            val = value(body)
+            #print(f"{val = }")
+            return val
         else:
-            raise NovaError(expr, f"Unknown expression type: {expr.type}")
+            raise NovaError(expr, f"Unknown expression type: {expr}")
