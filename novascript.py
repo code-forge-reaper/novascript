@@ -22,10 +22,11 @@ class Undefined(object):
 
 
 class Var:
-    def __init__(self, name, value, const):
+    def __init__(self, name, value, const=False, annotation=None):
         self.name = name
         self.value = value
         self.const = const
+        self.type_annotation = annotation
 
 
 # --- Environment for variable scoping ---
@@ -61,12 +62,12 @@ class Environment:
             stmt = self.deferred.pop()
             interpreter.execute_stmt(stmt, self)
 
-    def define(self, name, value, const=False):
+    def define(self, name, value, const=False, typeAnnotation=None):
         if name == "true" or name == "false":
             raise ValueError(f"cannot overwrite constant: {name}")
         if self.locked:
             raise NovaError(None, "Cannot define variable in locked environment")
-        self.values[name] = Var(name, value, const)
+        self.values[name] = Var(name, value, const, typeAnnotation)
 
     def has(self, name):
         if name in self.values:
@@ -79,10 +80,18 @@ class Environment:
     def assign(self, name, value, tok):
         if self.locked:
             raise NovaError(tok, "Cannot assign to variable in locked environment")
+
         if name in self.values:
-            if self.values[name].const:
-                raise NovaError(tok, "Cannot re-asign constant variables")
-            self.values[name].value = value
+            var = self.values[name]
+
+            # Check for constant violation (existing logic)
+            if var.const:
+                raise NovaError(tok, f"Cannot re-assign constant variable '{name}'")
+
+            check_type(var.type_annotation, value, tok)
+
+            var.value = value
+
         elif self.parent:
             if self.localsOnly:
                 raise NovaError(
@@ -94,9 +103,7 @@ class Environment:
             raise NovaError(tok, f"Undefined variable {name}")
 
     def get(self, name, tok=None):
-        if name == "true" or name == "false":
-            return Var(name, name == "true", True)
-        elif name in self.values:
+        if name in self.values:
             return self.values[name]
         elif self.parent:
             return self.parent.get(name, tok)
@@ -192,10 +199,7 @@ class NovaClass:
                                         )
                                     if param.annotation_type:
                                         check_type(
-                                            param.annotation_type,
-                                            arg_val,
-                                            param,
-                                            self.interpreter,
+                                            param.annotation_type, arg_val, param
                                         )
                                     super_method_env.define(param.name, arg_val)
 
@@ -252,9 +256,7 @@ class NovaClass:
                             f"Missing argument for parameter '{param.name}' in method '{_method_name}'.",
                         )
                     if param.annotation_type:
-                        check_type(
-                            param.annotation_type, arg_val, param, self.interpreter
-                        )
+                        check_type(param.annotation_type, arg_val, param)
                     method_env.define(param.name, arg_val)
 
                 result = self.interpreter.execute_block(_method_def.body, method_env)
@@ -320,7 +322,7 @@ class NovaClass:
                         f"Missing argument for parameter '{param.name}' in constructor of '{self.name}'.",
                     )
                 if param.annotation_type:
-                    check_type(param.annotation_type, arg_val, param, self.interpreter)
+                    check_type(param.annotation_type, arg_val, param)
                 constructor_env.define(param.name, arg_val)
 
             result = self.interpreter.execute_block(
@@ -336,7 +338,7 @@ CUSTOM_TYPES = {}  # Dictionary for custom types
 
 
 # --- Helper function for type checking ---
-def check_type(expected, value, token, interpreter):
+def check_type(expected, value, token):
     """
     possible:
         VAR_TYPES
@@ -398,7 +400,7 @@ def check_type(expected, value, token, interpreter):
 
             # Now check each property type
             for prop_def in custom_type_definition.properties:
-                check_type(prop_def.type, value[prop_def.name], token, interpreter)
+                check_type(prop_def.type, value[prop_def.name], token)
         else:
             raise NovaError(token, f"Unknown type: {expected}")
     return value
@@ -2445,13 +2447,13 @@ class Interpreter:
         if stmt.type == "VarDecl":
             value = self.evaluate_expr(stmt.initializer, env)
             if stmt.type_annotation:
-                check_type(stmt.type_annotation, value, stmt, self)
-            env.define(stmt.name, value)
+                check_type(stmt.type_annotation, value, stmt)
+            env.define(stmt.name, value, False, stmt.type_annotation)
         elif stmt.type == "ConstDecl":
             value = self.evaluate_expr(stmt.initializer, env)
             if stmt.type_annotation:
-                check_type(stmt.type_annotation, value, stmt, self)
-            env.define(stmt.name, value, True)
+                check_type(stmt.type_annotation, value, stmt)
+            env.define(stmt.name, value, True, stmt.type_annotation)
 
         elif stmt.type == "DeferStmt":
             # To match TypeScript's behavior: statements within a single defer block
@@ -2483,7 +2485,7 @@ class Interpreter:
                 error_to_define = (
                     e if isinstance(e, NovaError) else NovaError(stmt, str(e))
                 )
-                catch_env.define(stmt.error_var, error_to_define)
+                catch_env.define(stmt.error_var, error_to_define, True)
                 result = self.execute_block(stmt.catch_block, catch_env)
                 if isinstance(result, ControlFlow):
                     return result
@@ -2831,7 +2833,7 @@ class Interpreter:
 
                     # soft type check
                     if param.annotation_type:
-                        check_type(param.annotation_type, arg_val, param, self)
+                        check_type(param.annotation_type, arg_val, param)
 
                     func_env.define(param.name, arg_val)
 
@@ -2919,9 +2921,7 @@ class Interpreter:
                                         f"Missing argument for parameter '{param.name}' in static method '{_member.name}'.",
                                     )
                                 if param.annotation_type:
-                                    check_type(
-                                        param.annotation_type, arg_val, param, self
-                                    )
+                                    check_type(param.annotation_type, arg_val, param)
                                 method_env.define(param.name, arg_val)
                             result = self.execute_block(_member.body, method_env)
                             if isinstance(result, ReturnFlow):
@@ -3435,7 +3435,6 @@ class Interpreter:
                     expr.class_name,
                     c,
                     expr,
-                    self,
                 )
             return c
 
@@ -3461,7 +3460,7 @@ class Interpreter:
 
                     # soft type check
                     if param.annotation_type:
-                        check_type(param.annotation_type, arg_val, param, self)
+                        check_type(param.annotation_type, arg_val, param)
 
                     func_env.define(param.name, arg_val)
 
