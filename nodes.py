@@ -1,4 +1,3 @@
-
 # --- Control Flow Classes ---
 class ControlFlow:
     """Base class for control flow signals"""
@@ -71,12 +70,15 @@ class Expression(Token):
         # Generic expression, concrete expressions will override
         return f"[{self.__class__.__name__} Expression]"
 
+
 class ExplodeExpr(Expression):
     def __init__(self, args, file, line, col):
         super().__init__("ExplodeExpr", file, line, col)
         self.args = args
+
     def __str__(self, indent=0):
         return f"*[{self.args}]"
+
 
 class DecoratorExpr(Expression):
     def __init__(self, expr, body, file, line, column):
@@ -88,6 +90,7 @@ class DecoratorExpr(Expression):
         current_indent = INDENT_STEP * indent_level
         body_str = self.body.__str__(indent_level)
         return f"{current_indent}@{self.expr.__str__(indent_level)} {body_str}"
+
 
 # --- Specific AST Node Classes ---
 class Literal(Expression):
@@ -377,6 +380,23 @@ class ClassDefinition(Statement):
         return class_str
 
 
+# Add this class along with ClassDecl
+class ObjectDecl(Statement):
+    def __init__(self, name, super_class_name, body, file, line, column):
+        super().__init__("ObjectDecl", file, line, column)
+        self.name = name
+        self.super_class_name = super_class_name
+        self.body = body
+
+    def __str__(self, indent_level=0):
+        current_indent = INDENT_STEP * indent_level
+        inherits_str = (
+            f" inherits {self.super_class_name}" if self.super_class_name else ""
+        )
+        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        return f"{current_indent}object {self.name}{inherits_str}\n{body_str}\n{current_indent}end"
+
+
 class MethodDefinition(Statement):
     def __init__(
         self, name, parameters, body, is_static, is_constructor, file, line, column
@@ -621,6 +641,7 @@ class ReturnStmt(Statement):
         )
         return f"{current_indent}return{expr_str}"
 
+
 class LocalFuncDecl(Statement):
     def __init__(self, fn, file, line, column):
         super().__init__("LocalFuncDecl", file, line, column)
@@ -629,6 +650,7 @@ class LocalFuncDecl(Statement):
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
         return f"{current_indent}local {self.fn.__str__(indent_level)}"
+
 
 class FuncDecl(Statement):
     def __init__(self, name, parameters, body, file, line, column):
@@ -684,5 +706,3 @@ class UsingStmt(Statement):
             return f"{current_indent}using [{names_str}]"
         else:
             return f"{current_indent}using {self.name}"
-
-

@@ -3,10 +3,6 @@ from novascript import Interpreter, NovaError
 import sys, importlib
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.join(__file__, "libs")))
-sys.path.insert(0, os.getcwd())
-
-
 def main():
     if len(sys.argv) < 2:
         print("Usage: python nova_interpreter.py <nova_script_file.nova>")

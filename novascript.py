@@ -9,11 +9,22 @@ from urllib.parse import unquote, quote
 import struct
 from nodes import *
 
+# all of this spagetti just to follow one link/symlink
+LIBS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "libs")
+sys.path.insert(0, LIBS_PATH)
+
+sys.path.insert(0, os.getcwd())
+
+
+class Undefined(object):
+    def __str__(self):
+        return "undefined"
+
 
 # --- Environment for variable scoping ---
 class Environment:
     def __init__(self, parent=None):
-        self.values = {"true": True, "false": False}
+        self.values = {}
         self.parent = parent
         self.deferred = []
         self.locked = False
@@ -62,13 +73,20 @@ class Environment:
             raise NovaError(tok, "Cannot assign to variable in locked environment")
         if name in self.values:
             self.values[name] = value
-        elif self.parent and not self.localsOnly:
+        elif self.parent:
+            if self.localsOnly:
+                raise NovaError(
+                    tok,
+                    f"Cannot modify variable '{name}', since it is not created in this scope",
+                )
             self.parent.assign(name, value, tok)
         else:
             raise NovaError(tok, f"Undefined variable {name}")
 
     def get(self, name, tok=None):
-        if name in self.values:
+        if name == "true" or name == "false":
+            return name == "true"
+        elif name in self.values:
             return self.values[name]
         elif self.parent:
             return self.parent.get(name, tok)
@@ -303,7 +321,8 @@ class NovaClass:
         return instance
 
 
-VAR_TYPES = ["string", "number", "bool", "function", "list", "any"]
+BUILTIN_VAR_TYPES = ["string", "number", "bool", "function", "list", "any"]
+CUSTOM_TYPES = {}  # Dictionary for custom types
 
 
 # --- Helper function for type checking ---
@@ -342,7 +361,7 @@ def check_type(expected, value, token, interpreter):
             )
     else:
         # Check for custom types
-        custom_type_definition = interpreter.custom_types.get(
+        custom_type_definition = CUSTOM_TYPES.get(
             expected
         )  # Use original 'expected' for lookup
         if custom_type_definition:
@@ -377,16 +396,27 @@ def check_type(expected, value, token, interpreter):
 
 # --- Global Initialization ---
 def init_globals(globals_env):
-    # def pprint(*stuff):
-    #    for id, obj in enumerate(stuff):
-    #        end = "" if id == len(stuff) - 1 else " "
-    #        if isinstance(obj, dict) and "Str" in obj:
-    #            print(obj["Str"](), end=end)
-    #        else:
-    #            print(obj, end=end)
-    #    print()
+    def pprint(*stuff):
+        for id, obj in enumerate(stuff):
+            end = "" if id == len(stuff) - 1 else " "
+            if isinstance(obj, dict) and "Str" in obj:
+                print(obj["Str"](), end=end)
+            else:
+                if isinstance(obj, dict):
+                    s = {}
+                    # print("dict")
+                    for k in obj:
+                        v = obj[k]
+                        # print(k, v)
+                        if not k.startswith("__"):
+                            s[k] = v
+                    print(s, end=end)
+                else:
+                    print(obj, end=end)
+        print()
+
     # globals_env.define("print", pprint)
-    globals_env.define("print", print)
+    globals_env.define("print", pprint)
     globals_env.define("input", input)
     globals_env.define("tuple", tuple)
 
@@ -461,7 +491,8 @@ def init_globals(globals_env):
             return what in target  # works for list, str, set, tuple
 
         @staticmethod
-        def attr(target, what): return hasattr(target, what)
+        def attr(target, what):
+            return hasattr(target, what)
 
     globals_env.define("Has", Has)
 
@@ -554,7 +585,7 @@ def init_globals(globals_env):
     globals_env.define("math", mmath)
     globals_env.define("NaN", math.nan)
     globals_env.define("null", None)
-    globals_env.define("undefined", object())
+    globals_env.define("undefined", Undefined())
     globals_env.define("void", None)
 
     def delete(
@@ -668,9 +699,43 @@ def init_globals(globals_env):
             else:
                 raise ValueError(f"unknown {resolution = }")
 
+    class Object:
+        @staticmethod
+        def keys(obj):
+            return list(obj.keys())
+
+        @staticmethod
+        def get(obj, key, default=None):
+            return obj.get(key, default)
+
+        @staticmethod
+        def values(obj):
+            return list(obj.values())
+
+        @staticmethod
+        def items(obj):
+            return list(obj.items())
+
+        @staticmethod
+        def setattr(obj, key, value):
+            setattr(obj, key, value)
+
+        @staticmethod
+        def getattr(obj, key):
+            return getattr(obj, key)
+
+        @staticmethod
+        def hasattr(obj, key):
+            return hasattr(obj, key)
+
+        @staticmethod
+        def delattr(obj, key):
+            delattr(obj, key)
+
     globals_env.define("Runtime", Runtime)
     globals_env.define("Uri", Uri)
     globals_env.define("Fs", Fs)
+    globals_env.define("Object", Object)
     globals_env.define("Time", Time)
 
 
@@ -678,7 +743,7 @@ def opToName(op):
     def up(st):
         s = list(st)
         s[0] = s[0].upper()
-        return "".join(s)
+        return "__" + "".join(s)
 
     matches = {
         "+": up("add"),
@@ -736,6 +801,7 @@ class Interpreter:
         "enum",
         "assert",
         "class",
+        "object",
         "inherits",
         "static",
         "new",
@@ -753,13 +819,13 @@ class Interpreter:
         self.globals = Environment()
         self.imported_files = set()
         self.current_env = None
-        self.custom_types = {}  # Dictionary for custom types
 
         init_globals(self.globals)
         self.globals.define(
             "__SCRIPT_PATH__", os.path.dirname(os.path.abspath(self.file))
         )
         self.globals.define("__SCRIPT_NAME__", file_path)
+        self.globals.define("__IS_MAIN__", True)
 
     # --- Tokenization ---
     def tokenize(self, source, file):
@@ -900,10 +966,11 @@ class Interpreter:
                 continue
 
             # Strings: delimited by double quotes.
-            if char == '"':
+            if char in ['"', "'"]:
+                qte = char
                 i += 1
                 str_val = ""
-                while i < length and source[i] != '"':
+                while i < length and source[i] != qte:
                     if source[i] == "\\" and i + 1 < length:
                         i += 1
                         if source[i] == "n":
@@ -942,7 +1009,7 @@ class Interpreter:
                     ):  # If escaped newline or just newline in string
                         col = 1
                         line += 1
-                if i < length and source[i] == '"':  # Consume closing quote
+                if i < length and source[i] == qte:  # Consume closing quote
                     i += 1
                     col += 1
                 else:
@@ -1003,6 +1070,7 @@ class Interpreter:
         if token.value != value:
             raise NovaError(token, f"Expected token '{value}', got {token.value}")
         return token
+
     def build_fn(self, token):
         self.consume_token()
         func_name_token = self.expect_type("identifier")
@@ -1019,14 +1087,11 @@ class Interpreter:
                 self.consume_token()
 
                 annotation_type = None
-                if (
-                    self.get_next_token()
-                    and self.get_next_token().type == "identifier"
-                ):
+                if self.get_next_token() and self.get_next_token().type == "identifier":
                     type_token = self.get_next_token()
                     if (
-                        type_token.value in VAR_TYPES
-                        or type_token.value in self.custom_types
+                        type_token.value in BUILTIN_VAR_TYPES
+                        or type_token.value in CUSTOM_TYPES
                     ):
                         annotation_type = type_token.value
                         self.consume_token()
@@ -1119,6 +1184,31 @@ class Interpreter:
 
     def parse_class_definition(self):
         class_token = self.consume_token()  # consume 'class'
+        return self._build_class()
+
+    def parse_object_definition(self):
+        # This mirrors 'class' parsing but returns an ObjectDecl node
+        token = self.consume_token()  # consume 'object'
+
+        name_token = self.expect_type("identifier")
+        name = name_token.value
+        self.consume_token()
+
+        superclass_name = None
+        if self.get_next_token() and self.get_next_token().value == "inherits":
+            self.consume_token()
+            superclass_name = self.expect_type("identifier").value
+            self.consume_token()
+
+        body = self.parse_block_until(["end"])
+        self.expect_token("end")
+        self.consume_token()
+
+        return ObjectDecl(
+            name, superclass_name, body, token.file, token.line, token.column
+        )
+
+    def _build_class(self):
         name_token = self.expect_type("identifier")
         name = name_token.value
         self.consume_token()  # consume class name
@@ -1144,7 +1234,6 @@ class Interpreter:
             superclass_name = ".".join(name_parts)
             # --- MODIFIED LOGIC END ---
 
-        has_initializer = False
         body = []
         while self.get_next_token() and self.get_next_token().value != "end":
             member_token = self.get_next_token()
@@ -1209,7 +1298,6 @@ class Interpreter:
                 is_constructor = False
                 if method_name == "init":
                     is_constructor = True
-                    has_initializer = True
 
                 self.expect_token("(")
                 self.consume_token()
@@ -1228,8 +1316,8 @@ class Interpreter:
                         ):
                             type_token = self.get_next_token()
                             if (
-                                type_token.value in VAR_TYPES
-                                or type_token.value in self.custom_types
+                                type_token.value in BUILTIN_VAR_TYPES
+                                or type_token.value in CUSTOM_TYPES
                             ):
                                 annotation_type = type_token.value
                                 self.consume_token()
@@ -1385,7 +1473,7 @@ class Interpreter:
                 #    print("before",k)
                 for t in copyFroms:
                     # print(t)
-                    tt = self.custom_types[t.value]
+                    tt = CUSTOM_TYPES[t.value]
                     for k in tt.properties:
                         if not k in properties:
                             properties.append(k)
@@ -1396,13 +1484,15 @@ class Interpreter:
                 custom_type_stmt = CustomTypeDeclStmt(
                     custom_type_name, properties, token.file, token.line, token.column
                 )
-                self.custom_types[custom_type_stmt.name] = CustomType(
+                CUSTOM_TYPES[custom_type_stmt.name] = CustomType(
                     custom_type_stmt.name,
                     custom_type_stmt.definition,
                     custom_type_stmt.file,
                     custom_type_stmt.line,
                     custom_type_stmt.column,
                 )
+                print(CUSTOM_TYPES)
+
                 return None  # the statement is not handled at runtime, don't return it
 
             elif token.value == "var":
@@ -1412,16 +1502,18 @@ class Interpreter:
                 self.consume_token()
 
                 var_annotation_type = None
-                if (
-                    self.get_next_token()
-                    and self.get_next_token().type == "identifier"
-                    and (
-                        self.get_next_token().value in VAR_TYPES
-                        or self.get_next_token().value in self.custom_types
-                    )
-                ):  # Parentheses for clarity
-                    var_annotation_type = self.get_next_token().value
-                    self.consume_token()
+                if self.get_next_token() and self.get_next_token().type == "identifier":
+                    if (
+                        self.get_next_token().value in BUILTIN_VAR_TYPES
+                        or self.get_next_token().value in CUSTOM_TYPES
+                    ):  # Parentheses for clarity
+                        var_annotation_type = self.get_next_token().value
+                        self.consume_token()
+                    else:
+                        raise NovaError(
+                            self.get_next_token(),
+                            f"not a type: {self.get_next_token()}\n\ntypes: {BUILTIN_VAR_TYPES = }\n{CUSTOM_TYPES = }",
+                        )
 
                 self.expect_token("=")
                 self.consume_token()
@@ -1482,13 +1574,15 @@ class Interpreter:
             elif token.value == "using":
                 self.consume_token()
                 if self.get_next_token().value in ["[", "{"]:
-                    #print(values, self.get_next_token())
+                    # print(values, self.get_next_token())
                     # print(self.get_next_token())
                     token = self.get_next_token()
                     if token.value == "[":
                         self.consume_token()
                         values = []
-                        while self.get_next_token() and self.get_next_token().value != "]":
+                        while (
+                            self.get_next_token() and self.get_next_token().value != "]"
+                        ):
                             # Parse the fully qualified name, e.g., "module.sub.name"
                             name_parts = []
                             name_part_token = self.expect_type("identifier")
@@ -1496,7 +1590,8 @@ class Interpreter:
                             self.consume_token()  # Consume the first identifier
 
                             while (
-                                self.get_next_token() and self.get_next_token().value == "."
+                                self.get_next_token()
+                                and self.get_next_token().value == "."
                             ):
                                 self.consume_token()  # Consume the dot
                                 name_part_token = self.expect_type("identifier")
@@ -1505,7 +1600,10 @@ class Interpreter:
 
                             full_name = ".".join(name_parts)
                             values.append(full_name)
-                            if self.get_next_token() and self.get_next_token().value == ",":
+                            if (
+                                self.get_next_token()
+                                and self.get_next_token().value == ","
+                            ):
                                 self.consume_token()
                             else:
                                 break
@@ -1649,7 +1747,9 @@ class Interpreter:
                 self.consume_token()
                 if_condition = self.parse_expression()
                 if if_condition.type in ["AssignmentExpr"]:
-                    raise NovaError(if_condition, "you cannot do assinment ops in 'if' condition")
+                    raise NovaError(
+                        if_condition, "you cannot do assinment ops in 'if' condition"
+                    )
                 then_block = self.parse_block_until(["else", "elseif", "end"])
 
                 else_if_blocks = []
@@ -1663,7 +1763,10 @@ class Interpreter:
                     self.consume_token()
                     elseif_condition = self.parse_expression()
                     if elseif_condition.type in ["AssignmentExpr"]:
-                        raise NovaError(if_condition, "you cannot do assinment ops in 'elseif' condition")
+                        raise NovaError(
+                            if_condition,
+                            "you cannot do assinment ops in 'elseif' condition",
+                        )
                     elseif_body = self.parse_block_until(["else", "elseif", "end"])
                     else_if_blocks.append(
                         {"condition": elseif_condition, "body": elseif_body}
@@ -1706,7 +1809,12 @@ class Interpreter:
                 return self.build_fn(token)
             elif token.value == "local":
                 self.consume_token()
-                return LocalFuncDecl(self.build_fn(self.get_next_token()), token.file, token.line,token.column)
+                return LocalFuncDecl(
+                    self.build_fn(self.get_next_token()),
+                    token.file,
+                    token.line,
+                    token.column,
+                )
 
             elif token.value == "enum":
                 self.consume_token()
@@ -1753,6 +1861,8 @@ class Interpreter:
 
             elif token.value == "class":
                 return self.parse_class_definition()
+            elif token.value == "object":
+                return self.parse_object_definition()
 
         # --- Expression statement (fallback) ---
         expr = self.parse_expression()
@@ -2061,8 +2171,8 @@ class Interpreter:
                 if self.get_next_token() and self.get_next_token().type == "identifier":
                     type_token = self.get_next_token()
                     if (
-                        type_token.value in VAR_TYPES
-                        or type_token.value in self.custom_types
+                        type_token.value in BUILTIN_VAR_TYPES
+                        or type_token.value in CUSTOM_TYPES
                     ):
                         annotation_type = type_token.value
                         self.consume_token()
@@ -2215,7 +2325,7 @@ class Interpreter:
             wrapper = self.parse_expression()
             # body = self.parse_def()
             body = self.parse_expression()
-            #print(wrapper.__dict__, body.__dict__)
+            # print(wrapper.__dict__, body.__dict__)
             return DecoratorExpr(
                 wrapper, body, at_token.file, at_token.line, at_token.column
             )
@@ -2277,7 +2387,7 @@ class Interpreter:
             # Ensure deferred statements still execute
             self.globals.execute_deferred(self)
             if isinstance(err, NovaError):
-                print(f"{err.file}:{err.line}:{err.column}: {err.message}")
+                print(f"{err.message}")
                 exit()
             else:
                 raise err
@@ -2399,6 +2509,50 @@ class Interpreter:
                 if isinstance(result, ControlFlow):
                     return result
 
+        elif stmt.type == "ObjectDecl":
+            # 1. Resolve superclass if it exists
+            super_class = None
+            if stmt.super_class_name:
+                super_class = env.get(stmt.super_class_name, stmt)
+
+            # 2. Create a temporary NovaClass internal representation
+            # We use a unique/hidden name for the internal class
+            temp_class = NovaClass(f"__anon_{stmt.name}", super_class, self, env)
+
+            # 3. Populate the class with members from the body
+            for member in stmt.body:
+                if member.type == "FuncDecl":
+                    # Treat functions inside 'object' as instance methods
+                    # Note: You may want to check for a 'constructor' or 'init' name
+                    method_def = MethodDefinition(
+                        member.name,
+                        member.parameters,
+                        member.body,
+                        False,
+                        False,
+                        member.file,
+                        member.line,
+                        member.column,
+                    )
+                    temp_class.instance_methods[member.name] = method_def
+                elif member.type == "VarDecl":
+                    # Treat 'var' as instance properties
+                    prop_def = PropertyDefinition(
+                        member.name,
+                        member.type_annotation,
+                        member.initializer,
+                        False,
+                        member.file,
+                        member.line,
+                        member.column,
+                    )
+                    temp_class.instance_properties[member.name] = prop_def
+                else:
+                    raise NovaError(member, "not supported")
+
+            # 4. Instantiate and assign to the variable name provided
+            instance = temp_class.instantiate([], stmt)
+            env.define(stmt.name, instance)
         elif stmt.type == "WhileStmt":
             while self.evaluate_expr(stmt.condition, env):
                 result = self.execute_block(stmt.body, Environment(env))
@@ -2486,74 +2640,103 @@ class Interpreter:
                         return result
                     elif isinstance(result, ContinueFlow):
                         continue
-
         elif stmt.type == "ImportStmt":
             file_path = stmt.filename
+            is_py = file_path.startswith("py:")
+            path_str = file_path[3:] if is_py else file_path
 
-            if file_path.startswith("os:"):
-                module_path = file_path[3:]
+            # 1. Normalize path: Treat dots and slashes as separators for resolution
+            normalized_path = path_str.replace(".", "/")
 
+            # 2. Determine Namespace Strategy
+            # Use flat namespace (last part) if an explicit '/' is present.
+            # Otherwise, use merging (hierarchical) if '.' is present or it's a single name.
+            should_merge = "/" not in path_str
+
+            if is_py:
                 if not env.has("os-import-handler"):
                     raise NovaError(
-                        stmt,
-                        "os-import-handler is not defined, your runtime should define it.",
+                        stmt, "os-import-handler is not defined in the environment."
                     )
-
                 handler = env.get("os-import-handler", stmt)
-                result = handler(module_path.replace("/", "."))
-                last = module_path.rsplit("/", 1)[-1]
-                name = os.path.splitext(last)[0]
-                parts = module_path.split("/")
-                final_value = result
-                for p in parts[1:]:
-                    if isinstance(final_value, dict):
-                        final_value = final_value[p]
-                    else:
-                        final_value = getattr(final_value, p)
+                # Handler expects Python dot notation (e.g., 'fastapi.cli')
+                result = handler(normalized_path.replace("/", "."))
+            else:
+                fpath = None
+                libs = [LIBS_PATH, os.path.dirname(os.path.abspath(self.file))]
+                for p in libs:
+                    # Local NovaScript Import
+                    full_path = os.path.join(p, normalized_path)
+                    if not full_path.endswith(".nova"):
+                        full_path += ".nova"
 
-                if stmt.alias:
-                    name = stmt.alias
+                    if os.path.exists(full_path):
+                        fpath = full_path
+                        break
+                if not fpath:
+                    raise NovaError(
+                        stmt, f"Imported file not found: {normalized_path} in {libs}"
+                    )
+                full_path = fpath
 
-                env.define(name, final_value)
-                return
+                # Check shared imported files to avoid circular/duplicate execution
+                if full_path in self.imported_files:
+                    # In a shared environment, you might return the cached result here.
+                    # Currently, we skip re-execution to match existing project behavior.
+                    return
 
-            file_path += ".nova"
-            file_dir = os.path.dirname(self.file)
-            full_path = os.path.abspath(os.path.join(file_dir, file_path))
+                self.imported_files.add(full_path)
+                imported_env = Environment(self.globals)
+                imported_interpreter = Interpreter(full_path)
+                imported_interpreter.globals = imported_env
+                imported_interpreter.imported_files = self.imported_files
+                imported_interpreter.globals.define("__IS_MAIN__", False)
+                imported_interpreter.interpret()
 
-            if full_path in self.imported_files:
-                return  # Already imported
+                # Collect the module's exported values into a dictionary
+                result = {k: v for k, v in imported_env.values.items()}
 
-            self.imported_files.add(full_path)
+            # 3. Apply Namespace to Environment
+            if stmt.alias:
+                env.define(stmt.alias, result)
+            elif not should_merge:
+                # "/" behavior: set the last component as the namespace (e.g., 'a/b' -> 'b')
+                base_name = os.path.basename(normalized_path)
+                name = os.path.splitext(base_name)[0]
+                env.define(name, result)
+            else:
+                # "." behavior: Merge into a hierarchical structure
+                parts = normalized_path.split("/")
+                # Remove extension from the leaf if present
+                parts[-1] = os.path.splitext(parts[-1])[0]
+                root_name = parts[0]
 
-            if not os.path.exists(full_path):
-                raise NovaError(stmt, f"Import error: File not found at '{full_path}'")
+                if len(parts) == 1:
+                    env.define(root_name, result)
+                else:
+                    # Create or retrieve the root namespace
+                    if not env.has(root_name):
+                        env.define(root_name, {})
 
-            imported_interpreter = Interpreter(full_path)
-            # Share the same custom_types map
-            imported_interpreter.custom_types = self.custom_types
+                    current = env.get(root_name)
+                    # Traverse to the parent of the final leaf
+                    for i in range(1, len(parts) - 1):
+                        part = parts[i]
+                        if isinstance(current, dict):
+                            if part not in current:
+                                current[part] = {}
+                            current = current[part]
+                        elif hasattr(current, "__dict__"):
+                            if not hasattr(current, part):
+                                setattr(current, part, {})
+                            current = getattr(current, part)
 
-            imported_env = Environment(self.globals)
-            imported_env.define("__SCRIPT_NAME__", file_path)
-            imported_env.define("__SCRIPT_PATH__", full_path)
-
-            imported_interpreter.globals = (
-                imported_env  # Overwrite globals with the new imported_env
-            )
-            imported_interpreter.imported_files = (
-                self.imported_files
-            )  # Share imported files set
-
-            imported_interpreter.interpret()
-
-            namespace = {}
-            for key, value in imported_env.values.items():
-                namespace[key] = value
-
-            module_name = os.path.splitext(os.path.basename(file_path))[0]
-            name = stmt.alias or module_name.rsplit("/", 1)[-1]
-            env.define(name, namespace)
-
+                    # Assign the result to the leaf property
+                    leaf = parts[-1]
+                    if isinstance(current, dict):
+                        current[leaf] = result
+                    elif hasattr(current, "__dict__"):
+                        setattr(current, leaf, result)
         elif stmt.type == "ScopeStmt":
             n_env = Environment(env)
             n_env.localsOnly = True
@@ -2596,8 +2779,7 @@ class Interpreter:
             _env = Environment(env)
             _env.localsOnly = True
             self.execute_stmt(stmt.fn, _env)
-            env.define(stmt.fn.name,_env.get(stmt.fn.name))
-
+            env.define(stmt.fn.name, _env.get(stmt.fn.name))
 
         elif stmt.type == "FuncDecl":
 
@@ -3114,7 +3296,9 @@ class Interpreter:
         elif expr.type == "ArrayAccess":
             arr = self.evaluate_expr(expr.object, env)
             index = self.evaluate_expr(expr.index, env)
-            if not isinstance(arr, (list, dict, str, tuple)) and not hasattr(arr, "__getitem__"):
+            if not isinstance(arr, (list, dict, str, tuple)) and not hasattr(
+                arr, "__getitem__"
+            ):
                 raise NovaError(
                     expr,
                     f"Cannot access index of non-list/dict/indexible: {type(arr).__name__}",
@@ -3215,7 +3399,7 @@ class Interpreter:
                     expr,
                     f"'{expr.class_name}' (resolved to {target_class}) is not a constructible class.",
                 )
-            if self.custom_types.get(expr.class_name):
+            if CUSTOM_TYPES.get(expr.class_name):
                 check_type(
                     expr.class_name,
                     c,
@@ -3257,18 +3441,18 @@ class Interpreter:
 
             return lambda_func_wrapper
         elif expr.type == "DecoratorExpr":
-            #print(expr.__dict__)
+            # print(expr.__dict__)
             value = self.evaluate_expr(expr.expr, env)
             if not callable(value):
                 raise NovaError(expr.expr, "Expected to return a function")
-            #print(f"{value = }")
+            # print(f"{value = }")
             body = self.evaluate_expr(expr.body, env)
-            
+
             if not callable(body):
                 raise NovaError(expr.body, "Expected to be a function")
-            #print(f"{body = }")
+            # print(f"{body = }")
             val = value(body)
-            #print(f"{val = }")
+            # print(f"{val = }")
             return val
         else:
             raise NovaError(expr, f"Unknown expression type: {expr}")

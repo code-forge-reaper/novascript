@@ -25,7 +25,7 @@ contexts:
     - match: \b[a-zA-Z_]\w*\b
       scope: variable.other.nova
   class:
-    - match: \b(class|inherits|static|super)\b
+    - match: \b(class|object|inherits|static|super)\b
       scope: keyword.declaration.nova
   comments:
     - match: '//.*$'
@@ -42,12 +42,23 @@ contexts:
     - match: '"'
       scope: punctuation.definition.string.begin.nova
       push: double_quoted_string
+    - match: "'"
+      scope: punctuation.definition.string.begin.nova
+      push: single_quoted_string
 
   double_quoted_string:
     - meta_scope: string.quoted.double.nova
     - match: '\\.'
       scope: constant.character.escape.nova
     - match: '"'
+      scope: punctuation.definition.string.end.nova
+      pop: true
+
+  single_quoted_string:
+    - meta_scope: string.quoted.single.nova
+    - match: '\\.'
+      scope: constant.character.escape.nova
+    - match: "'"
       scope: punctuation.definition.string.end.nova
       pop: true
 

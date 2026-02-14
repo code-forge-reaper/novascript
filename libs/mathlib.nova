@@ -1,0 +1,36 @@
+func grid2d(width number, height number)
+	var grid = []
+	for y=0, height do
+		grid.append([])
+		for x = 0, width do
+			grid[y].append(0)
+		end
+	end
+	return grid
+end
+
+class Vec2
+	func init(x,y)
+		$x
+		$y
+	end
+	func __Add(v2)  // vec2 + vec2
+		return new Vec2(self.x + v2.x, self.y + v2.y)
+	end
+	func __Sub(v2)
+		return new Vec2(self.x - v2.x, self.y - v2.y)
+	end
+	func __Mul(v2)
+		return new Vec2(self.x * v2.x, self.y * v2.y)
+	end
+end
+
+if __IS_MAIN__
+	var grid = grid2d(20,20)
+	print(grid)
+	var v1 = new Vec2(20,20)
+	var v2 = new Vec2(10,10)
+	print(v1+v2)
+	print(v1-v2)
+	print(v1*v2)
+end
