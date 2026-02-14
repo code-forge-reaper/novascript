@@ -21,10 +21,20 @@ class Undefined(object):
         return "undefined"
 
 
+class Var:
+    def __init__(self, name, value, const):
+        self.name = name
+        self.value = value
+        self.const = const
+
+
 # --- Environment for variable scoping ---
 class Environment:
     def __init__(self, parent=None):
-        self.values = {}
+        self.values: dict[str, Var] = {
+            "true": Var("true", True, True),
+            "false": Var("false", False, True),
+        }
         self.parent = parent
         self.deferred = []
         self.locked = False
@@ -51,12 +61,12 @@ class Environment:
             stmt = self.deferred.pop()
             interpreter.execute_stmt(stmt, self)
 
-    def define(self, name, value):
+    def define(self, name, value, const=False):
         if name == "true" or name == "false":
             raise ValueError(f"cannot overwrite constant: {name}")
         if self.locked:
             raise NovaError(None, "Cannot define variable in locked environment")
-        self.values[name] = value
+        self.values[name] = Var(name, value, const)
 
     def has(self, name):
         if name in self.values:
@@ -67,12 +77,12 @@ class Environment:
             return False
 
     def assign(self, name, value, tok):
-        if name == "true" or name == "false":
-            raise ValueError(f"cannot overwrite constant: {name}")
         if self.locked:
             raise NovaError(tok, "Cannot assign to variable in locked environment")
         if name in self.values:
-            self.values[name] = value
+            if self.values[name].const:
+                raise NovaError(tok, "Cannot re-asign constant variables")
+            self.values[name].value = value
         elif self.parent:
             if self.localsOnly:
                 raise NovaError(
@@ -85,7 +95,7 @@ class Environment:
 
     def get(self, name, tok=None):
         if name == "true" or name == "false":
-            return name == "true"
+            return Var(name, name == "true", True)
         elif name in self.values:
             return self.values[name]
         elif self.parent:
@@ -544,7 +554,7 @@ def init_globals(globals_env):
             return bytes(s)
 
         def undefined(s):
-            return s == globals_env.get("undefined")
+            return s == globals_env.get("undefined").value
 
         @staticmethod
         def toBytes(s, enc="utf8"):
@@ -770,6 +780,7 @@ def opToName(op):
 class Interpreter:
     keywords = [
         "var",
+        "const",
         "if",
         "else",
         "elseif",
@@ -1184,31 +1195,6 @@ class Interpreter:
 
     def parse_class_definition(self):
         class_token = self.consume_token()  # consume 'class'
-        return self._build_class()
-
-    def parse_object_definition(self):
-        # This mirrors 'class' parsing but returns an ObjectDecl node
-        token = self.consume_token()  # consume 'object'
-
-        name_token = self.expect_type("identifier")
-        name = name_token.value
-        self.consume_token()
-
-        superclass_name = None
-        if self.get_next_token() and self.get_next_token().value == "inherits":
-            self.consume_token()
-            superclass_name = self.expect_type("identifier").value
-            self.consume_token()
-
-        body = self.parse_block_until(["end"])
-        self.expect_token("end")
-        self.consume_token()
-
-        return ObjectDecl(
-            name, superclass_name, body, token.file, token.line, token.column
-        )
-
-    def _build_class(self):
         name_token = self.expect_type("identifier")
         name = name_token.value
         self.consume_token()  # consume class name
@@ -1391,6 +1377,20 @@ class Interpreter:
             class_token.column,
         )
 
+    def parse_object_definition(self):
+        # This mirrors 'class' parsing but returns an ObjectDecl node
+        token = self.consume_token()  # consume 'object'
+
+        name_token = self.expect_type("identifier")
+        name = name_token.value
+        self.consume_token()
+
+        body = self.parse_block_until(["end"])
+        self.expect_token("end")
+        self.consume_token()
+
+        return ObjectDecl(name, body, token.file, token.line, token.column)
+
     # --- Parsing Statements and Expressions ---
     def _parse_statement(self):
         return self.parse_statement()
@@ -1519,6 +1519,38 @@ class Interpreter:
                 self.consume_token()
                 var_initializer = self.parse_expression()
                 return VarDeclStmt(
+                    var_name,
+                    var_annotation_type,
+                    var_initializer,
+                    token.file,
+                    token.line,
+                    token.column,
+                )
+
+            elif token.value == "const":
+                self.consume_token()
+                var_name_token = self.expect_type("identifier")
+                var_name = var_name_token.value
+                self.consume_token()
+
+                var_annotation_type = None
+                if self.get_next_token() and self.get_next_token().type == "identifier":
+                    if (
+                        self.get_next_token().value in BUILTIN_VAR_TYPES
+                        or self.get_next_token().value in CUSTOM_TYPES
+                    ):  # Parentheses for clarity
+                        var_annotation_type = self.get_next_token().value
+                        self.consume_token()
+                    else:
+                        raise NovaError(
+                            self.get_next_token(),
+                            f"not a type: {self.get_next_token()}\n\ntypes: {BUILTIN_VAR_TYPES = }\n{CUSTOM_TYPES = }",
+                        )
+
+                self.expect_token("=")
+                self.consume_token()
+                var_initializer = self.parse_expression()
+                return ConstDeclStmt(
                     var_name,
                     var_annotation_type,
                     var_initializer,
@@ -2415,6 +2447,11 @@ class Interpreter:
             if stmt.type_annotation:
                 check_type(stmt.type_annotation, value, stmt, self)
             env.define(stmt.name, value)
+        elif stmt.type == "ConstDecl":
+            value = self.evaluate_expr(stmt.initializer, env)
+            if stmt.type_annotation:
+                check_type(stmt.type_annotation, value, stmt, self)
+            env.define(stmt.name, value, True)
 
         elif stmt.type == "DeferStmt":
             # To match TypeScript's behavior: statements within a single defer block
@@ -2510,16 +2547,8 @@ class Interpreter:
                     return result
 
         elif stmt.type == "ObjectDecl":
-            # 1. Resolve superclass if it exists
-            super_class = None
-            if stmt.super_class_name:
-                super_class = env.get(stmt.super_class_name, stmt)
+            temp_class = NovaClass(f"__anon_{stmt.name}", None, self, env)
 
-            # 2. Create a temporary NovaClass internal representation
-            # We use a unique/hidden name for the internal class
-            temp_class = NovaClass(f"__anon_{stmt.name}", super_class, self, env)
-
-            # 3. Populate the class with members from the body
             for member in stmt.body:
                 if member.type == "FuncDecl":
                     # Treat functions inside 'object' as instance methods
@@ -2658,7 +2687,7 @@ class Interpreter:
                     raise NovaError(
                         stmt, "os-import-handler is not defined in the environment."
                     )
-                handler = env.get("os-import-handler", stmt)
+                handler = env.get("os-import-handler", stmt).value
                 # Handler expects Python dot notation (e.g., 'fastapi.cli')
                 result = handler(normalized_path.replace("/", "."))
             else:
@@ -2718,7 +2747,7 @@ class Interpreter:
                     if not env.has(root_name):
                         env.define(root_name, {})
 
-                    current = env.get(root_name)
+                    current = env.get(root_name).value
                     # Traverse to the parent of the final leaf
                     for i in range(1, len(parts) - 1):
                         part = parts[i]
@@ -2779,7 +2808,9 @@ class Interpreter:
             _env = Environment(env)
             _env.localsOnly = True
             self.execute_stmt(stmt.fn, _env)
-            env.define(stmt.fn.name, _env.get(stmt.fn.name))
+            env.define(
+                stmt.fn.name, _env.get(stmt.fn.name).value, _env.get(stmt.fn.name).const
+            )
 
         elif stmt.type == "FuncDecl":
 
@@ -3035,7 +3066,7 @@ class Interpreter:
         if expr.type == "Literal":
             return expr.value
         elif expr.type == "Identifier":
-            return env.get(expr.name, expr)
+            return env.get(expr.name, expr).value
         elif expr.type == "AssignmentExpr":
             target = expr.target
             assigned_value = self.evaluate_expr(expr.value, env)
@@ -3239,7 +3270,7 @@ class Interpreter:
                 raise NovaError(expr, f"Unknown unary operator: {expr.operator}")
 
         elif expr.type == "FuncCall":
-            func = env.get(expr.name, expr)
+            func = env.get(expr.name, expr).value
             if not callable(func):
                 raise NovaError(expr, f"{expr.name} is not a function")
             args = []

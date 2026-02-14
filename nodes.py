@@ -303,6 +303,22 @@ class VarDeclStmt(Statement):
         return f"{current_indent}{var_str}"
 
 
+class ConstDeclStmt(Statement):
+    def __init__(self, name, type_annotation, initializer, file, line, column):
+        super().__init__("ConstDecl", file, line, column)
+        self.name = name
+        self.type_annotation = type_annotation
+        self.initializer = initializer
+
+    def __str__(self, indent_level=0):
+        current_indent = INDENT_STEP * indent_level
+        var_str = f"const {self.name}"
+        if self.type_annotation:
+            var_str += f": {self.type_annotation}"
+        var_str += f" = {self.initializer.__str__(indent_level)}"
+        return f"{current_indent}{var_str}"
+
+
 class CustomTypeProperty:
     def __init__(self, name, type):
         self.name = name
@@ -382,19 +398,16 @@ class ClassDefinition(Statement):
 
 # Add this class along with ClassDecl
 class ObjectDecl(Statement):
-    def __init__(self, name, super_class_name, body, file, line, column):
+    def __init__(self, name, body, file, line, column):
         super().__init__("ObjectDecl", file, line, column)
         self.name = name
-        self.super_class_name = super_class_name
         self.body = body
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
-        inherits_str = (
-            f" inherits {self.super_class_name}" if self.super_class_name else ""
-        )
+
         body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
-        return f"{current_indent}object {self.name}{inherits_str}\n{body_str}\n{current_indent}end"
+        return f"{current_indent}object {self.name}\n{body_str}\n{current_indent}end"
 
 
 class MethodDefinition(Statement):
