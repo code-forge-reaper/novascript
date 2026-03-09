@@ -1,0 +1,312 @@
+// this is the most hacky lib i ever made
+import "mathlib" as mlib
+import "py:sys"
+/*
+This allows us to:
+- Precompute the max_width by simulating all lines first.
+- Apply transformations like centering during rendering, after knowing final widths.
+- More flexibility for future features (e.g., right-align, colors if you extend to ANSI).
+
+Instructions are stored as a list of dicts, like:
+{type: "text", content: "foo"}
+{type: "newline", sep: false}
+{type: "centered", content: "bar"}
+
+In EndBox:
+1. First pass: Simulate building lines to compute max_width.
+2. Second pass: Build actual rendered lines with padding/centering.
+
+my entire reason for making this, is for a stupid bit in a story i was writting,
+it was meant for like, one, maybe two scenes, that's it
+*/
+
+const PADDING = 4
+
+const ASCII = {
+    // Corners
+    TL: "┌",TR: "┐",
+    BL: "└",BR: "┘",
+
+    // Lines
+    H:  "─",
+    V:  "│",
+
+    // Junctions
+
+            MT: "┬",
+    LT: "├",CR: "┼",RT: "┤",
+            MB: "┴"
+}
+
+class BoxBuilder
+    var instructions = []  // List of dicts for ops
+    var max_width = 0      // Computed in EndBox now
+
+    func AddText(text)
+        self.instructions.append({type: "text", content: text})
+        return self
+    end
+
+    func NewLine(sep = false)
+        self.instructions.append({type: "newline", sep: sep})
+        return self
+    end
+
+    func Sep() self.NewLine(true) return self end
+
+    func AddLine(text, sep = false)
+        self.AddText(text)
+        self.NewLine(sep)
+        return self
+    end
+
+    func AddCentered(text, sep = false)
+        self.instructions.append({type: "centered", content: text})
+        self.NewLine(sep)
+        return self
+    end
+
+    func AddSpacer()
+        self.instructions.append({type: "newline", sep: false})
+        return self
+    end
+
+    func Bar(current, max, maxWidth=0, display="#", empty="*")
+        if maxWidth == 0
+            current = math.min(current, max)
+            return display * current + empty * (max - current)
+        else
+            current = mlib.clamp(current, 0, max)
+
+            var filled = math.floor((current / max) * maxWidth)
+
+            return display * filled + empty * (maxWidth - filled)
+        end
+    end
+    func Center(text, width)
+        var remaining = width - #text
+        if remaining < 0 return text end
+        var left = math.floor(remaining / 2)
+        var right = remaining - left
+        return " " * left + text + " " * right
+    end
+
+    func _compute_max_width()
+        var current_line = ""
+        var local_max = 0
+        foreach instr in self.instructions do
+            if instr.type == "text" || instr.type == "centered"
+                current_line += instr.content
+            elseif instr.type == "box"
+                // this shouldn't fucking work, but it does
+                var sub_width = instr.width + PADDING
+                local_max = math.max(local_max, sub_width)
+                //local_max += math.max(local_max, instr.sub._compute_max_width())
+
+            elseif instr.type == "newline"
+                local_max = math.max(local_max, #current_line)
+                current_line = ""
+            end
+        end
+        if current_line  // Last line if no final newline
+            local_max = math.max(local_max, #current_line)
+        end
+        return local_max
+    end
+    func Border(left, right, width) return left + ASCII.H * (width - 2) + right end
+
+    func RenderBox()
+        self.max_width = math.max(self._compute_max_width(), 6)
+        var box_width = self.max_width + PADDING
+
+        var top_border = Border(ASCII.TL, ASCII.TR, box_width)
+        var bottom_border = Border(ASCII.BL, ASCII.BR, box_width)
+        var sep_border = Border(ASCII.LT, ASCII.RT, box_width)
+
+        var rendered_lines = [top_border]
+
+        var current_line = ""
+        foreach instr in self.instructions do
+            if instr.type == "text"
+                current_line += instr.content
+            elseif instr.type == "centered"
+                current_line += self.Center(instr.content, self.max_width)
+            elseif instr.type == "box"
+                if current_line
+                    rendered_lines.append(
+                        ASCII.V+" " + current_line.ljust(self.max_width) + " "+ASCII.V
+                    )
+                    current_line = ""
+                end
+
+                var rendered = instr.sub.RenderBox()
+                foreach line in rendered.split("\n") do
+                    rendered_lines.append(ASCII.V + " " + line.ljust(self.max_width) + " " + ASCII.V)
+                end
+            elseif instr.type == "newline"
+                if current_line
+                    rendered_lines.append(ASCII.V+" " + current_line.ljust(self.max_width) + " "+ASCII.V)
+                    current_line = ""
+                else
+                    rendered_lines.append(ASCII.V+" " + " " * self.max_width + " "+ASCII.V)
+                end
+                if instr.sep
+                    rendered_lines.append(sep_border)
+                end
+            end
+        end
+
+        if current_line
+            rendered_lines.append(ASCII.V+" " + current_line.ljust(self.max_width) + " "+ASCII.V)
+        end
+
+        rendered_lines.append(bottom_border)
+
+        var out = "\n".join(rendered_lines)
+
+        self.instructions.clear()
+        self.max_width = 0
+
+        return out
+    end
+    func EndBox(printTo = sys.stdout)
+        write(self.RenderBox(), printTo)
+    end
+end
+const _box = new BoxBuilder()
+using _box
+
+func AddMultiline(text)
+    foreach line in text.split("\n") do
+        AddLine(line)
+    end
+end
+
+func CheckBox(txt, check = false)
+    if check return("[x] - " + txt) else return("[ ] - " + txt) end
+end
+
+func Indent(text, spaces = 2)
+    var pad = " " * spaces
+    var out = []
+
+    foreach line in text.split("\n") do
+        out.append(pad + line)
+    end
+
+    return "\n".join(out)
+end
+
+func Box(items, prepend = "")
+    var inner = new BoxBuilder()
+    foreach item in items do
+        if Is.string(item) && Has.item(item,"\n")  // naive detection of multi-line
+            foreach line in item.split("\n") do
+                inner.AddLine(prepend + line)
+            end
+        elseif Is.dict(item) && item.type
+            //print(item)
+            inner.instructions.append(item)
+        else
+            inner.AddLine(prepend + Parse.str(item))
+        end
+    end
+    return {
+        type: 'box',
+        sub: inner,
+        width: inner._compute_max_width()
+
+    }
+end
+// if your function just needs to do one thing, i recomend you do this
+func BoxStr(items, prepend="") = instructions.append(Box(items, prepend))
+
+// same as
+/*
+func BoxStr(items, prepend="") return instructions.append(Box(items, prepend)) end
+
+but looks better
+*/
+func Table(props)
+    // Step 1: collect column names and compute widths
+    var col_names = []
+    var col_widths = []
+    var max_rows = 0
+
+    foreach key in props do
+        col_names.append(key)
+        var rows = props[key]
+        var max_len = #key
+        foreach row in rows do
+            max_len = math.max(max_len, #row)
+        end
+        col_widths.append(max_len)
+        max_rows = math.max(max_rows, #rows)
+    end
+
+    // Helper to build a border line (returns a string)
+    func border_line(left, mid, right)
+        var line = left
+        for i = 0, #col_names - 1 do
+            line += ASCII.H * (col_widths[i] + 2)   // +2 for padding spaces
+            if i < #col_names - 1
+                line += mid
+            end
+        end
+        line += right
+        return line
+    end
+
+    var out = ""
+
+    // Top border
+    out += border_line(ASCII.TL, ASCII.MT, ASCII.TR) + "\n"
+
+    // Header row
+    var header = ASCII.V
+    for i = 0, #col_names - 1 do
+        var name = col_names[i]
+        var w = col_widths[i]
+        header += " " + name.ljust(w) + " " + ASCII.V
+    end
+    out += header + "\n"
+
+    // Separator
+    out += border_line(ASCII.LT, ASCII.CR, ASCII.RT) + "\n"
+
+    // Data rows
+    for r = 0, max_rows - 1 do
+        var row = ASCII.V
+        for i = 0, #col_names - 1 do
+            var rows = props[col_names[i]]
+            var cell = ""
+            if r < #rows cell = rows[r] end
+
+            var w = col_widths[i]
+            row += " " + cell.ljust(w) + " " + ASCII.V
+        end
+        out += row + "\n"
+    end
+
+    // Bottom border
+    out += border_line(ASCII.BL, ASCII.MB, ASCII.BR)
+
+    return out
+end
+if __IS_MAIN__
+    AddText("Status")
+    Sep()
+    AddLine("hello, world", true)
+    AddLine(Bar(5,20))
+    AddText("shit to buy") BoxStr([
+        "Wine", "Sugar","Salt", Box([
+            "Rice",
+            "Vinegar"
+        ], "* ")
+    ], "() ")
+    Table({
+        cool: ["this should", "scale automaticaly", "not be best, but not the worst"],
+        ideas: ["another", "double pass", "system"]
+    }) -> AddMultiline
+    EndBox()
+end

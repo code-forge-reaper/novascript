@@ -88,7 +88,7 @@ contexts:
       scope: storage.type.nova
 
     # builtin
-    - match: \b(undefined|null|NaN)\b
+    - match: \b(undefined|nil|NaN)\b
       scope: constant.language.nova
 
   namespace_definition:
@@ -167,7 +167,7 @@ contexts:
       scope: keyword.declaration.nova
 
   operators:
-    - match: ==|!=|<=|>=|\+=|-=|\*=|/=|&&|\|\||[=+\-*/<>!]
+    - match: ==|!=|<=|->=|\+=|-=|\*=|/=|&&|\|\||[=+\-*/<>!]
       scope: keyword.operator.nova
     - match: '[\(\)\[\]\{\}\.,:]'
       scope: punctuation.separator.nova

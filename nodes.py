@@ -131,7 +131,12 @@ class BinaryExpr(Expression):
 
 class PipeExpr(BinaryExpr):
     def __init__(self, left, right, file, line, column):
-        super().__init__("|>", left, right, file, line, column)
+        super().__init__("->", left, right, file, line, column)
+
+
+class MapExpr(BinaryExpr):
+    def __init__(self, left, right, file, line, column):
+        super().__init__("=>", left, right, file, line, column)
 
 
 class UnaryExpr(Expression):
@@ -427,7 +432,7 @@ class MethodDefinition(Statement):
         body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
         static_prefix = "static " if self.is_static else ""
         name = "init" if self.is_constructor else self.name
-        return f"{current_indent}{static_prefix}func {name}({params_str}) do\n{body_str}\n{current_indent}end"
+        return f"{current_indent}{static_prefix}func {name}({params_str}) \n{body_str}\n{current_indent}end"
 
 
 class PropertyDefinition(Statement):

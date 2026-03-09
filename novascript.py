@@ -8,6 +8,8 @@ import codecs
 from urllib.parse import unquote, quote
 import struct
 from nodes import *
+import uuid
+from collections.abc import Iterable
 
 # all of this spagetti just to follow one link/symlink
 LIBS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "libs")
@@ -19,6 +21,9 @@ sys.path.insert(0, os.getcwd())
 class Undefined(object):
     def __str__(self):
         return "undefined"
+
+
+__no_variable_set__ = object()
 
 
 class Var:
@@ -63,8 +68,6 @@ class Environment:
             interpreter.execute_stmt(stmt, self)
 
     def define(self, name, value, const=False, typeAnnotation=None):
-        if name == "true" or name == "false":
-            raise ValueError(f"cannot overwrite constant: {name}")
         if self.locked:
             raise NovaError(None, "Cannot define variable in locked environment")
         self.values[name] = Var(name, value, const, typeAnnotation)
@@ -208,7 +211,8 @@ class NovaClass:
                                 )
                                 if isinstance(result, ReturnFlow):
                                     return result.value
-                                return self.interpreter.globals.get("undefined")
+                                # FIX: Get value of undefined
+                                return self.interpreter.globals.get("undefined").value
 
                             super_obj[super_method_name] = super_method_wrapper
                     elif isinstance(self.super_class, type):
@@ -262,7 +266,8 @@ class NovaClass:
                 result = self.interpreter.execute_block(_method_def.body, method_env)
                 if isinstance(result, ReturnFlow):
                     return result.value
-                return self.interpreter.globals.get("undefined")
+                # FIX: Get value of undefined
+                return self.interpreter.globals.get("undefined").value
 
             instance[method_name] = nova_method
 
@@ -343,30 +348,29 @@ def check_type(expected, value, token):
     possible:
         VAR_TYPES
     """
-    actual_expected = expected
-    if actual_expected == "any":
+    if expected == "any" or expected == None:
         return value
-    if actual_expected == "number":
+    if expected == "number":
         if not isinstance(value, (int, float)):
             raise NovaError(
                 token, f"Type mismatch: expected number, got {type(value).__name__}"
             )
-    elif actual_expected == "string":
+    elif expected == "string":
         if not isinstance(value, str):
             raise NovaError(
                 token, f"Type mismatch: expected string, got {type(value).__name__}"
             )
-    elif actual_expected == "bool":
+    elif expected == "bool":
         if not isinstance(value, bool):
             raise NovaError(
                 token, f"Type mismatch: expected bool, got {type(value).__name__}"
             )
-    elif actual_expected == "function":
+    elif expected == "function":
         if not callable(value):
             raise NovaError(
                 token, f"Type mismatch: expected function, got {type(value).__name__}"
             )
-    elif actual_expected == "list":
+    elif expected == "list":
         if not isinstance(value, list):
             raise NovaError(
                 token, f"Type mismatch: expected list, got {type(value).__name__}"
@@ -429,6 +433,7 @@ def init_globals(globals_env):
 
     # globals_env.define("print", pprint)
     globals_env.define("print", pprint)
+    globals_env.define("write", lambda t, to: print(t, file=to))
     globals_env.define("input", input)
     globals_env.define("tuple", tuple)
 
@@ -482,6 +487,10 @@ def init_globals(globals_env):
             return isinstance(a, list)  # renamed to be more idiomatic
 
         @staticmethod
+        def dict(a):
+            return isinstance(a, dict)
+
+        @staticmethod
         def callable(c):
             return callable(c)
 
@@ -528,6 +537,13 @@ def init_globals(globals_env):
         @staticmethod
         def str(s):
             return str(s)
+
+        @staticmethod
+        def toStr(thing):
+            if isinstance(thing, list):
+                return "".join(thing)
+            else:
+                return str(thing)
 
         @staticmethod
         def bool(s):
@@ -593,12 +609,13 @@ def init_globals(globals_env):
         if not k.startswith("_"):
             mmath[k] = v
     mmath["abs"] = abs
+    mmath["max"] = max
+    mmath["min"] = min
 
     globals_env.define("math", mmath)
     globals_env.define("NaN", math.nan)
-    globals_env.define("null", None)
+    globals_env.define("nil", None)
     globals_env.define("undefined", Undefined())
-    globals_env.define("void", None)
 
     def delete(
         x, y
@@ -639,7 +656,7 @@ def init_globals(globals_env):
             return dict(os.environ)  # Return a copy of the environment variables
 
         @staticmethod
-        def throw(reason, *rest):
+        def panic(reason, *rest):
             if rest:
                 reason = reason.format(*rest)  # Pythonic way to format
             raise Exception(reason)
@@ -660,6 +677,10 @@ def init_globals(globals_env):
         def write(path, contents, opts={"mode": "w", "encoding": "utf8"}):
             with open(path, **opts) as f:
                 f.write(contents)
+
+        @staticmethod
+        def join(*s):
+            return os.path.join(*s)
 
         @staticmethod
         def exists(path):
@@ -806,7 +827,6 @@ class Interpreter:
         "defer",
         "switch",
         "strict",
-        "case",
         "default",
         "using",
         "def",
@@ -906,7 +926,8 @@ class Interpreter:
                 ">=",
                 "&&",
                 "||",
-                "|>",
+                "->",
+                "=>",
             ]
             current_two_char = char + next_char
 
@@ -978,60 +999,68 @@ class Interpreter:
                     )
                 continue
 
-            # Strings: delimited by double quotes.
             if char in ['"', "'"]:
-                qte = char
+                quote = char
                 i += 1
-                str_val = ""
-                while i < length and source[i] != qte:
-                    if source[i] == "\\" and i + 1 < length:
+                value = []
+
+                while i < length:
+                    c = source[i]
+
+                    if c == quote:
+                        break
+
+                    if c == "\\":
                         i += 1
-                        if source[i] == "n":
-                            str_val += "\n"
-                        elif source[i] == "t":
-                            str_val += "\t"
-                        elif source[i] == "r":
-                            str_val += "\r"
-                        elif source[i] == "\\":
-                            str_val += "\\"
-                        elif source[i] == '"':
-                            str_val += '"'
-                        elif source[i] == "0":
-                            str_val += "\\0"
-                        else:
+                        if i >= length:
+                            raise NovaError(
+                                Token("error", "Unterminated escape", file, line, col),
+                                "Unterminated escape sequence",
+                            )
+
+                        esc = source[i]
+
+                        escapes = {
+                            "n": "\n",
+                            "t": "\t",
+                            "r": "\r",
+                            "\\": "\\",
+                            '"': '"',
+                            "'": "'",
+                            "0": "\0",
+                        }
+
+                        if esc not in escapes:
                             raise NovaError(
                                 Token(
-                                    "error",
-                                    "Invalid escape sequence",
-                                    file,
-                                    line,
-                                    col,
+                                    "error", "Invalid escape sequence", file, line, col
                                 ),
-                                "Invalid escape sequence",
+                                f"Invalid escape sequence \\{esc}",
                             )
-                        # else:
-                        #    str_val += source[
-                        #        i
-                        #    ]  # Unrecognized escape sequence, just add char
+
+                        value.append(escapes[esc])
+
                     else:
-                        str_val += source[i]
-                    i += 1
-                    col += 1
-                    if (
-                        source[i - 1] == "\n"
-                    ):  # If escaped newline or just newline in string
-                        col = 1
+                        value.append(c)
+
+                    if c == "\n":
                         line += 1
-                if i < length and source[i] == qte:  # Consume closing quote
+                        col = 1
+                    else:
+                        col += 1
+
                     i += 1
-                    col += 1
-                else:
+
+                if i >= length or source[i] != quote:
                     raise NovaError(
                         Token("error", "Unterminated string", file, line, col),
                         "Unterminated string literal",
                     )
-                str_val = codecs.decode(str_val, "unicode-escape")
-                tokens.append(Token("string", str_val, file, line, start_col))
+
+                i += 1
+                col += 1
+
+                tokens.append(Token("string", "".join(value), file, line, start_col))
                 continue
 
             # Identifiers, keywords, booleans.
@@ -1152,9 +1181,13 @@ class Interpreter:
 
         self.expect_token(")")
         self.consume_token()
-        func_body = self.parse_block_until(["end"])
-        self.expect_token("end")
-        self.consume_token()
+        if self.get_next_token().value == "=":
+            t = self.consume_token()
+            func_body = [ReturnStmt(self.parse_expression(), t.file, t.line, t.column)]
+        else:
+            func_body = self.parse_block_until(["end"])
+            self.expect_token("end")
+            self.consume_token()
 
         return FuncDecl(
             func_name,
@@ -1493,7 +1526,7 @@ class Interpreter:
                     custom_type_stmt.line,
                     custom_type_stmt.column,
                 )
-                print(CUSTOM_TYPES)
+                # print(CUSTOM_TYPES)
 
                 return None  # the statement is not handled at runtime, don't return it
 
@@ -1576,24 +1609,23 @@ class Interpreter:
 
                 while (
                     self.get_next_token()
-                    and self.get_next_token().type == "keyword"
-                    and self.get_next_token().value == "case"
+                    # and not self.get_next_token().type == "keyword"
+                    and not self.get_next_token().value in ["default", "end"]
                 ):
-                    self.consume_token()
                     case_expr = self.parse_expression()
-                    self.expect_token("do")
+                    self.expect_token(":")
                     self.consume_token()
                     case_body = self.parse_block_until(["end"])
                     self.expect_token("end")
                     self.consume_token()
-                    cases.append(Case(case_expr, case_body))
+                    c = Case(case_expr, case_body)
+                    cases.append(c)
+
                 if (
                     self.get_next_token()
                     and self.get_next_token().type == "keyword"
                     and self.get_next_token().value == "default"
                 ):
-                    self.consume_token()
-                    self.expect_token("do")
                     self.consume_token()
                     default_body = self.parse_block_until(["end"])
                     self.expect_token("end")
@@ -1988,12 +2020,13 @@ class Interpreter:
         while (
             self.get_next_token()
             and self.get_next_token().type == "operator"
-            and self.get_next_token().value == "|>"
+            and self.get_next_token().value in ["->", "=>"]
         ):
             operator_token = self.consume_token()
             operator = operator_token.value
             right = self.parse_equality()
-            expr = PipeExpr(
+            c = PipeExpr if operator == "->" else MapExpr
+            expr = c(
                 expr,
                 right,
                 operator_token.file,
@@ -2254,9 +2287,13 @@ class Interpreter:
 
         self.expect_token(")")
         self.consume_token()
-        body = self.parse_block_until(["end"])
-        self.expect_token("end")
-        self.consume_token()
+        if self.get_next_token().value == "=":
+            t = self.consume_token()
+            body = [ReturnStmt(self.parse_expression(), t.file, t.line, t.column)]
+        else:
+            body = self.parse_block_until(["end"])
+            self.expect_token("end")
+            self.consume_token()
 
         return LambdaDecl(parameters, body, token.file, token.line, token.column)
 
@@ -2444,16 +2481,11 @@ class Interpreter:
         return self.current_env
 
     def execute_stmt(self, stmt, env):
-        if stmt.type == "VarDecl":
+        if stmt.type in ["VarDecl", "ConstDecl"]:
             value = self.evaluate_expr(stmt.initializer, env)
             if stmt.type_annotation:
                 check_type(stmt.type_annotation, value, stmt)
-            env.define(stmt.name, value, False, stmt.type_annotation)
-        elif stmt.type == "ConstDecl":
-            value = self.evaluate_expr(stmt.initializer, env)
-            if stmt.type_annotation:
-                check_type(stmt.type_annotation, value, stmt)
-            env.define(stmt.name, value, True, stmt.type_annotation)
+            env.define(stmt.name, value, stmt.type == "ConstDecl", stmt.type_annotation)
 
         elif stmt.type == "DeferStmt":
             # To match TypeScript's behavior: statements within a single defer block
@@ -2725,7 +2757,8 @@ class Interpreter:
                 imported_interpreter.interpret()
 
                 # Collect the module's exported values into a dictionary
-                result = {k: v for k, v in imported_env.values.items()}
+                # FIX: Unwrap vars
+                result = {k: v.value for k, v in imported_env.values.items()}
 
             # 3. Apply Namespace to Environment
             if stmt.alias:
@@ -2820,12 +2853,12 @@ class Interpreter:
                 func_env = Environment(env)
 
                 for i, param in enumerate(stmt.parameters):
-                    arg_val = args[i] if i < len(args) else None
+                    arg_val = args[i] if i < len(args) else __no_variable_set__
 
                     # apply default if missing
-                    if arg_val is None and param.default is not None:
+                    if arg_val is __no_variable_set__ and param.default is not None:
                         arg_val = self.evaluate_expr(param.default, env)
-                    elif arg_val is None and param.default is None:
+                    elif arg_val is __no_variable_set__ and param.default is None:
                         raise NovaError(
                             param,
                             f"Missing argument for parameter '{param.name}' in function '{stmt.name}'.",
@@ -2840,7 +2873,7 @@ class Interpreter:
                 result = self.execute_block(stmt.body, func_env)
                 if isinstance(result, ReturnFlow):
                     return result.value
-                return self.globals.get("undefined")
+                return self.globals.get("undefined").value
 
             env.define(stmt.name, func_wrapper)
 
@@ -2853,9 +2886,9 @@ class Interpreter:
                 current_resolved_object = env
                 for i, part in enumerate(name_parts):
                     if isinstance(current_resolved_object, Environment):
-                        next_resolved_part = current_resolved_object.get(
-                            part, class_def
-                        )
+                        # FIX: Get value from var
+                        var_obj = current_resolved_object.get(part, class_def)
+                        next_resolved_part = var_obj.value
                     elif isinstance(current_resolved_object, dict):
                         next_resolved_part = current_resolved_object.get(part)
                     elif hasattr(current_resolved_object, part):
@@ -2926,7 +2959,8 @@ class Interpreter:
                             result = self.execute_block(_member.body, method_env)
                             if isinstance(result, ReturnFlow):
                                 return result.value
-                            return self.globals.get("undefined")
+                            # FIX: Get value of undefined
+                            return self.globals.get("undefined").value
 
                         nova_class.static_members[member.name] = static_method_wrapper
                     else:
@@ -2954,7 +2988,9 @@ class Interpreter:
                 for i, part in enumerate(name_parts):
                     if isinstance(current_resolved_object, Environment):
                         # NovaScript Environment: use its get method
-                        next_resolved_part = current_resolved_object.get(part, stmt)
+                        # FIX: Get value from var
+                        var_obj = current_resolved_object.get(part, stmt)
+                        next_resolved_part = var_obj.value
                     elif isinstance(current_resolved_object, dict):
                         # Python dictionary (e.g., NovaScript object literal, or imported dict-like module): use dict access
                         next_resolved_part = current_resolved_object.get(part)
@@ -2979,8 +3015,11 @@ class Interpreter:
 
                 if isinstance(target_namespace, Environment):
                     # Import from NovaScript Environment
-                    for key, value in target_namespace.values.items():
-                        env.define(key, value)
+                    # FIX: unwrap vars
+                    for key, var_obj in target_namespace.values.items():
+                        env.define(
+                            key, var_obj.value, var_obj.const, var_obj.type_annotation
+                        )
                 elif isinstance(target_namespace, dict):
                     # Import from Python dictionary
                     for key, value in target_namespace.items():
@@ -3094,7 +3133,7 @@ class Interpreter:
                     ):
                         raise NovaError(
                             expr,
-                            f"If you wanted to repeat '{current_value}' {assigned_value} times, you'd to '\"{assigned_value}\" * {current_value}'",
+                            f"If you wanted to repeat '{assigned_value}' {current_value} times, you'd to '\"{assigned_value}\" * {current_value}'",
                         )
                     final_value_to_assign = current_value * assigned_value
                 elif op == "/=":
@@ -3215,7 +3254,7 @@ class Interpreter:
                 ):
                     raise NovaError(
                         expr,
-                        f"If you wanted to repeat '{left}' {right} times, you'd do '\"{right}\" * {left}'",
+                        f"If you wanted to repeat '{right}' {left} times, you'd do '\"{right}\" * {left}'",
                     )
                 return left * right
             elif expr.operator == "/":
@@ -3238,10 +3277,25 @@ class Interpreter:
                 return left <= right
             elif expr.operator == ">=":
                 return left >= right
-            elif expr.operator == "|>":
+            elif expr.operator == "->":
                 if not callable(right):
                     raise NovaError(expr, f"right side of pipe expr must be a function")
                 return right(left)
+            elif expr.operator == "=>":
+                if isinstance(left, dict):
+                    clone = {}
+                elif isinstance(left, list):
+                    clone = list(left)
+                else:
+                    raise NovaError(expr, "=> only works on arrays or objects")
+
+                for i, v in enumerate(left):
+                    if not callable(right):
+                        raise NovaError(
+                            expr, f"right side of pipe expr must be a function"
+                        )
+                    clone[i] = right(v, i)
+                return clone
             else:
                 raise NovaError(expr, f"Unknown binary operator: {expr.operator}")
 
@@ -3277,7 +3331,7 @@ class Interpreter:
             for arg in expr.arguments:
                 if arg.type == "ExplodeExpr":
                     v = self.evaluate_expr(arg.args, env)
-                    if isinstance(v, list):
+                    if isinstance(v, Iterable) and not isinstance(v, (str, bytes)):
                         args.extend(v)
                     else:
                         args.append(v)
@@ -3310,7 +3364,8 @@ class Interpreter:
                 fn = obj[expr.method]
             # If obj is an Environment (e.g., 'self' within a NovaScript method)
             elif isinstance(obj, Environment):
-                fn = obj.get(expr.method, expr)
+                # FIX: Get value from var
+                fn = obj.get(expr.method, expr).value
             # For regular Python objects exposed to NovaScript
             else:
                 fn = getattr(obj, expr.method, None)
@@ -3368,7 +3423,8 @@ class Interpreter:
                 return obj[expr.property]
             # If obj is an Environment (e.g., 'self' within a NovaScript method)
             elif isinstance(obj, Environment):
-                return obj.get(expr.property, expr)
+                # FIX: Get value from var
+                return obj.get(expr.property, expr).value
             # For regular Python objects (e.g., exposed modules, native types)
             elif hasattr(obj, expr.property):
                 return getattr(obj, expr.property)
@@ -3391,7 +3447,9 @@ class Interpreter:
 
             for i, part in enumerate(name_parts):
                 if isinstance(current_resolved_object, Environment):
-                    next_resolved_part = current_resolved_object.get(part, expr)
+                    # FIX: Get value from var
+                    var_obj = current_resolved_object.get(part, expr)
+                    next_resolved_part = var_obj.value
                 elif isinstance(current_resolved_object, dict):
                     next_resolved_part = current_resolved_object.get(part)
                 elif hasattr(current_resolved_object, part):
@@ -3467,8 +3525,9 @@ class Interpreter:
                 result = self.execute_block(expr.body, func_env)
                 if isinstance(result, ReturnFlow):
                     return result.value
-                return self.globals.get("undefined")
+                return self.globals.get("undefined").value
 
+            lambda_func_wrapper.__name__ = str(uuid.uuid4())
             return lambda_func_wrapper
         elif expr.type == "DecoratorExpr":
             # print(expr.__dict__)

@@ -21,8 +21,8 @@ print("Count:", count)
 print("Is Active:", isActive)
 print("Price:", price)
 
-// Null, Undefined, NaN
-var nothing = null
+// nil, Undefined, NaN
+var nothing = nil
 var notDefined = undefined
 var notANumber = NaN
 print("Nothing:", nothing, "Not Defined:", notDefined, "Not a Number:", notANumber)
@@ -125,13 +125,13 @@ end
 // Switch-Case-Default
 var day = "Wednesday"
 switch day
-    case "Monday" do
+    "Monday":
         print("Start of the week.")
     end
-    case "Wednesday" do
+    "Wednesday":
         print("Mid-week.")
     end
-    default do
+    default
         print("Another day.")
     end
 end
@@ -141,7 +141,7 @@ print("Test-Failed example:")
 test
     print("  Inside test block.")
     // This will now correctly trigger the 'failed' block
-    Runtime.throw("Simulated division by zero error!")
+    Runtime.panic("Simulated division by zero error!")
     print("  This line will not be reached if error occurs.")
 failed err
     Logger.error("  Caught an error:", err)
@@ -275,41 +275,41 @@ animal.describe()
 cat.makeSound()
 cat.describe()
 
-// this test the "switch" statement, as well as arrow/pipe("|>")
+// this test the "switch" statement, as well as arrow/pipe("->")
 test
     var v = 24
     for i=0, 10 do
         v += i
         switch strict v
-            case 24 do
+            24:
                 print("  v is 24")
             end
-            case 25 do
+            25:
                 print("  v is 25")
             end
         end
     end
 failed e
-    e |> print
+    e -> print
 end
 test
     v = 10
     for i=0, 10 do
         v += i
         switch v
-            case 24 do
+            24:
                 print("  v is 24")
             end
-            case 25 do
+            25:
                 print("  v is 25")
             end
-            default do
+            default
                 print("  v is neither 24 nor 25, it is", v)
             end
         end
     end
 failed e
-    e |> print
+    e -> print
 end
 class Temp1
 	var max = 30
@@ -331,9 +331,14 @@ print(z = y = x *= 42) // 1008
 print(x) // 1008
 print(y) // 1008
 print(z) // 1008
-
-
-// TODO: add metadata that makes it so typing isn't thrown to the wind
-var s string = "hello"
-s = 42
-print(s)
+const x = 24
+print(x)
+test
+    var s string = "hello"
+    s = 42
+    print(s)
+failed err
+    print("expected error: {}" % [err])
+end
+print("---" * 24)
+print("success")

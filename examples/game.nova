@@ -1,0 +1,24 @@
+import "py:zcore/zcore"
+using [zcore.window,zcore.keys,zcore.draw]
+// literally everything used here is from one of the zcore modules above
+
+const win = createWindow(800,600, "testing")
+object p
+	var x = 0
+	var y = 0
+	func move(dt)
+		self.x += axis(KEY_A, KEY_D) * 200 * dt
+		self.y += axis(KEY_W, KEY_S) * 200 * dt
+	end
+end
+
+@mainLoop(60) def(dt)
+	if isKeyPressed(KEY_ESC) quit() end
+	p.move(dt)
+    win.fill("black")
+    drawCircle(win, "blue", pygame.mouse.get_pos(), 20)
+    fillRect(win, Parse.int(p.x), Parse.int(p.y), 20, 20, "red")
+
+    drawText(win, "{}" % [getFPS()], 20, 20, 40, "green")
+
+end

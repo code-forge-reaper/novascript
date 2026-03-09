@@ -1,0 +1,11 @@
+
+@route("/") def()
+	return "hi"
+end
+
+@route("/%") def (filePath string)
+	return Fs.read(filePath, {mode: "r"})
+end
+@route("/%/%") def (dirName, filePath string)
+	return Fs.read(Fs.join(dirName, filePath), {mode: "r"})
+end

@@ -1,12 +1,15 @@
-func grid2d(width number, height number)
-	var grid = []
-	for y=0, height do
-		grid.append([])
-		for x = 0, width do
-			grid[y].append(0)
-		end
-	end
-	return grid
+func grid2d(width number, height number, initializer = 0)
+    var grid = []
+
+    for y = 0, height-1 do
+        var row = []
+        for x = 0, width-1 do
+            row.append(initializer)
+        end
+        grid.append(row)
+    end
+
+    return grid
 end
 
 class Vec2
@@ -25,12 +28,20 @@ class Vec2
 	end
 end
 
+func lerp(a, b, t) = a + (b - a) * t
+func clamp(v, a,b) if v > b return b elseif v < a return a else return v end end
+
 if __IS_MAIN__
 	var grid = grid2d(20,20)
 	print(grid)
+	print(#grid)
 	var v1 = new Vec2(20,20)
 	var v2 = new Vec2(10,10)
 	print(v1+v2)
 	print(v1-v2)
 	print(v1*v2)
+	print(clamp(20,10,40))
+	print(clamp(50,10,40))
+	print(clamp(0,10,40))
+	print(lerp(10,20,0.5))
 end
