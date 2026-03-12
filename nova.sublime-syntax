@@ -63,6 +63,15 @@ contexts:
       pop: true
 
   numbers:
+    # hex numbers: 0xFF, 0xDEAD_BEEF
+    - match: \b0[xX][0-9a-fA-F_]+\b
+      scope: constant.numeric.hex.nova
+
+    # unicode literals: 0u41, 0u1F600
+    - match: \b0[uU][0-9a-fA-F_]+\b
+      scope: constant.character.unicode.nova
+
+    # decimal / float
     - match: \b-?\d+(\.\d+)?\b
       scope: constant.numeric.nova
 
@@ -135,7 +144,7 @@ contexts:
       scope: keyword.declaration.function.nova
 
   function_calls:
-    - match: \b[a-zA-Z_]\w*(?=\()\b
+    - match: \b[a-zA-Z_]\w*(?=\s*\()
       scope: entity.name.function.nova
 
   decorators:
@@ -167,7 +176,7 @@ contexts:
       scope: keyword.declaration.nova
 
   operators:
-    - match: ==|!=|<=|->=|\+=|-=|\*=|/=|&&|\|\||[=+\-*/<>!]
+    - match: ==|!=|<=|>=|\+=|-=|\*=|/=|&&|\|\||[=+\-*/<>!]
       scope: keyword.operator.nova
     - match: '[\(\)\[\]\{\}\.,:]'
       scope: punctuation.separator.nova

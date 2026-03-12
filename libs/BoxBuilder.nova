@@ -1,5 +1,6 @@
 // this is the most hacky lib i ever made
-import "mathlib" as mlib
+import "mathlib" as mlib // mlib is simple math utils that python doesn't add to the math module
+
 import "py:sys"
 /*
 This allows us to:
@@ -208,7 +209,7 @@ func Box(items, prepend = "")
             //print(item)
             inner.instructions.append(item)
         else
-            inner.AddLine(prepend + Parse.str(item))
+            inner.AddLine(prepend + Convert.toStr(item))
         end
     end
     return {
@@ -293,6 +294,7 @@ func Table(props)
 
     return out
 end
+
 if __IS_MAIN__
     AddText("Status")
     Sep()

@@ -150,9 +150,9 @@ class NovaClass:
                 prop_value = self.interpreter.evaluate_expr(
                     prop_def.initializer, self.env
                 )
-            instance[
-                prop_name
-            ] = prop_value  # Default value if no initializer is None in Python
+            instance[prop_name] = (
+                prop_value  # Default value if no initializer is None in Python
+            )
 
         # Bind instance methods to the instance
         for method_name, method_def in self.instance_methods.items():
@@ -431,17 +431,9 @@ def init_globals(globals_env):
                     print(obj, end=end)
         print()
 
-    # globals_env.define("print", pprint)
-    globals_env.define("print", pprint)
-    globals_env.define("write", lambda t, to: print(t, file=to))
-    globals_env.define("input", input)
-    globals_env.define("tuple", tuple)
-
     def shift(x: list):
         v = x.pop(0)
         return v
-
-    globals_env.define("shift", shift)
 
     class Logger:
         @staticmethod
@@ -458,8 +450,6 @@ def init_globals(globals_env):
         def error(*args):
             now = datetime.datetime.now().strftime("%H:%M:%S")
             print(f"[error at: {now}]:", *args, file=sys.stderr)
-
-    globals_env.define("Logger", Logger)
 
     class Is:
         @staticmethod
@@ -494,7 +484,8 @@ def init_globals(globals_env):
         def callable(c):
             return callable(c)
 
-    globals_env.define("Is", Is)
+        def undefined(s):
+            return s == globals_env.get("undefined").value
 
     class Has:
         @staticmethod
@@ -515,28 +506,22 @@ def init_globals(globals_env):
         def attr(target, what):
             return hasattr(target, what)
 
-    globals_env.define("Has", Has)
-
     # args = sys.argv[2:] # Skip script name and NovaScript file name
 
-    class Parse:
+    class Convert:
         @staticmethod
-        def int(s):
+        def toInt(s):
             return int(s)
 
         @staticmethod
-        def float(s):
+        def toFloat(s):
             return float(s)
 
         @staticmethod
-        def number(s):
+        def toNumber(s):
             if not isinstance(s, str):
                 raise ValueError(f"this function expects a string, got {type(s)}")
             return int(s) if not "." in s else float(s)
-
-        @staticmethod
-        def str(s):
-            return str(s)
 
         @staticmethod
         def toStr(thing):
@@ -546,36 +531,33 @@ def init_globals(globals_env):
                 return str(thing)
 
         @staticmethod
-        def bool(s):
+        def toBool(s):
             if isinstance(s, str):
                 return s.lower() in ("true", "1", "yes")
             return bool(s)
 
         @staticmethod
-        def array(s):
+        def toArray(s):
             return list(s)
 
         @staticmethod
-        def dict(s):
+        def toDict(s):
             return dict(s)
 
         @staticmethod
-        def char(i):
+        def toChar(i):
             return chr(i)
 
         @staticmethod
-        def toChar(s):
+        def toCharCode(s):
             return ord(s)
 
         @staticmethod
-        def bytes(s):
+        def toBytes(s):
             return bytes(s)
 
-        def undefined(s):
-            return s == globals_env.get("undefined").value
-
         @staticmethod
-        def toBytes(s, enc="utf8"):
+        def toByteArray(s, enc="utf8"):
             # Already bytes/bytearray → pass through
             if isinstance(s, (bytes, bytearray)):
                 return bytearray(s)
@@ -596,14 +578,8 @@ def init_globals(globals_env):
             if isinstance(s, str):
                 return bytearray(s, enc)
 
-            raise TypeError(f"Parse.toBytes: unsupported type {type(s)}")
+            raise TypeError(f"Convert.toBytes: unsupported type {type(s)}")
 
-    globals_env.define("Parse", Parse)
-    globals_env.define("len", len)
-    globals_env.define("hex", hex)
-    globals_env.define("fhex", float.hex)
-    globals_env.define("json", json)
-    globals_env.define("slice", lambda s, i, j: s[i:j])
     mmath = {}
     for k, v in math.__dict__.items():
         if not k.startswith("_"):
@@ -612,18 +588,10 @@ def init_globals(globals_env):
     mmath["max"] = max
     mmath["min"] = min
 
-    globals_env.define("math", mmath)
-    globals_env.define("NaN", math.nan)
-    globals_env.define("nil", None)
-    globals_env.define("undefined", Undefined())
-
     def delete(
         x, y
     ):  # i could not figure out how to make this into a keyword, so this is the next best thing
         del x[y]
-
-    globals_env.define("delete", delete)
-    # globals_env.define("includes", lambda x,y: y in x) # replaced by "has.item"
 
     class Runtime:
         class Dump:  # since this is in the Runtime's "body", it is still visible, yell at python, not me
@@ -765,6 +733,25 @@ def init_globals(globals_env):
         def delattr(obj, key):
             delattr(obj, key)
 
+    globals_env.define("print", pprint)
+    globals_env.define("write", lambda t, to: print(t, file=to))
+    globals_env.define("input", input)
+    globals_env.define("tuple", tuple)
+    globals_env.define("shift", shift)
+    globals_env.define("Logger", Logger)
+    globals_env.define("Is", Is)
+    globals_env.define("Has", Has)
+    globals_env.define("Convert", Convert)
+    globals_env.define("len", len)
+    globals_env.define("hex", hex)
+    globals_env.define("fhex", float.hex)
+    globals_env.define("json", json)
+    globals_env.define("slice", lambda s, i, j: s[i:j])
+    globals_env.define("math", mmath)
+    globals_env.define("NaN", math.nan)
+    globals_env.define("nil", None)
+    globals_env.define("undefined", Undefined())
+    globals_env.define("delete", delete)
     globals_env.define("Runtime", Runtime)
     globals_env.define("Uri", Uri)
     globals_env.define("Fs", Fs)
@@ -958,31 +945,43 @@ class Interpreter:
             if matched_operator:
                 continue
 
-            # Numbers (supporting decimals and hex values)
+            # Numbers (supporting decimals, hex, and unicode values)
             if char.isdigit():
                 num = ""
-                if i + 1 < length and source[i] == "0" and source[i + 1] in "xX":
-                    # 0x1f24 for example
+
+                if i + 1 < length and source[i] == "0" and source[i + 1] in "xXuU":
+                    prefix = source[i + 1].lower()
                     i += 2
                     col += 2
+
                     validHexValues = set("0123456789abcdefABCDEF")
-                    # the way this is wired, prevents stuff like "0x1fhi()", since h is not a valid hex value, it throws right there
+
                     while i < length and (source[i].isalnum() or source[i] == "_"):
-                        if source[i] == "_":
+                        c = source[i]
+
+                        if c == "_":
                             i += 1
                             col += 1
                             continue
-                        if source[i] in validHexValues:
-                            num += source[i]
-                        else:
+
+                        if c not in validHexValues:
                             raise NovaError(
                                 Token("error", "Invalid hex number", file, line, col),
                                 "Invalid hex number",
                             )
+
+                        num += c
                         i += 1
                         col += 1
 
-                    tokens.append(Token("number", int(num, 16), file, line, start_col))
+                    value = int(num, 16)
+
+                    if prefix == "x":
+                        tokens.append(Token("number", value, file, line, start_col))
+                    else:  # 'u'
+                        tokens.append(
+                            Token("string", chr(value), file, line, start_col)
+                        )
                 else:
                     while i < length and (source[i].isdigit() or source[i] == "."):
                         num += source[i]
@@ -2328,23 +2327,34 @@ class Interpreter:
         elif token.value == "{":
             self.consume_token()
             properties = []
-            if self.get_next_token() and self.get_next_token().value != "}":
-                while True:
-                    key_token = self.get_next_token()
-                    if key_token.type not in ["identifier", "string"]:
-                        raise NovaError(
-                            key_token, "Expected identifier or string as object key"
-                        )
-                    key = key_token.value
+            while self.get_next_token() and self.get_next_token().value != "}":
+                if self.get_next_token().value == "}":
                     self.consume_token()
+                    break
+                key_token = self.get_next_token()
+                if key_token.type not in ["identifier", "string"]:
+                    raise NovaError(
+                        key_token, "Expected identifier or string as object key, got {}({})".format(key_token.type, key_token.value)
+                    )
+                key = key_token.value
+                self.consume_token()
+                if key_token.type == "identifier" and self.get_next_token().value in [
+                    ",",
+                    "}",
+                ]:
+                    properties.append({"key": key, "value": Identifier(
+                        key_token.value,
+                        key_token.file,
+                        key_token.line,
+                        key_token.column
+                    )})
+                else:
                     self.expect_token(":")
                     self.consume_token()
                     value = self.parse_expression()
                     properties.append({"key": key, "value": value})
-                    if self.get_next_token() and self.get_next_token().value == ",":
-                        self.consume_token()
-                    else:
-                        break
+                if self.get_next_token() and self.get_next_token().value == ",":
+                    self.consume_token()
             self.expect_token("}")
             self.consume_token()
             node = ObjectLiteral(properties, token.file, token.line, token.column)
@@ -2458,8 +2468,8 @@ class Interpreter:
             # Ensure deferred statements still execute
             self.globals.execute_deferred(self)
             if isinstance(err, NovaError):
-                print(f"{err.message}")
-                exit()
+                print(f"{err.message}", file=sys.stderr)
+                exit(1)
             else:
                 raise err
 
