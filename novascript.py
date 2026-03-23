@@ -636,7 +636,7 @@ def init_globals(interpreter,globals_env):
         imported_interpreter = Interpreter(file_path)
         imported_env = Environment(globals_env)
         imported_env.define("exports", {})
-        #imported_env.localsOnly = True                    # prevent accidental outer scope leakage
+        imported_env.localsOnly = True                    # prevent accidental outer scope leakage
         imported_interpreter.globals = imported_env
         imported_interpreter.globals.define("__IS_MAIN__", False, True)
         imported_interpreter.interpret()
