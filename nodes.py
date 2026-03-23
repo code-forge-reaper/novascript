@@ -280,6 +280,15 @@ class Case:
         else:  # Default case
             return f"{current_indent}default do\n{body_str}\n{current_indent}end"
 
+class ExportStmt(Statement):
+    def __init__(self, expr, file,line,column):
+        super().__init__("ExportStmt", file, line, column)
+        self.expr = expr
+
+    def __str__(self, indent_level=0):
+        current_indent = INDENT_STEP * indent_level
+        expr = self.expr.__str__(indent_level + 1)
+        return f"{current_indent}export {expr}"
 
 class DeferStmt(Statement):
     def __init__(self, body, file, line, column):

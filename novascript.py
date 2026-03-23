@@ -860,6 +860,7 @@ class Interpreter:
         "local",
         "return",
         "as",
+        "export",
         "scope",
         "while",
         "until",
@@ -1902,7 +1903,10 @@ class Interpreter:
             elif token.value == "continue":
                 self.consume_token()
                 return ContinueStmt(token.file, token.line, token.column)
-
+            elif token.value == "export":
+                self.consume_token()  # consume 'export'
+                inner_stmt = self.parse_statement()  # parse the declaration or expression that follows
+                return ExportStmt(inner_stmt, token.file, token.line, token.column)
             elif token.value == "if":
                 self.consume_token()
                 if_condition = self.parse_expression()
@@ -2587,7 +2591,44 @@ class Interpreter:
             if stmt.type_annotation:
                 check_type(stmt.type_annotation, value, stmt)
             env.define(stmt.name, value, stmt.type == "ConstDecl", stmt.type_annotation)
+        elif stmt.type == "ExportStmt":
+            # Execute the inner statement first
+            self.execute_stmt(stmt.expr, env)
 
+            # Ensure exports dictionary exists (it should in modules, but create if missing)
+            if not env.has("exports"):
+                env.define("exports", {})
+            exports_dict = env.get("exports").value
+
+            inner = stmt.expr
+            if inner.type in ("VarDecl", "ConstDecl", "FuncDecl", "ClassDefinition"):
+                # For declarations, export the declared name
+                name = inner.name
+                value = env.get(name).value
+                exports_dict[name] = value
+
+            elif inner.type == "ExpressionStmt":
+                expr = inner.expression
+                if expr.type == "ObjectLiteral":
+                    # export { a, b, c: d } → evaluate each property
+                    for prop in expr.properties:
+                        key = prop["key"]
+                        val_expr = prop["value"]
+                        if val_expr.type == "Identifier":
+                            val = env.get(val_expr.name).value
+                        else:
+                            val = self.evaluate_expr(val_expr, env)
+                        exports_dict[key] = val
+                elif expr.type == "Identifier":
+                    # export a → export the variable 'a'
+                    name = expr.name
+                    val = env.get(name).value
+                    exports_dict[name] = val
+                else:
+                    raise NovaError(stmt, f"Cannot export expression of type {expr.type}")
+
+            else:
+                raise NovaError(stmt, f"Cannot export statement of type {inner.type}")
         elif stmt.type == "DeferStmt":
             # To match TypeScript's behavior: statements within a single defer block
             # are executed in FIFO order. Since `execute_deferred` pops from the end

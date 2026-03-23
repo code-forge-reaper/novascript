@@ -77,7 +77,7 @@ contexts:
 
   keywords:
     # Declarations
-    - match: \b(var|const|new|with|func|def|return|define)\b
+    - match: \b(var|const|new|with|func|def|return|define|export)\b
       scope: keyword.declaration.nova
       # with <something> as <something else> do ... end
     - match: \bas\b\s+(\w+)
