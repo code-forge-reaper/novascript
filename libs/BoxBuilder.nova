@@ -313,14 +313,25 @@ else
 
     // --- Export public API ---
     exports = {
-        ASCII: ASCII,
-        BoxBuilder: BoxBuilder,
-        AddMultiline: AddMultiline,
-        CheckBox: CheckBox,
-        Indent: Indent,
-        Box: Box,
-        BoxStr: BoxStr,
-        Table: Table,
-        // Optional: you can also export the global _box if needed, but it's already in scope via using.
+        ASCII,
+        AddText,
+        NewLine,
+        Sep,
+        AddLine,
+        AddCentered,
+        AddSpacer,
+        Bar,
+        Center,
+        _compute_max_width,
+        Border,
+        RenderBox,
+        EndBox,
+        AddMultiline,
+        CheckBox,
+        Indent,
+        Box,
+        BoxStr,
+        BoxStr,
+        Table
     }
 end
