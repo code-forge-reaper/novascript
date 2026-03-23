@@ -93,7 +93,7 @@ contexts:
     # Types
     # like: var x number
     # type Entity = {move:function}
-    - match: \b(string|number|function|bool|void)\b
+    - match: \b(string|number|int|float|function|bool|void)\b
       scope: storage.type.nova
 
     # builtin
