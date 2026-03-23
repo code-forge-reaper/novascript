@@ -1,21 +1,23 @@
 import os
 import sys
+
+ROOT = os.path.dirname(os.path.realpath(__file__))
+LIBS_PATH = os.path.join(ROOT, "libs")
+
+sys.path.insert(0, ROOT)
+sys.path.insert(0, LIBS_PATH)
+sys.path.insert(0, os.getcwd())
+
 import math
 import re
 import datetime
 import time, json
 import codecs
 from urllib.parse import unquote, quote
-import struct
+import struct, builtins
 from nodes import *
 import uuid
 from collections.abc import Iterable
-
-# all of this spagetti just to follow one link/symlink
-LIBS_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "libs")
-sys.path.insert(0, LIBS_PATH)
-
-sys.path.insert(0, os.getcwd())
 
 
 class Undefined(object):
@@ -67,12 +69,12 @@ class Environment:
             stmt = self.deferred.pop()
             interpreter.execute_stmt(stmt, self)
 
-    def define(self, name, value, const=False, typeAnnotation=None):
+    def define(self, name: str, value, const=False, typeAnnotation=None):
         if self.locked:
             raise NovaError(None, "Cannot define variable in locked environment")
         self.values[name] = Var(name, value, const, typeAnnotation)
 
-    def has(self, name):
+    def has(self, name: str):
         if name in self.values:
             return True
         elif self.parent and not self.localsOnly:
@@ -80,7 +82,7 @@ class Environment:
         else:
             return False
 
-    def assign(self, name, value, tok):
+    def assign(self, name: str, value, tok):
         if self.locked:
             raise NovaError(tok, "Cannot assign to variable in locked environment")
 
@@ -105,7 +107,7 @@ class Environment:
         else:
             raise NovaError(tok, f"Undefined variable {name}")
 
-    def get(self, name, tok=None):
+    def get(self, name: str, tok=None):
         if name in self.values:
             return self.values[name]
         elif self.parent:
@@ -150,9 +152,9 @@ class NovaClass:
                 prop_value = self.interpreter.evaluate_expr(
                     prop_def.initializer, self.env
                 )
-            instance[prop_name] = (
-                prop_value  # Default value if no initializer is None in Python
-            )
+            instance[
+                prop_name
+            ] = prop_value  # Default value if no initializer is None in Python
 
         # Bind instance methods to the instance
         for method_name, method_def in self.instance_methods.items():
@@ -353,7 +355,17 @@ def check_type(expected, value, token):
     if expected == "number":
         if not isinstance(value, (int, float)):
             raise NovaError(
-                token, f"Type mismatch: expected number, got {type(value).__name__}"
+                token, f"Type mismatch: expected number(int, float), got {type(value).__name__}"
+            )
+    elif expected == "int":
+        if not isinstance(value, int):
+            raise NovaError(
+                token, f"Type mismatch: expected int, got {type(value).__name__}"
+            )
+    elif expected == "float":
+        if not isinstance(value, float):
+            raise NovaError(
+                token, f"Type mismatch: expected float, got {type(value).__name__}"
             )
     elif expected == "string":
         if not isinstance(value, str):
@@ -411,12 +423,12 @@ def check_type(expected, value, token):
 
 
 # --- Global Initialization ---
-def init_globals(globals_env):
+def init_globals(interpreter,globals_env):
     def pprint(*stuff):
         for id, obj in enumerate(stuff):
             end = "" if id == len(stuff) - 1 else " "
-            if isinstance(obj, dict) and "Str" in obj:
-                print(obj["Str"](), end=end)
+            if isinstance(obj, dict) and "__Str" in obj:
+                print(obj["__Str"](), end=end)
             else:
                 if isinstance(obj, dict):
                     s = {}
@@ -587,6 +599,52 @@ def init_globals(globals_env):
     mmath["abs"] = abs
     mmath["max"] = max
     mmath["min"] = min
+    def load(path: str):
+        if path.startswith("py:"):
+            # ── Existing Python import logic ──
+            py_path = path[3:].replace("/", ".")
+            if py_path in interpreter.modules_loaded:
+                return interpreter.modules_loaded[py_path]
+            handler = globals_env.get("os-import-handler").value
+            interpreter.modules_loaded[py_path] = handler(py_path)
+            return interpreter.modules_loaded[py_path]
+
+        # ── NovaScript file loading ──
+        if not path.endswith(".nova"):
+            path = path + ".nova"           # auto-append extension (optional)
+
+        # Try to find the file (you can improve lookup later)
+        possible_locations = [
+            path,
+            os.path.join(os.path.dirname(interpreter.file), path),   # relative to current script
+            os.path.join(LIBS_PATH, path),                            # global libs folder
+        ]
+
+        file_path = None
+        for candidate in possible_locations:
+            if os.path.isfile(candidate):
+                file_path = candidate
+                break
+
+        if not file_path:
+            raise NovaError(
+                None,   # or pass token if you have it
+                f"Cannot find Nova module: {path}\nTried:\n  " + "\n  ".join(possible_locations)
+            )
+        if file_path in interpreter.modules_loaded:
+            return interpreter.modules_loaded[file_path]
+        imported_interpreter = Interpreter(file_path)
+        imported_env = Environment(globals_env)
+        imported_env.define("exports", {})
+        #imported_env.localsOnly = True                    # prevent accidental outer scope leakage
+        imported_interpreter.globals = imported_env
+        imported_interpreter.globals.define("__IS_MAIN__", False, True)
+        imported_interpreter.interpret()
+        # Collect the module's exported values into a dictionary
+        result = {k: v for k, v in imported_env.get('exports').value.items()}
+        # After execution → return what user assigned to exports
+        interpreter.modules_loaded[file_path] = result
+        return result
 
     def delete(
         x, y
@@ -731,7 +789,7 @@ def init_globals(globals_env):
 
         @staticmethod
         def delattr(obj, key):
-            delattr(obj, key)
+            builtins.delattr(obj, key)
 
     globals_env.define("print", pprint)
     globals_env.define("write", lambda t, to: print(t, file=to))
@@ -746,6 +804,7 @@ def init_globals(globals_env):
     globals_env.define("hex", hex)
     globals_env.define("fhex", float.hex)
     globals_env.define("json", json)
+    globals_env.define("load", load)
     globals_env.define("slice", lambda s, i, j: s[i:j])
     globals_env.define("math", mmath)
     globals_env.define("NaN", math.nan)
@@ -800,7 +859,6 @@ class Interpreter:
         "func",
         "local",
         "return",
-        "import",
         "as",
         "scope",
         "while",
@@ -837,10 +895,10 @@ class Interpreter:
         self.tokens = self.tokenize(self.source, self.file)
         self.current = 0
         self.globals = Environment()
-        self.imported_files = set()
+        self.modules_loaded = {}
         self.current_env = None
 
-        init_globals(self.globals)
+        init_globals(self,self.globals)
         self.globals.define(
             "__SCRIPT_PATH__", os.path.dirname(os.path.abspath(self.file))
         )
@@ -944,60 +1002,96 @@ class Interpreter:
 
             if matched_operator:
                 continue
+            # Numbers (decimal, hex, unicode, binary)
 
-            # Numbers (supporting decimals, hex, and unicode values)
             if char.isdigit():
-                num = ""
 
-                if i + 1 < length and source[i] == "0" and source[i + 1] in "xXuU":
-                    prefix = source[i + 1].lower()
-                    i += 2
-                    col += 2
+                def read_digits(valid, base, allow_underscore=True):
+                    nonlocal i, col
 
-                    validHexValues = set("0123456789abcdefABCDEF")
+                    digits = ""
 
-                    while i < length and (source[i].isalnum() or source[i] == "_"):
+                    while i < length:
                         c = source[i]
 
-                        if c == "_":
+                        if allow_underscore and c == "_":
                             i += 1
                             col += 1
                             continue
 
-                        if c not in validHexValues:
-                            raise NovaError(
-                                Token("error", "Invalid hex number", file, line, col),
-                                "Invalid hex number",
+                        if c not in valid:
+                            break
+
+                        digits += c
+                        i += 1
+                        col += 1
+
+                    if not digits:
+                        raise NovaError(
+                            Token("error", "Invalid numeric literal", file, line, col),
+                            "Invalid numeric literal",
+                        )
+
+                    return int(digits, base)
+
+                # prefixed numbers
+                if i + 1 < length and source[i] == "0":
+                    prefix = source[i + 1].lower()
+
+                    if prefix in ("x", "u", "b"):
+                        i += 2
+                        col += 2
+
+                        if prefix in ("x", "u"):
+                            value = read_digits("0123456789abcdefABCDEF", 16)
+
+                            if prefix == "x":
+                                tokens.append(
+                                    Token("number", value, file, line, start_col)
+                                )
+                            else:
+                                tokens.append(
+                                    Token("string", chr(value), file, line, start_col)
+                                )
+
+                        elif prefix == "b":
+                            bits = ""
+                            while i < length and source[i] in "01":
+                                bits += source[i]
+                                i += 1
+                                col += 1
+
+                            tokens.append(
+                                Token("number", int(bits, 2), file, line, start_col)
                             )
 
-                        num += c
-                        i += 1
-                        col += 1
+                        continue
 
-                    value = int(num, 16)
+                # decimal / float
+                num = ""
+                dot = False
 
-                    if prefix == "x":
-                        tokens.append(Token("number", value, file, line, start_col))
-                    else:  # 'u'
-                        tokens.append(
-                            Token("string", chr(value), file, line, start_col)
-                        )
-                else:
-                    while i < length and (source[i].isdigit() or source[i] == "."):
-                        num += source[i]
-                        i += 1
-                        col += 1
-                    tokens.append(
-                        Token(
-                            "number",
-                            float(num) if "." in num else int(num),
-                            file,
-                            line,
-                            start_col,
-                        )
+                while i < length and (source[i].isdigit() or source[i] == "."):
+                    if source[i] == ".":
+                        if dot:
+                            break
+                        dot = True
+
+                    num += source[i]
+                    i += 1
+                    col += 1
+
+                tokens.append(
+                    Token(
+                        "number",
+                        float(num) if dot else int(num),
+                        file,
+                        line,
+                        start_col,
                     )
-                continue
+                )
 
+                continue
             if char in ['"', "'"]:
                 quote = char
                 i += 1
@@ -1911,18 +2005,6 @@ class Interpreter:
                 return ReturnStmt(
                     return_expression, token.file, token.line, token.column
                 )
-            elif token.value == "import":
-                self.consume_token()
-                file_token = self.expect_type("string")
-                filename = file_token.value
-                self.consume_token()
-                alias = None
-                if self.get_next_token() and self.get_next_token().value == "as":
-                    self.consume_token()
-                    alias_token = self.expect_type("identifier")
-                    alias = alias_token.value
-                    self.consume_token()
-                return ImportStmt(filename, alias, token.file, token.line, token.column)
 
             elif token.value == "class":
                 return self.parse_class_definition()
@@ -2334,7 +2416,10 @@ class Interpreter:
                 key_token = self.get_next_token()
                 if key_token.type not in ["identifier", "string"]:
                     raise NovaError(
-                        key_token, "Expected identifier or string as object key, got {}({})".format(key_token.type, key_token.value)
+                        key_token,
+                        "Expected identifier or string as object key, got {}({})".format(
+                            key_token.type, key_token.value
+                        ),
                     )
                 key = key_token.value
                 self.consume_token()
@@ -2342,12 +2427,17 @@ class Interpreter:
                     ",",
                     "}",
                 ]:
-                    properties.append({"key": key, "value": Identifier(
-                        key_token.value,
-                        key_token.file,
-                        key_token.line,
-                        key_token.column
-                    )})
+                    properties.append(
+                        {
+                            "key": key,
+                            "value": Identifier(
+                                key_token.value,
+                                key_token.file,
+                                key_token.line,
+                                key_token.column,
+                            ),
+                        }
+                    )
                 else:
                     self.expect_token(":")
                     self.consume_token()
@@ -2713,104 +2803,7 @@ class Interpreter:
                         return result
                     elif isinstance(result, ContinueFlow):
                         continue
-        elif stmt.type == "ImportStmt":
-            file_path = stmt.filename
-            is_py = file_path.startswith("py:")
-            path_str = file_path[3:] if is_py else file_path
 
-            # 1. Normalize path: Treat dots and slashes as separators for resolution
-            normalized_path = path_str.replace(".", "/")
-
-            # 2. Determine Namespace Strategy
-            # Use flat namespace (last part) if an explicit '/' is present.
-            # Otherwise, use merging (hierarchical) if '.' is present or it's a single name.
-            should_merge = "/" not in path_str
-
-            if is_py:
-                if not env.has("os-import-handler"):
-                    raise NovaError(
-                        stmt, "os-import-handler is not defined in the environment."
-                    )
-                handler = env.get("os-import-handler", stmt).value
-                # Handler expects Python dot notation (e.g., 'fastapi.cli')
-                result = handler(normalized_path.replace("/", "."))
-            else:
-                fpath = None
-                libs = [LIBS_PATH, os.path.dirname(os.path.abspath(self.file))]
-                for p in libs:
-                    # Local NovaScript Import
-                    full_path = os.path.join(p, normalized_path)
-                    if not full_path.endswith(".nova"):
-                        full_path += ".nova"
-
-                    if os.path.exists(full_path):
-                        fpath = full_path
-                        break
-                if not fpath:
-                    raise NovaError(
-                        stmt, f"Imported file not found: {normalized_path} in {libs}"
-                    )
-                full_path = fpath
-
-                # Check shared imported files to avoid circular/duplicate execution
-                if full_path in self.imported_files:
-                    # In a shared environment, you might return the cached result here.
-                    # Currently, we skip re-execution to match existing project behavior.
-                    return
-
-                self.imported_files.add(full_path)
-                imported_env = Environment(self.globals)
-                imported_interpreter = Interpreter(full_path)
-                imported_interpreter.globals = imported_env
-                imported_interpreter.imported_files = self.imported_files
-                imported_interpreter.globals.define("__IS_MAIN__", False)
-                imported_interpreter.interpret()
-
-                # Collect the module's exported values into a dictionary
-                # FIX: Unwrap vars
-                result = {k: v.value for k, v in imported_env.values.items()}
-
-            # 3. Apply Namespace to Environment
-            if stmt.alias:
-                env.define(stmt.alias, result)
-            elif not should_merge:
-                # "/" behavior: set the last component as the namespace (e.g., 'a/b' -> 'b')
-                base_name = os.path.basename(normalized_path)
-                name = os.path.splitext(base_name)[0]
-                env.define(name, result)
-            else:
-                # "." behavior: Merge into a hierarchical structure
-                parts = normalized_path.split("/")
-                # Remove extension from the leaf if present
-                parts[-1] = os.path.splitext(parts[-1])[0]
-                root_name = parts[0]
-
-                if len(parts) == 1:
-                    env.define(root_name, result)
-                else:
-                    # Create or retrieve the root namespace
-                    if not env.has(root_name):
-                        env.define(root_name, {})
-
-                    current = env.get(root_name).value
-                    # Traverse to the parent of the final leaf
-                    for i in range(1, len(parts) - 1):
-                        part = parts[i]
-                        if isinstance(current, dict):
-                            if part not in current:
-                                current[part] = {}
-                            current = current[part]
-                        elif hasattr(current, "__dict__"):
-                            if not hasattr(current, part):
-                                setattr(current, part, {})
-                            current = getattr(current, part)
-
-                    # Assign the result to the leaf property
-                    leaf = parts[-1]
-                    if isinstance(current, dict):
-                        current[leaf] = result
-                    elif hasattr(current, "__dict__"):
-                        setattr(current, leaf, result)
         elif stmt.type == "ScopeStmt":
             n_env = Environment(env)
             n_env.localsOnly = True
@@ -3292,20 +3285,21 @@ class Interpreter:
                     raise NovaError(expr, f"right side of pipe expr must be a function")
                 return right(left)
             elif expr.operator == "=>":
+                if not callable(right):
+                    raise NovaError(expr, f"right side of pipe expr must be a function")
                 if isinstance(left, dict):
                     clone = {}
+                    for k, v in left.items():
+                        clone[k] = right(v, k)
+                    return clone
                 elif isinstance(left, list):
                     clone = list(left)
+
+                    for i, v in enumerate(left):
+                        clone[i] = right(v, i)
+                    return clone
                 else:
                     raise NovaError(expr, "=> only works on arrays or objects")
-
-                for i, v in enumerate(left):
-                    if not callable(right):
-                        raise NovaError(
-                            expr, f"right side of pipe expr must be a function"
-                        )
-                    clone[i] = right(v, i)
-                return clone
             else:
                 raise NovaError(expr, f"Unknown binary operator: {expr.operator}")
 

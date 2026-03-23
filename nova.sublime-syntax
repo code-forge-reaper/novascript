@@ -77,9 +77,9 @@ contexts:
 
   keywords:
     # Declarations
-    - match: \b(var|const|new|with|func|def|return|import|define)\b
+    - match: \b(var|const|new|with|func|def|return|define)\b
       scope: keyword.declaration.nova
-      # import "some module" as alias
+      # with <something> as <something else> do ... end
     - match: \bas\b\s+(\w+)
       captures:
         1: entity.name.label.nova

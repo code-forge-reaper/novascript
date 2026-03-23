@@ -1,7 +1,9 @@
-#!/usr/bin/env pypy3
+#!/usr/bin/env python3
+
 from novascript import Interpreter, NovaError
 import sys, importlib
 import os
+
 
 def main():
     if len(sys.argv) < 2:

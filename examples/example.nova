@@ -275,6 +275,20 @@ animal.describe()
 cat.makeSound()
 cat.describe()
 
+class Vector2
+    func init(x number, y number)
+        $x $y
+    end
+
+    func __Add(v2) return new Vector2(self.x + v2.x, self.y + v2.y) end
+    func __Sub(v2) return new Vector2(self.x - v2.x, self.y - v2.y) end
+    func __Mul(v2) return new Vector2(self.x * v2.x, self.y * v2.y) end
+    func __Str() return "Vector2(x: {}, y: {})" % [self.x, self.y] end
+end
+
+var v1 = new Vector2(20,20)
+var v2 = new Vector2(50,20)
+print("vector math : v1 + v2 = ",v1+v2)
 // this test the "switch" statement, as well as arrow/pipe("->")
 test
     var v = 24
@@ -309,7 +323,7 @@ test
         end
     end
 failed e
-    e -> print
+    e -> Logger.error
 end
 class Temp1
 	var max = 30
@@ -340,5 +354,7 @@ test
 failed err
     print("expected error: {}" % [err])
 end
+print({x,y,z})
+
 print("---" * 24)
 print("success")

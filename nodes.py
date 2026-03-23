@@ -594,19 +594,6 @@ class ForStmt(Statement):
             f"{current_indent}end"
         )
 
-
-class ImportStmt(Statement):
-    def __init__(self, filename, alias, file, line, column):
-        super().__init__("ImportStmt", file, line, column)
-        self.filename = filename
-        self.alias = alias
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        alias_str = f" as {self.alias}" if self.alias else ""
-        return f'{current_indent}import "{self.filename}"{alias_str}'
-
-
 class EnumDef(Statement):
     def __init__(self, name, values, file, line, column):
         super().__init__("EnumDef", file, line, column)

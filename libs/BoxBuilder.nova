@@ -1,6 +1,6 @@
+// novascript/libs/BoxBuilder
 // this is the most hacky lib i ever made
 import "mathlib" as mlib // mlib is simple math utils that python doesn't add to the math module
-
 import "py:sys"
 /*
 This allows us to:
@@ -43,13 +43,13 @@ class BoxBuilder
     var instructions = []  // List of dicts for ops
     var max_width = 0      // Computed in EndBox now
 
-    func AddText(text)
-        self.instructions.append({type: "text", content: text})
+    func AddText(content)
+        self.instructions.append({type: "text", content})
         return self
     end
 
     func NewLine(sep = false)
-        self.instructions.append({type: "newline", sep: sep})
+        self.instructions.append({type: "newline", sep})
         return self
     end
 
@@ -61,8 +61,8 @@ class BoxBuilder
         return self
     end
 
-    func AddCentered(text, sep = false)
-        self.instructions.append({type: "centered", content: text})
+    func AddCentered(content, sep = false)
+        self.instructions.append({type: "centered", content})
         self.NewLine(sep)
         return self
     end
@@ -99,11 +99,9 @@ class BoxBuilder
             if instr.type == "text" || instr.type == "centered"
                 current_line += instr.content
             elseif instr.type == "box"
-                // this shouldn't fucking work, but it does
                 var sub_width = instr.width + PADDING
                 local_max = math.max(local_max, sub_width)
                 //local_max += math.max(local_max, instr.sub._compute_max_width())
-
             elseif instr.type == "newline"
                 local_max = math.max(local_max, #current_line)
                 current_line = ""

@@ -1,4 +1,4 @@
-
+Runtime.panic("this should get something in the future")
 @route("/") def()
 	return "hi"
 end

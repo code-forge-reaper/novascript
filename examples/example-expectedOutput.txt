@@ -1,0 +1,98 @@
+[error at: 23:23:04]:   Caught an error: examples/example.nova:141:1 Simulated division by zero error!
+[info at: 23:23:04]: Starting NovaScript Example!
+Greeting: Hello, NovaScript!
+Count: 10
+Is Active: True
+Price: 99.99
+Nothing: None Not Defined: undefined Not a Number: nan
+Formatted String: The value is 10 and the name is Item.
+Concatenated String: Part1 Part2 Part3
+Sum: 109.99 Diff: -89.99 Prod: 999.9 Quot: 5.0 Rem: 1
+Count > 5: True
+Price <= 100: True
+Greeting == 'Hello, NovaScript!': True
+Is Active != false: True
+Complex Condition: True
+x after +=: 8
+x after *=: 16
+It's warm.
+While loop iteration: 0
+While loop iteration: 1
+While loop iteration: 2
+For loop (1 to 5, step 1):
+  For loop iteration: 1
+  For loop iteration: 2
+  For loop iteration: 3
+  For loop iteration: 4
+  For loop iteration: 5
+For loop (10 to 2, step -2):
+  For loop iteration: 10
+  For loop iteration: 8
+  For loop iteration: 6
+  For loop iteration: 4
+  For loop iteration: 2
+ForEach loop:
+  Fruit: apple
+  Fruit: banana
+  Fruit: cherry
+hi hello
+bye goodbye
+Break and Continue example:
+  Current m: 0
+  Current m: 1
+  Skipping 2 (continue)
+  Current m: 3
+  Breaking at 4
+Mid-week.
+Test-Failed example:
+  Inside test block.
+Defer example:
+  Entering defer block scope.
+  Exiting defer block scope.
+  Deferred statement 2 (executed first).
+  Deferred statement 1 (executed last).
+  Still in defer 1 block scope.
+Sum (func): 12
+Hello, Alice! You are 30 years old.
+Hello, Guest! You are 30 years old.
+Hello, Bob! You are 25 years old.
+Multiply (lambda): 24
+Numbers array: [10, 20, 30, 40]
+First element: 10
+Modified array: [10, 25, 30, 40]
+Person object: {'name': 'John Doe', 'age': 30, 'isStudent': False, 'address': {'street': '123 Main St', 'city': 'Anytown'}}
+Person name: John Doe
+Person city: Anytown
+Modified age: 31
+Point p1: 10 20
+Rectangle rect1: 0 0 100 50
+Animal created: Lion
+Animal created: Cat
+Lion says Roar!
+This is an animal named Lion.
+Cat says Meow!
+This is an animal named Cat.
+vector math : v1 + v2 =  Vector2(x: 70, y: 40)
+  v is 24
+  v is 25
+examples/example.nova:297:9 Switch statement did not match any case for value: 27
+  v is neither 24 nor 25, it is 10
+  v is neither 24 nor 25, it is 11
+  v is neither 24 nor 25, it is 13
+  v is neither 24 nor 25, it is 16
+  v is neither 24 nor 25, it is 20
+  v is 25
+  v is neither 24 nor 25, it is 31
+  v is neither 24 nor 25, it is 38
+  v is neither 24 nor 25, it is 46
+  v is neither 24 nor 25, it is 55
+  v is neither 24 nor 25, it is 65
+1008
+1008
+1008
+1008
+24
+expected error: examples/example.nova:352:5 Type mismatch: expected string, got int
+{'x': 24, 'y': 1008, 'z': 1008}
+------------------------------------------------------------------------
+success
