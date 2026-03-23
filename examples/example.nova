@@ -8,6 +8,8 @@
  * This script demonstrates various features of NovaScript.
  */
 
+const mmath = load("mathlib")
+print("mmath.grid2D(20,20): ", mmath.grid2D(20,20))
 Logger.info("Starting NovaScript Example!")
 
 // Variable declarations with and without type annotations

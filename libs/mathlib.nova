@@ -1,4 +1,4 @@
-export func grid2d(width number, height number, initializer = 0)
+export func grid2D(width number, height number, initializer = 0)
     var grid = []
 
     for y = 0, height-1 do
@@ -32,7 +32,7 @@ export func lerp(a, b, t) = a + (b - a) * t
 export func clamp(v, a,b) if v > b return b elseif v < a return a else return v end end
 
 if __IS_MAIN__
-	var grid = grid2d(20,20)
+	var grid = grid2D(20,20)
 	print(grid)
 	print(#grid)
 	var v1 = new Vec2(20,20)

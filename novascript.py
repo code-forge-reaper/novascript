@@ -2604,6 +2604,8 @@ class Interpreter:
             if inner.type in ("VarDecl", "ConstDecl", "FuncDecl", "ClassDefinition"):
                 # For declarations, export the declared name
                 name = inner.name
+                if name in exports_dict:
+                    raise NovaError(stmt, "cannot re-export: {}".format(name))
                 value = env.get(name).value
                 exports_dict[name] = value
 
@@ -2614,6 +2616,8 @@ class Interpreter:
                     for prop in expr.properties:
                         key = prop["key"]
                         val_expr = prop["value"]
+                        if key in exports_dict:
+                            raise NovaError(stmt, "cannot re-export: {}".format(key))
                         if val_expr.type == "Identifier":
                             val = env.get(val_expr.name).value
                         else:
@@ -2622,6 +2626,8 @@ class Interpreter:
                 elif expr.type == "Identifier":
                     # export a → export the variable 'a'
                     name = expr.name
+                    if name in exports_dict:
+                        raise NovaError(stmt, "cannot re-export: {}".format(name))
                     val = env.get(name).value
                     exports_dict[name] = val
                 else:
