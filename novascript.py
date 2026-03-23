@@ -895,6 +895,7 @@ class Interpreter:
         self.tokens = self.tokenize(self.source, self.file)
         self.current = 0
         self.globals = Environment()
+
         self.modules_loaded = {}
         self.current_env = None
 

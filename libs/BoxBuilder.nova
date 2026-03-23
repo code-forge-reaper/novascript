@@ -1,7 +1,7 @@
 // novascript/libs/BoxBuilder
 // this is the most hacky lib i ever made
-import "mathlib" as mlib // mlib is simple math utils that python doesn't add to the math module
-import "py:sys"
+const mlib = load("mathlib") // mlib is simple math utils that python doesn't add to the math module
+const sys = load("py:sys")
 /*
 This allows us to:
 - Precompute the max_width by simulating all lines first.
@@ -309,4 +309,18 @@ if __IS_MAIN__
         ideas: ["another", "double pass", "system"]
     }) -> AddMultiline
     EndBox()
+else
+
+    // --- Export public API ---
+    exports = {
+        ASCII: ASCII,
+        BoxBuilder: BoxBuilder,
+        AddMultiline: AddMultiline,
+        CheckBox: CheckBox,
+        Indent: Indent,
+        Box: Box,
+        BoxStr: BoxStr,
+        Table: Table,
+        // Optional: you can also export the global _box if needed, but it's already in scope via using.
+    }
 end

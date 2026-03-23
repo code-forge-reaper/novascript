@@ -44,4 +44,8 @@ if __IS_MAIN__
 	print(clamp(50,10,40))
 	print(clamp(0,10,40))
 	print(lerp(10,20,0.5))
+else
+	exports = {
+		grid2d, Vec2, clamp, lerp
+	}
 end
