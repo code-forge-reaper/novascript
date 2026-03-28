@@ -1,11 +1,78 @@
-Runtime.panic("this should get something in the future")
-@route("/") def()
-	return "hi"
+// i'll turn this into a server framework eventualy
+const sock = load("socket")
+
+const server ={
+host: "localhost",
+port:5173}
+
+define StatusType = {
+	status: string,
+	code: int
+}
+define ResponseType = {
+	type: string,
+	data: any,
+	stat: StatusType
+}
+
+/*
+this is still a multiline string
+which adds \n
+i know this because **i made the fucking language**
+*/
+
+const basicHttp = "HTTP/1.1 {} {}\r
+Content-Type: {}\r
+Content-Length: {}\r
+\r
+{}"
+
+export class Client
+	func init(socket)$socket end
+	func send(res ResponseType)
+		const body = res.data
+		self.socket.sendall(basicHttp.format(
+			res.stat.code,
+			res.stat.status,
+			res.type,
+			#body, // #body = len(body)
+			body
+		).encode("utf8"))
+	end
+	func __exit__()self.socket.close()end
 end
 
-@route("/%") def (filePath string)
-	return Fs.read(filePath, {mode: "r"})
+func wasteClient(rec)
+	var data = ""
+	while true
+		const chunk = rec(1024)
+		if #chunk == 0 break end
+		data+=chunk.decode("utf8")
+		if Has.item(data,"\r\n\r\n") break end
+	end
 end
-@route("/%/%") def (dirName, filePath string)
-	return Fs.read(Fs.join(dirName, filePath), {mode: "r"})
+
+with sock.socket(sock.AF_INET, sock.SOCK_STREAM) as sc do
+	sc.setsockopt(sock.SOL_SOCKET, sock.SO_REUSEADDR, 1)
+	sc.bind(Convert.toTuple([server.host, server.port]))
+	sc.listen(1)
+	print("server running on
+	{}:{}
+	"%[server.host, server.port])
+	while true
+		with sc.accept() as connection do
+			wasteClient(connection[0].recv) //don't give a shit about what the client sent, be gone
+
+			with new Client(connection[0]) as client do
+				client.send({
+					type:"application/json",
+					data:json.dumps({"message":"hello, world"}),//.encode("utf8"),
+					stat:{
+						status: "OK",
+						code: 200
+					}
+				})
+			end
+		end
+	end
 end

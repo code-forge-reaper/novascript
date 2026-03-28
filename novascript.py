@@ -94,8 +94,8 @@ class Environment:
                 raise NovaError(tok, f"Cannot re-assign constant variable '{name}'")
 
             check_type(var.type_annotation, value, tok)
-
             var.value = value
+
 
         elif self.parent:
             if self.localsOnly:
@@ -524,6 +524,9 @@ def init_globals(interpreter,globals_env):
         @staticmethod
         def toInt(s):
             return int(s)
+        @staticmethod
+        def toTuple(s):
+            return tuple(s)
 
         @staticmethod
         def toFloat(s):
@@ -599,25 +602,25 @@ def init_globals(interpreter,globals_env):
     mmath["abs"] = abs
     mmath["max"] = max
     mmath["min"] = min
-    def load(path: str):
+    def load(path: str): # const <modname> = load("modname")
+        # ── FORCE Python import ──
         if path.startswith("py:"):
-            # ── Existing Python import logic ──
             py_path = path[3:].replace("/", ".")
             if py_path in interpreter.modules_loaded:
                 return interpreter.modules_loaded[py_path]
+
             handler = globals_env.get("os-import-handler").value
-            interpreter.modules_loaded[py_path] = handler(py_path)
-            return interpreter.modules_loaded[py_path]
+            result = handler(py_path)
+            interpreter.modules_loaded[py_path] = result
+            return result
 
-        # ── NovaScript file loading ──
-        if not path.endswith(".nova"):
-            path = path + ".nova"           # auto-append extension (optional)
+        # ── Try Nova first ──
+        nova_path = path if path.endswith(".nova") else path + ".nova"
 
-        # Try to find the file (you can improve lookup later)
         possible_locations = [
-            path,
-            os.path.join(os.path.dirname(interpreter.file), path),   # relative to current script
-            os.path.join(LIBS_PATH, path),                            # global libs folder
+            nova_path,
+            os.path.join(os.path.dirname(interpreter.file), nova_path),
+            os.path.join(LIBS_PATH, nova_path),
         ]
 
         file_path = None
@@ -626,30 +629,44 @@ def init_globals(interpreter,globals_env):
                 file_path = candidate
                 break
 
-        if not file_path:
-            raise NovaError(
-                None,   # or pass token if you have it
-                f"Cannot find Nova module: {path}\nTried:\n  " + "\n  ".join(possible_locations)
-            )
-        if file_path in interpreter.modules_loaded:
-            return interpreter.modules_loaded[file_path]
-        imported_interpreter = Interpreter(file_path)
-        imported_env = Environment(globals_env)
-        imported_env.define("exports", {})
-        imported_env.localsOnly = True                    # prevent accidental outer scope leakage
-        imported_interpreter.globals = imported_env
-        imported_interpreter.globals.define("__IS_MAIN__", False, True)
-        imported_interpreter.interpret()
-        # Collect the module's exported values into a dictionary
-        result = {k: v for k, v in imported_env.get('exports').value.items()}
-        # After execution → return what user assigned to exports
-        interpreter.modules_loaded[file_path] = result
-        return result
+        # ── If Nova module found → load it ──
+        if file_path:
+            if file_path in interpreter.modules_loaded:
+                return interpreter.modules_loaded[file_path]
 
-    def delete(
-        x, y
-    ):  # i could not figure out how to make this into a keyword, so this is the next best thing
-        del x[y]
+            imported_interpreter = Interpreter(file_path)
+            imported_env = Environment(globals_env)
+            imported_env.define("exports", {})
+            imported_env.localsOnly = True
+
+            imported_interpreter.globals = imported_env
+            imported_interpreter.globals.define("__IS_MAIN__", False, True)
+            imported_interpreter.interpret()
+
+            result = {
+                k: v for k, v in imported_env.get('exports').value.items()
+            }
+
+            interpreter.modules_loaded[file_path] = result
+            return result
+
+        # ── Fallback: Python import (LAST RESORT) ──
+        py_path = path.replace("/", ".")
+        if py_path in interpreter.modules_loaded:
+            return interpreter.modules_loaded[py_path]
+
+        try:
+            handler = globals_env.get("os-import-handler").value
+            result = handler(py_path)
+            interpreter.modules_loaded[py_path] = result
+            return result
+        except Exception as e:
+            raise NovaError(
+                None,
+                f"Cannot find module: {path}\n"
+                f"Tried Nova:\n  " + "\n  ".join(possible_locations) +
+                f"\nTried Python import: {py_path}\nError: {e}"
+            )
 
     class Runtime:
         class Dump:  # since this is in the Runtime's "body", it is still visible, yell at python, not me
@@ -772,6 +789,12 @@ def init_globals(interpreter,globals_env):
             return list(obj.values())
 
         @staticmethod
+        def delete(
+            x, y
+        ):
+            del x[y]
+
+        @staticmethod
         def items(obj):
             return list(obj.items())
 
@@ -808,9 +831,8 @@ def init_globals(interpreter,globals_env):
     globals_env.define("slice", lambda s, i, j: s[i:j])
     globals_env.define("math", mmath)
     globals_env.define("NaN", math.nan)
-    globals_env.define("nil", None)
+    globals_env.define("nil", None, True)
     globals_env.define("undefined", Undefined())
-    globals_env.define("delete", delete)
     globals_env.define("Runtime", Runtime)
     globals_env.define("Uri", Uri)
     globals_env.define("Fs", Fs)
@@ -889,7 +911,7 @@ class Interpreter:
     ]
 
     def __init__(self, file_path):
-        self.file = file_path
+        self.file = os.path.abspath(file_path)
         with open(file_path, "r", encoding="utf8") as f:
             self.source = f.read()
 
@@ -2925,7 +2947,7 @@ class Interpreter:
                 if isinstance(result, ReturnFlow):
                     return result.value
                 return self.globals.get("undefined").value
-
+            func_wrapper.__name__ = stmt.name
             env.define(stmt.name, func_wrapper)
 
         elif stmt.type == "ClassDefinition":
@@ -3150,29 +3172,48 @@ class Interpreter:
             raise NovaError(
                 target_expr, "Invalid assignment target type: " + target_expr.type
             )
+    def get_target_type(self, target, env):
+        """Resolve the expected type for an assignment target (Identifier or nested PropertyAccess)."""
+        if isinstance(target, Identifier):
+            var = env.get(target.name, target)
+            return var.type_annotation
 
+        if isinstance(target, PropertyAccess):
+            # Recurse to get the type of the parent object
+            parent_type = self.get_target_type(target.object, env)
+            if not parent_type or parent_type not in CUSTOM_TYPES:
+                return None
+            custom_def = CUSTOM_TYPES[parent_type]
+            prop_def = next((p for p in custom_def.properties if p.name == target.property), None)
+            return prop_def.type if prop_def else None
+
+        # ArrayAccess or anything else → no static type check for now
+        return None
     def evaluate_expr(self, expr, env):
         # print(expr)
         if expr.type == "Literal":
             return expr.value
         elif expr.type == "Identifier":
             return env.get(expr.name, expr).value
+
         elif expr.type == "AssignmentExpr":
             target = expr.target
             assigned_value = self.evaluate_expr(expr.value, env)
             op = expr.operator
 
-            final_value_to_assign = assigned_value
+            # Resolve where we are assigning to
+            resolved = self.resolve_assignment_target(target, env)
+            base = resolved["base"]
+            final_key = resolved["final_key"]
 
-            # Handle compound assignments (if operator is not just "=")
+            # === Compound assignment handling ===
             if op != "=":
-                if isinstance(target, ArrayLiteral):
-                    raise NovaError(
-                        target,
-                        f"Compound assignment operators like '{op}' cannot be used with array destructuring.",
-                    )
-
-                current_value = self.evaluate_expr(target, env)
+                if isinstance(base, Environment):
+                    current_value = base.get(final_key, target).value
+                elif isinstance(base, dict):
+                    current_value = base.get(final_key)
+                else:
+                    current_value = getattr(base, final_key, None)
 
                 if op == "+=":
                     final_value_to_assign = current_value + assigned_value
@@ -3184,25 +3225,23 @@ class Interpreter:
                     ):
                         raise NovaError(
                             expr,
-                            f"If you wanted to repeat '{assigned_value}' {current_value} times, you'd to '\"{assigned_value}\" * {current_value}'",
+                            f"If you wanted to repeat '{assigned_value}' {current_value} times, "
+                            f"you'd do '\"{assigned_value}\" * {current_value}'",
                         )
                     final_value_to_assign = current_value * assigned_value
                 elif op == "/=":
                     if assigned_value == 0:
-                        raise NovaError(
-                            expr, "Division by zero in compound assignment."
-                        )
+                        raise NovaError(expr, "Division by zero in compound assignment.")
                     final_value_to_assign = current_value / assigned_value
                 elif op == "%=":
                     final_value_to_assign = current_value % assigned_value
                 else:
-                    raise NovaError(
-                        expr,
-                        f"Internal error: Unknown compound assignment operator: {op}",
-                    )
+                    raise NovaError(expr, f"Unknown compound assignment operator: {op}")
+            else:
+                final_value_to_assign = assigned_value
 
-            # Now, perform the actual assignment with final_value_to_assign
-            if isinstance(target, ArrayLiteral):  # Array destructuring
+            # === Perform the actual assignment + type checking ===
+            if isinstance(target, ArrayLiteral):  # destructuring
                 source_array = final_value_to_assign
                 if not isinstance(source_array, list):
                     raise NovaError(
@@ -3210,49 +3249,45 @@ class Interpreter:
                         f"Cannot destructure non-list value. Expected list, got {type(source_array).__name__}.",
                     )
                 for i, target_element in enumerate(target.elements):
-                    source_value = (
-                        source_array[i] if i < len(source_array) else None
-                    )  # Handle fewer elements in source
-                    # Recursively assign each element using a simple assignment
+                    source_value = source_array[i] if i < len(source_array) else None
                     temp_assignment = AssignmentExpr(
                         target_element,
                         Literal(source_value, expr.file, expr.line, expr.column),
-                        "=",  # Always simple assignment for destructuring elements
+                        "=",
                         expr.file,
                         expr.line,
                         expr.column,
                     )
                     self.evaluate_expr(temp_assignment, env)
-            else:  # All other assignment targets (Identifier, ArrayAccess, PropertyAccess)
-                resolved = self.resolve_assignment_target(target, env)
-                base = resolved["base"]
-                final_key = resolved["final_key"]
-                # print(resolved)
+
+            else:  # normal / property / nested assignment
                 if isinstance(base, Environment):
+                    var = base.get(final_key, target)
+                    if var.type_annotation:
+                        check_type(var.type_annotation, final_value_to_assign, target)
                     base.assign(final_key, final_value_to_assign, target)
-                elif final_key is not None:
-                    # For NovaScript instances (Python dictionaries), assign directly
-                    if isinstance(base, dict):
-                        base[final_key] = final_value_to_assign
-                    else:  # For other Python objects, use setattr if it's an attribute
-                        try:
-                            setattr(base, final_key, final_value_to_assign)
-                        except (AttributeError, TypeError):
-                            # Fallback for dicts that are not NovaScript instances but are being assigned to
-                            # This handles object literals or other dicts where direct key assignment is expected
-                            if (
-                                isinstance(base, dict) or isinstance(base, list)
-                            ) or final_key in base:
-                                base[final_key] = final_value_to_assign
-                            else:
-                                # print(dir(base))
-                                raise NovaError(
-                                    target,
-                                    f"Cannot assign to property '{final_key}' of object of type {type(base).__name__}.",
-                                )
+
+                elif isinstance(base, dict):
+                    # Resolve expected type for (possibly nested) property using root variable's type
+                    expected_type = self.get_target_type(target, env)
+                    if expected_type:
+                        check_type(expected_type, final_value_to_assign, target)
+                    base[final_key] = final_value_to_assign
+
                 else:
-                    raise NovaError(target, "Failed to resolve assignment target.")
-            return final_value_to_assign  # Return the value that was assigned
+                    # Python object
+                    try:
+                        setattr(base, final_key, final_value_to_assign)
+                    except (AttributeError, TypeError):
+                        if isinstance(base, (dict, list)) or hasattr(base, "__setitem__"):
+                            base[final_key] = final_value_to_assign
+                        else:
+                            raise NovaError(
+                                target,
+                                f"Cannot assign to property '{final_key}' of object of type {type(base).__name__}.",
+                            )
+
+            return final_value_to_assign
 
         elif expr.type == "BinaryExpr":
             if expr.operator == "&&":

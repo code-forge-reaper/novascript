@@ -341,12 +341,13 @@ class Temp2
 	end
 end
 
-var ob = {x:24,y:0,z:0}
+var ob = {x:2,y:3,z:4}
 using ob
-print(z = y = x *= 42) // 1008
-print(x) // 1008
-print(y) // 1008
+print(z *= y *= x *= 42) // 1008
+print(x) // 84
+print(y) // 252
 print(z) // 1008
+
 const x = 24
 print(x)
 test

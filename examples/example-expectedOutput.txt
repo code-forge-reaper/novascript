@@ -1,6 +1,6 @@
-[error at: 00:18:18]:   Caught an error: examples/example.nova:143:1 Simulated division by zero error!
+[error at: 21:40:56]:   Caught an error: /home/cross/projects/novascript/examples/example.nova:143:1 Simulated division by zero error!
 mmath.grid2D(20,20):  [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]
-[info at: 00:18:18]: Starting NovaScript Example!
+[info at: 21:40:56]: Starting NovaScript Example!
 Greeting: Hello, NovaScript!
 Count: 10
 Is Active: True
@@ -76,7 +76,7 @@ This is an animal named Cat.
 vector math : v1 + v2 =  Vector2(x: 70, y: 40)
   v is 24
   v is 25
-examples/example.nova:299:9 Switch statement did not match any case for value: 27
+/home/cross/projects/novascript/examples/example.nova:299:9 Switch statement did not match any case for value: 27
   v is neither 24 nor 25, it is 10
   v is neither 24 nor 25, it is 11
   v is neither 24 nor 25, it is 13
@@ -89,11 +89,11 @@ examples/example.nova:299:9 Switch statement did not match any case for value: 2
   v is neither 24 nor 25, it is 55
   v is neither 24 nor 25, it is 65
 1008
-1008
-1008
+84
+252
 1008
 24
-expected error: examples/example.nova:354:5 Type mismatch: expected string, got int
-{'x': 24, 'y': 1008, 'z': 1008}
+expected error: /home/cross/projects/novascript/examples/example.nova:355:5 Type mismatch: expected string, got int
+{'x': 24, 'y': 252, 'z': 1008}
 ------------------------------------------------------------------------
 success
