@@ -201,6 +201,12 @@ print("First element:", numbers[0])
 numbers[1] = 25 // Modify element
 print("Modified array:", numbers)
 
+// Singleton
+object instant
+    func hi(name string) print("hello,",name) end
+end
+
+instant.hi("Cross")
 
 // Object literals
 var person = {
