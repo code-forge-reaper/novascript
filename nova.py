@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
 from novascript import Interpreter, NovaError
-import sys, importlib
+import sys
+import importlib
 import os
 
 

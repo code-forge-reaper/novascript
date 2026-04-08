@@ -96,7 +96,6 @@ class Environment:
             check_type(var.type_annotation, value, tok)
             var.value = value
 
-
         elif self.parent:
             if self.localsOnly:
                 raise NovaError(
@@ -152,9 +151,9 @@ class NovaClass:
                 prop_value = self.interpreter.evaluate_expr(
                     prop_def.initializer, self.env
                 )
-            instance[
-                prop_name
-            ] = prop_value  # Default value if no initializer is None in Python
+            instance[prop_name] = (
+                prop_value  # Default value if no initializer is None in Python
+            )
 
         # Bind instance methods to the instance
         for method_name, method_def in self.instance_methods.items():
@@ -340,7 +339,16 @@ class NovaClass:
         return instance
 
 
-BUILTIN_VAR_TYPES = ["string", "number", "bool", "function", "list", "any"]
+BUILTIN_VAR_TYPES = [
+    "string",
+    "number",
+    "bool",
+    "function",
+    "list",
+    "any",
+    "int",
+    "float",
+]
 CUSTOM_TYPES = {}  # Dictionary for custom types
 
 
@@ -355,7 +363,8 @@ def check_type(expected, value, token):
     if expected == "number":
         if not isinstance(value, (int, float)):
             raise NovaError(
-                token, f"Type mismatch: expected number(int, float), got {type(value).__name__}"
+                token,
+                f"Type mismatch: expected number(int, float), got {type(value).__name__}",
             )
     elif expected == "int":
         if not isinstance(value, int):
@@ -423,7 +432,7 @@ def check_type(expected, value, token):
 
 
 # --- Global Initialization ---
-def init_globals(interpreter,globals_env):
+def init_globals(interpreter, globals_env):
     def pprint(*stuff):
         for id, obj in enumerate(stuff):
             end = "" if id == len(stuff) - 1 else " "
@@ -471,6 +480,10 @@ def init_globals(interpreter,globals_env):
         @staticmethod
         def number(n):
             return isinstance(n, (int, float))
+
+        @staticmethod
+        def instance(what, parent):
+            return isinstance(what,parent)
 
         @staticmethod
         def int(n):
@@ -524,6 +537,7 @@ def init_globals(interpreter,globals_env):
         @staticmethod
         def toInt(s):
             return int(s)
+
         @staticmethod
         def toTuple(s):
             return tuple(s)
@@ -602,7 +616,8 @@ def init_globals(interpreter,globals_env):
     mmath["abs"] = abs
     mmath["max"] = max
     mmath["min"] = min
-    def load(path: str): # const <modname> = load("modname")
+
+    def load(path: str, env={}):  # const <modname> = load("modname")
         # ── FORCE Python import ──
         if path.startswith("py:"):
             py_path = path[3:].replace("/", ".")
@@ -637,15 +652,15 @@ def init_globals(interpreter,globals_env):
             imported_interpreter = Interpreter(file_path)
             imported_env = Environment(globals_env)
             imported_env.define("exports", {})
+            for k, v in env.items():
+                imported_env.define(k, v)
             imported_env.localsOnly = True
 
             imported_interpreter.globals = imported_env
             imported_interpreter.globals.define("__IS_MAIN__", False, True)
             imported_interpreter.interpret()
 
-            result = {
-                k: v for k, v in imported_env.get('exports').value.items()
-            }
+            result = {k: v for k, v in imported_env.get("exports").value.items()}
 
             interpreter.modules_loaded[file_path] = result
             return result
@@ -664,24 +679,15 @@ def init_globals(interpreter,globals_env):
             raise NovaError(
                 None,
                 f"Cannot find module: {path}\n"
-                f"Tried Nova:\n  " + "\n  ".join(possible_locations) +
-                f"\nTried Python import: {py_path}\nError: {e}"
+                f"Tried Nova:\n  "
+                + "\n  ".join(possible_locations)
+                + f"\nTried Python import: {py_path}\nError: {e}",
             )
 
     class Runtime:
-        class Dump:  # since this is in the Runtime's "body", it is still visible, yell at python, not me
-            @staticmethod
-            def keys(obj):
-                return list(obj.keys())
-
-            @staticmethod
-            def values(obj):
-                return list(obj.values())
-
-            @staticmethod
-            def object(obj):
-                return dir(obj)
-
+        @staticmethod
+        def dumpGlobals():
+            print(interpreter.globals)
         @staticmethod
         def exit(code=0):
             sys.exit(code)
@@ -789,9 +795,7 @@ def init_globals(interpreter,globals_env):
             return list(obj.values())
 
         @staticmethod
-        def delete(
-            x, y
-        ):
+        def delete(x, y):
             del x[y]
 
         @staticmethod
@@ -813,7 +817,18 @@ def init_globals(interpreter,globals_env):
         @staticmethod
         def delattr(obj, key):
             builtins.delattr(obj, key)
-
+        @staticmethod
+        def attrs(obj):
+            return dir(obj)
+            
+    builtin_exceptions = {
+        obj for name, obj in vars(builtins).items()
+        if isinstance(obj, type) and issubclass(obj, BaseException)
+    }
+    builtin_exceptions.add(NovaError)
+    
+    for e in builtin_exceptions:
+        globals_env.define(e.__name__, e)
     globals_env.define("print", pprint)
     globals_env.define("write", lambda t, to: print(t, file=to))
     globals_env.define("input", input)
@@ -838,6 +853,10 @@ def init_globals(interpreter,globals_env):
     globals_env.define("Fs", Fs)
     globals_env.define("Object", Object)
     globals_env.define("Time", Time)
+    def r(x):
+        raise x
+    r.__name__ = "raise"
+    globals_env.define("raise", r)
 
 
 def opToName(op):
@@ -922,7 +941,7 @@ class Interpreter:
         self.modules_loaded = {}
         self.current_env = None
 
-        init_globals(self,self.globals)
+        init_globals(self, self.globals)
         self.globals.define(
             "__SCRIPT_PATH__", os.path.dirname(os.path.abspath(self.file))
         )
@@ -1030,7 +1049,7 @@ class Interpreter:
 
             if char.isdigit():
 
-                def read_digits(valid, base, allow_underscore=True):
+                def collect_digits(valid, allow_underscore=True):
                     nonlocal i, col
 
                     digits = ""
@@ -1055,8 +1074,10 @@ class Interpreter:
                             Token("error", "Invalid numeric literal", file, line, col),
                             "Invalid numeric literal",
                         )
+                    return digits
 
-                    return int(digits, base)
+                def read_digits(valid, base, allow_underscore=True):
+                    return int(collect_digits(valid, allow_underscore), base)
 
                 # prefixed numbers
                 if i + 1 < length and source[i] == "0":
@@ -1091,30 +1112,26 @@ class Interpreter:
 
                         continue
 
-                # decimal / float
-                num = ""
-                dot = False
-
-                while i < length and (source[i].isdigit() or source[i] == "."):
-                    if source[i] == ".":
-                        if dot:
-                            break
-                        dot = True
-
-                    num += source[i]
+                # decimal / float (with underscores, no trailing dot)
+                int_part = collect_digits("0123456789")   # integer part mandatory
+                
+                if i < length and source[i] == ".":
                     i += 1
                     col += 1
-
-                tokens.append(
-                    Token(
-                        "number",
-                        float(num) if dot else int(num),
-                        file,
-                        line,
-                        start_col,
-                    )
-                )
-
+                    # fractional part must contain at least one digit (underscores allowed but must resolve to digits)
+                    try:
+                        frac_part = collect_digits("0123456789")
+                    except NovaError:
+                        # collect_digits raised because no digits found -> that's a trailing dot
+                        raise NovaError(
+                            Token("error", "Invalid numeric literal", file, line, col),
+                            "Trailing dot in numeric literal"
+                        )
+                    num_str = f"{int_part}.{frac_part}"
+                    tokens.append(Token("number", float(num_str), file, line, start_col))
+                else:
+                    # plain integer
+                    tokens.append(Token("number", int(int_part, 10), file, line, start_col))
                 continue
             if char in ['"', "'"]:
                 quote = char
@@ -1927,7 +1944,9 @@ class Interpreter:
                 return ContinueStmt(token.file, token.line, token.column)
             elif token.value == "export":
                 self.consume_token()  # consume 'export'
-                inner_stmt = self.parse_statement()  # parse the declaration or expression that follows
+                inner_stmt = (
+                    self.parse_statement()
+                )  # parse the declaration or expression that follows
                 return ExportStmt(inner_stmt, token.file, token.line, token.column)
             elif token.value == "if":
                 self.consume_token()
@@ -2653,7 +2672,9 @@ class Interpreter:
                     val = env.get(name).value
                     exports_dict[name] = val
                 else:
-                    raise NovaError(stmt, f"Cannot export expression of type {expr.type}")
+                    raise NovaError(
+                        stmt, f"Cannot export expression of type {expr.type}"
+                    )
 
             else:
                 raise NovaError(stmt, f"Cannot export statement of type {inner.type}")
@@ -2684,10 +2705,7 @@ class Interpreter:
             except Exception as e:  # Catch all other Python exceptions
                 catch_env = Environment(env)
                 # If e is a NovaError, use it directly. Otherwise, wrap it.
-                error_to_define = (
-                    e if isinstance(e, NovaError) else NovaError(stmt, str(e))
-                )
-                catch_env.define(stmt.error_var, error_to_define, True)
+                catch_env.define(stmt.error_var, e, True)
                 result = self.execute_block(stmt.catch_block, catch_env)
                 if isinstance(result, ControlFlow):
                     return result
@@ -2947,6 +2965,7 @@ class Interpreter:
                 if isinstance(result, ReturnFlow):
                     return result.value
                 return self.globals.get("undefined").value
+
             func_wrapper.__name__ = stmt.name
             env.define(stmt.name, func_wrapper)
 
@@ -3172,6 +3191,7 @@ class Interpreter:
             raise NovaError(
                 target_expr, "Invalid assignment target type: " + target_expr.type
             )
+
     def get_target_type(self, target, env):
         """Resolve the expected type for an assignment target (Identifier or nested PropertyAccess)."""
         if isinstance(target, Identifier):
@@ -3184,11 +3204,14 @@ class Interpreter:
             if not parent_type or parent_type not in CUSTOM_TYPES:
                 return None
             custom_def = CUSTOM_TYPES[parent_type]
-            prop_def = next((p for p in custom_def.properties if p.name == target.property), None)
+            prop_def = next(
+                (p for p in custom_def.properties if p.name == target.property), None
+            )
             return prop_def.type if prop_def else None
 
         # ArrayAccess or anything else → no static type check for now
         return None
+
     def evaluate_expr(self, expr, env):
         # print(expr)
         if expr.type == "Literal":
@@ -3231,7 +3254,9 @@ class Interpreter:
                     final_value_to_assign = current_value * assigned_value
                 elif op == "/=":
                     if assigned_value == 0:
-                        raise NovaError(expr, "Division by zero in compound assignment.")
+                        raise NovaError(
+                            expr, "Division by zero in compound assignment."
+                        )
                     final_value_to_assign = current_value / assigned_value
                 elif op == "%=":
                     final_value_to_assign = current_value % assigned_value
@@ -3279,7 +3304,9 @@ class Interpreter:
                     try:
                         setattr(base, final_key, final_value_to_assign)
                     except (AttributeError, TypeError):
-                        if isinstance(base, (dict, list)) or hasattr(base, "__setitem__"):
+                        if isinstance(base, (dict, list)) or hasattr(
+                            base, "__setitem__"
+                        ):
                             base[final_key] = final_value_to_assign
                         else:
                             raise NovaError(

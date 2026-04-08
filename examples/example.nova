@@ -354,6 +354,11 @@ print(x) // 84
 print(y) // 252
 print(z) // 1008
 
+// numerical stuff
+print(0u41) // A
+print(0b11000) // 24
+print(0x12) // 18
+
 const x = 24
 print(x)
 test

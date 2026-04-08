@@ -23,12 +23,14 @@ class NovaError(Exception):
 
     def __init__(self, token, user_message=None):
         # Provide fallback values if token is None or lacks properties
-        file = getattr(token, "file", "unknown_file") if token else "unknown_file"
+        file = getattr(
+            token, "file", "unknown_file") if token else "unknown_file"
         line = getattr(token, "line", 0) if token else 0
         column = getattr(token, "column", 0) if token else 0
         token_value = getattr(token, "value", "N/A") if token else "N/A"
 
-        self.message = f"{file}:{line}:{column} {user_message or 'unknown error at token: ' + str(token_value)}"
+        self.message = (f"{file}:{line}:{column}" +
+                        f": {user_message or 'unknown error at token: ' + str(token_value)}")
         super().__init__(self.message)
         self.line = line
         self.column = column
@@ -156,7 +158,8 @@ class FuncCall(Expression):
         self.arguments = arguments
 
     def __str__(self, indent_level=0):
-        args_str = ", ".join(arg.__str__(indent_level) for arg in self.arguments)
+        args_str = ", ".join(arg.__str__(indent_level)
+                             for arg in self.arguments)
         return f"{self.name}({args_str})"
 
 
@@ -168,7 +171,8 @@ class MethodCall(Expression):
         self.arguments = arguments
 
     def __str__(self, indent_level=0):
-        args_str = ", ".join(arg.__str__(indent_level) for arg in self.arguments)
+        args_str = ", ".join(arg.__str__(indent_level)
+                             for arg in self.arguments)
         return f"{self.object.__str__(indent_level)}.{self.method}({args_str})"
 
 
@@ -190,7 +194,8 @@ class ArrayAccess(Expression):
 
     def __str__(self, indent_level=0):
         return (
-            f"{self.object.__str__(indent_level)}[{self.index.__str__(indent_level)}]"
+            f"{self.object.__str__(indent_level)}[{
+                self.index.__str__(indent_level)}]"
         )
 
 
@@ -200,7 +205,8 @@ class ArrayLiteral(Expression):
         self.elements = elements
 
     def __str__(self, indent_level=0):
-        elements_str = ", ".join(elem.__str__(indent_level) for elem in self.elements)
+        elements_str = ", ".join(elem.__str__(indent_level)
+                                 for elem in self.elements)
         return f"[{elements_str}]"
 
 
@@ -219,7 +225,8 @@ class ObjectLiteral(Expression):
         props_list = []
         for prop in self.properties:
             props_list.append(
-                f"{next_indent}{prop['key']}: {prop['value'].__str__(indent_level + 1)}"
+                f"{next_indent}{prop['key']}: {
+                    prop['value'].__str__(indent_level + 1)}"
             )
 
         # build the joined string OUTSIDE the f-string expression
@@ -247,7 +254,8 @@ class NewInstance(Expression):
         self.arguments = arguments
 
     def __str__(self, indent_level=0):
-        args_str = ", ".join(arg.__str__(indent_level) for arg in self.arguments)
+        args_str = ", ".join(arg.__str__(indent_level)
+                             for arg in self.arguments)
         return f"new {self.class_name}({args_str})"
 
 
@@ -274,14 +282,16 @@ class Case:
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        body_str = "\n".join(stmt.__str__(indent_level + 1)
+                             for stmt in self.body)
         if self.case_expr:
             return f"{current_indent}case {self.case_expr.__str__(indent_level)} do\n{body_str}\n{current_indent}end"
         else:  # Default case
             return f"{current_indent}default do\n{body_str}\n{current_indent}end"
 
+
 class ExportStmt(Statement):
-    def __init__(self, expr, file,line,column):
+    def __init__(self, expr, file, line, column):
         super().__init__("ExportStmt", file, line, column)
         self.expr = expr
 
@@ -290,6 +300,7 @@ class ExportStmt(Statement):
         expr = self.expr.__str__(indent_level + 1)
         return f"{current_indent}export {expr}"
 
+
 class DeferStmt(Statement):
     def __init__(self, body, file, line, column):
         super().__init__("DeferStmt", file, line, column)
@@ -297,7 +308,8 @@ class DeferStmt(Statement):
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        body_str = "\n".join(stmt.__str__(indent_level + 1)
+                             for stmt in self.body)
         return f"{current_indent}defer do\n{body_str}\n{current_indent}end"
 
 
@@ -356,7 +368,8 @@ class CustomType:  # This is a runtime representation, not an AST node directly
             prop.__str__(indent_level + 1) for prop in self.properties
         )
         return (
-            f"{current_indent}define {self.name} = {{\n{props_str}\n{current_indent}}}"
+            f"{current_indent}define {
+                self.name} = {{\n{props_str}\n{current_indent}}}"
         )
 
 
@@ -372,7 +385,8 @@ class CustomTypeDeclStmt(Statement):
             prop.__str__(indent_level + 1) for prop in self.definition
         )
         return (
-            f"{current_indent}define {self.name} = {{\n{props_str}\n{current_indent}}}"
+            f"{current_indent}define {
+                self.name} = {{\n{props_str}\n{current_indent}}}"
         )
 
 
@@ -386,7 +400,8 @@ class AssertStmt(Statement):
         current_indent = INDENT_STEP * indent_level
         msg_str = f' "{self.message}"' if self.message else ""
         return (
-            f"{current_indent}assert {self.expression.__str__(indent_level)}{msg_str}"
+            f"{current_indent}assert {self.expression.__str__(indent_level)}{
+                msg_str}"
         )
 
 
@@ -420,7 +435,8 @@ class ObjectDecl(Statement):
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
 
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        body_str = "\n".join(stmt.__str__(indent_level + 1)
+                             for stmt in self.body)
         return f"{current_indent}object {self.name}\n{body_str}\n{current_indent}end"
 
 
@@ -437,8 +453,10 @@ class MethodDefinition(Statement):
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
-        params_str = ", ".join(p.__str__(indent_level) for p in self.parameters)
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        params_str = ", ".join(p.__str__(indent_level)
+                               for p in self.parameters)
+        body_str = "\n".join(stmt.__str__(indent_level + 1)
+                             for stmt in self.body)
         static_prefix = "static " if self.is_static else ""
         name = "init" if self.is_constructor else self.name
         return f"{current_indent}{static_prefix}func {name}({params_str}) \n{body_str}\n{current_indent}end"
@@ -526,18 +544,21 @@ class IfStmt(Statement):
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
         s = f"{current_indent}if {self.condition.__str__(indent_level)} do\n"
-        s += "\n".join(stmt.__str__(indent_level + 1) for stmt in self.then_block)
+        s += "\n".join(stmt.__str__(indent_level + 1)
+                       for stmt in self.then_block)
 
         if self.else_if:
             for elseif_block in self.else_if:
-                s += f"\n{current_indent}elseif {elseif_block['condition'].__str__(indent_level)} do\n"
+                s += f"\n{current_indent}elseif {
+                    elseif_block['condition'].__str__(indent_level)} do\n"
                 s += "\n".join(
                     stmt.__str__(indent_level + 1) for stmt in elseif_block["body"]
                 )
 
         if self.else_block:
             s += f"\n{current_indent}else do\n"
-            s += "\n".join(stmt.__str__(indent_level + 1) for stmt in self.else_block)
+            s += "\n".join(stmt.__str__(indent_level + 1)
+                           for stmt in self.else_block)
 
         s += f"\n{current_indent}end"
         return s
@@ -551,7 +572,8 @@ class WhileStmt(Statement):
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        body_str = "\n".join(stmt.__str__(indent_level + 1)
+                             for stmt in self.body)
         return f"{current_indent}while {self.condition.__str__(indent_level)}\n{body_str}\n{current_indent}end"
 
 
@@ -563,7 +585,8 @@ class UntilStmt(Statement):
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        body_str = "\n".join(stmt.__str__(indent_level + 1)
+                             for stmt in self.body)
         return f"{current_indent}until {self.condition.__str__(indent_level)}\n{body_str}\n{current_indent}end"
 
 
@@ -576,7 +599,8 @@ class ForEachStmt(Statement):
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        body_str = "\n".join(stmt.__str__(indent_level + 1)
+                             for stmt in self.body)
         return f"{current_indent}forEach {self.variable} in {self.list.__str__(indent_level)} do\n{body_str}\n{current_indent}end"
 
 
@@ -595,13 +619,16 @@ class ForStmt(Statement):
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
         step_str = f", {self.step.__str__(indent_level)}" if self.step else ""
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        body_str = "\n".join(stmt.__str__(indent_level + 1)
+                             for stmt in self.body)
         return (
-            f"{current_indent}for {self.variable} = {self.start.__str__(indent_level)}, "
+            f"{current_indent}for {self.variable} = {
+                self.start.__str__(indent_level)}, "
             f"{self.end.__str__(indent_level)}{step_str} do\n"
             f"{body_str}\n"
             f"{current_indent}end"
         )
+
 
 class EnumDef(Statement):
     def __init__(self, name, values, file, line, column):
@@ -612,7 +639,8 @@ class EnumDef(Statement):
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
         next_indent = INDENT_STEP * (indent_level + 1)
-        values_str = ",\n".join(f"{next_indent}{value}" for value in self.values)
+        values_str = ",\n".join(
+            f"{next_indent}{value}" for value in self.values)
         return f"{current_indent}enum {self.name} {{\n{values_str}\n{current_indent}}}"
 
 
@@ -624,7 +652,8 @@ class ScopeStmt(Statement):
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        body_str = "\n".join(stmt.__str__(indent_level + 1)
+                             for stmt in self.body)
         return f"{current_indent}scope {self.name} do\n{body_str}\n{current_indent}end"
 
 
@@ -637,7 +666,8 @@ class SwitchStmt(Statement):
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
-        cases_str = "\n".join(case.__str__(indent_level + 1) for case in self.cases)
+        cases_str = "\n".join(case.__str__(indent_level + 1)
+                              for case in self.cases)
         if self.strict:
             return f"{current_indent}switch strict {self.expression.__str__(indent_level)} do\n{cases_str}\n{current_indent}end"
         return f"{current_indent}switch {self.expression.__str__(indent_level)} do\n{cases_str}\n{current_indent}end"
@@ -651,7 +681,8 @@ class ReturnStmt(Statement):
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
         expr_str = (
-            f" {self.expression.__str__(indent_level)}" if self.expression else ""
+            f" {self.expression.__str__(
+                indent_level)}" if self.expression else ""
         )
         return f"{current_indent}return{expr_str}"
 
@@ -675,8 +706,10 @@ class FuncDecl(Statement):
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
-        params_str = ", ".join(p.__str__(indent_level) for p in self.parameters)
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        params_str = ", ".join(p.__str__(indent_level)
+                               for p in self.parameters)
+        body_str = "\n".join(stmt.__str__(indent_level + 1)
+                             for stmt in self.body)
         return f"{current_indent}func {self.name}({params_str}) do\n{body_str}\n{current_indent}end"
 
 
@@ -689,7 +722,8 @@ class WithStmt(Statement):
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        body_str = "\n".join(stmt.__str__(indent_level + 1)
+                             for stmt in self.body)
         return f"{current_indent}with {self.expr.__str__(indent_level)} as {self.alias} do\n{body_str}\n{current_indent}end"
 
 
@@ -702,8 +736,10 @@ class LambdaDecl(
         self.body = body
 
     def __str__(self, indent_level=0):
-        params_str = ", ".join(p.__str__(indent_level) for p in self.parameters)
-        body_str = "\n".join(stmt.__str__(indent_level + 1) for stmt in self.body)
+        params_str = ", ".join(p.__str__(indent_level)
+                               for p in self.parameters)
+        body_str = "\n".join(stmt.__str__(indent_level + 1)
+                             for stmt in self.body)
         # Lambda is an expression, so it doesn't get the outer indent, but its body does.
         return f"def ({params_str}) do\n{body_str}\n{INDENT_STEP * indent_level}end"
 
