@@ -18,7 +18,8 @@ import struct, builtins
 from nodes import *
 import uuid
 from collections.abc import Iterable
-
+import importlib
+impLib = importlib.import_module
 
 class Undefined(object):
     def __str__(self):
@@ -624,8 +625,8 @@ def init_globals(interpreter, globals_env):
             if py_path in interpreter.modules_loaded:
                 return interpreter.modules_loaded[py_path]
 
-            handler = globals_env.get("os-import-handler").value
-            result = handler(py_path)
+            
+            result = impLib(py_path)
             interpreter.modules_loaded[py_path] = result
             return result
 
@@ -671,13 +672,11 @@ def init_globals(interpreter, globals_env):
             return interpreter.modules_loaded[py_path]
 
         try:
-            handler = globals_env.get("os-import-handler").value
-            result = handler(py_path)
+            result = impLib(py_path)
             interpreter.modules_loaded[py_path] = result
             return result
         except Exception as e:
-            raise NovaError(
-                None,
+            raise RuntimeError(
                 f"Cannot find module: {path}\n"
                 f"Tried Nova:\n  "
                 + "\n  ".join(possible_locations)
@@ -1624,7 +1623,7 @@ class Interpreter:
 
                     self.expect_token(":")
                     self.consume_token()  # consume ':'
-
+                    
                     prop_type_token = self.expect_type("identifier")
                     prop_type = prop_type_token.value
                     self.consume_token()  # consume property type
@@ -2937,30 +2936,48 @@ class Interpreter:
             env.define(
                 stmt.fn.name, _env.get(stmt.fn.name).value, _env.get(stmt.fn.name).const
             )
-
         elif stmt.type == "FuncDecl":
-
-            def func_wrapper(*args):
+            def func_wrapper(*args, **kwargs):
                 func_env = Environment(env)
+                param_names = [p.name for p in stmt.parameters]
+                num_params = len(param_names)
 
+                # 1. Handle positional arguments
+                if len(args) > num_params:
+                    raise NovaError(stmt, f"Too many positional arguments (expected {num_params})")
+
+                # 2. Build a value dict from positionals
+                values = {}
                 for i, param in enumerate(stmt.parameters):
-                    arg_val = args[i] if i < len(args) else __no_variable_set__
+                    if i < len(args):
+                        values[param.name] = args[i]
 
-                    # apply default if missing
-                    if arg_val is __no_variable_set__ and param.default is not None:
-                        arg_val = self.evaluate_expr(param.default, env)
-                    elif arg_val is __no_variable_set__ and param.default is None:
-                        raise NovaError(
-                            param,
-                            f"Missing argument for parameter '{param.name}' in function '{stmt.name}'.",
-                        )
+                # 3. Overlay keyword arguments (with conflict detection)
+                for kw_name, kw_val in kwargs.items():
+                    if kw_name not in param_names:
+                        raise NovaError(stmt, f"Unexpected keyword argument '{kw_name}'")
+                    if kw_name in values:
+                        raise NovaError(stmt, f"Parameter '{kw_name}' given both positionally and by keyword")
+                    values[kw_name] = kw_val
 
-                    # soft type check
+                # 4. Apply defaults for missing parameters and type check
+                for param in stmt.parameters:
+                    if param.name in values:
+                        arg_val = values[param.name]
+                    else:
+                        # Missing – try default
+                        if param.default is not None:
+                            arg_val = self.evaluate_expr(param.default, env)
+                        else:
+                            raise NovaError(param, f"Missing argument for parameter '{param.name}'")
+
+                    # Soft type check
                     if param.annotation_type:
                         check_type(param.annotation_type, arg_val, param)
 
                     func_env.define(param.name, arg_val)
 
+                # 5. Execute function body
                 result = self.execute_block(stmt.body, func_env)
                 if isinstance(result, ReturnFlow):
                     return result.value
@@ -2968,7 +2985,6 @@ class Interpreter:
 
             func_wrapper.__name__ = stmt.name
             env.define(stmt.name, func_wrapper)
-
         elif stmt.type == "ClassDefinition":
             class_def = stmt
             super_class = None
@@ -3442,17 +3458,21 @@ class Interpreter:
             if not callable(func):
                 raise NovaError(expr, f"{expr.name} is not a function")
             args = []
+            kwargs = {}
             for arg in expr.arguments:
                 if arg.type == "ExplodeExpr":
                     v = self.evaluate_expr(arg.args, env)
-                    if isinstance(v, Iterable) and not isinstance(v, (str, bytes)):
+                    if isinstance(v, dict):
+                        for name in v.keys():
+                            kwargs[name] = v[name]
+                    elif isinstance(v, Iterable) and not isinstance(v, (str, bytes)):
                         args.extend(v)
                     else:
                         args.append(v)
                 else:
                     v = self.evaluate_expr(arg, env)
                     args.append(v)
-            return func(*args)
+            return func(*args, **kwargs)
 
         elif expr.type == "MethodCall":
             obj = self.evaluate_expr(expr.object, env)

@@ -1,8 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
 from novascript import Interpreter, NovaError
 import sys
-import importlib
+
 import os
 
 
@@ -18,7 +18,6 @@ def main():
         else:
             raise ValueError("cannot set stdin as the file on this platform")
     interpreter = Interpreter(script_file)
-    interpreter.globals.define("os-import-handler", importlib.import_module)
     interpreter.interpret()
 
 
