@@ -36,6 +36,10 @@ class Var:
         self.const = const
         self.type_annotation = annotation
 
+    def __repr__(self):
+        const_flag = "const " if self.const else ""
+        type_info = f":{self.type_annotation} " if self.type_annotation else ""
+        return f"Var({const_flag}{self.name}{type_info}= {self.value!r})"
 
 # --- Environment for variable scoping ---
 class Environment:
@@ -513,6 +517,7 @@ def init_globals(interpreter, globals_env):
         def undefined(s):
             return s == globals_env.get("undefined").value
 
+    # Has.<relation>(target, value) -> {target} Has {value} <relation>
     class Has:
         @staticmethod
         def key(d, k):
@@ -525,7 +530,7 @@ def init_globals(interpreter, globals_env):
             return v in d.values()
 
         @staticmethod
-        def item(target, what):
+        def inside(target, what):
             return what in target  # works for list, str, set, tuple
 
         @staticmethod
@@ -618,7 +623,8 @@ def init_globals(interpreter, globals_env):
     mmath["max"] = max
     mmath["min"] = min
 
-    def load(path: str, env={}):  # const <modname> = load("modname")
+    def load(path: str, env=None):  # const <modname> = load("modname")
+        if not env: env = {}
         # ── FORCE Python import ──
         if path.startswith("py:"):
             py_path = path[3:].replace("/", ".")
@@ -686,7 +692,7 @@ def init_globals(interpreter, globals_env):
     class Runtime:
         @staticmethod
         def dumpGlobals():
-            print(interpreter.globals)
+            print("global stuff = ",interpreter.globals)
         @staticmethod
         def exit(code=0):
             sys.exit(code)
@@ -711,18 +717,21 @@ def init_globals(interpreter, globals_env):
 
     class Fs:
         @staticmethod
-        def read(path, opts={"mode": "r", "encoding": "utf8"}):
+        def read(path, opts = None):
+            if not opts: opts = opts={"mode": "r", "encoding": "utf8"}
             with open(path, **opts) as f:
                 return f.read()
 
         @staticmethod
-        def open(path, opts={"mode": "r", "encoding": "utf8"}):
+        def open(path, opts = None):
+            if not opts: opts = opts={"mode": "r", "encoding": "utf8"}
             return open(
                 path, **opts
             )  # interpreter turns nova's objects into dicts when passing back to python, so this is safe
 
         @staticmethod
-        def write(path, contents, opts={"mode": "w", "encoding": "utf8"}):
+        def write(path, contents, opts = None):
+            if not opts: opts = opts={"mode": "w", "encoding": "utf8"}
             with open(path, **opts) as f:
                 f.write(contents)
 
@@ -827,7 +836,7 @@ def init_globals(interpreter, globals_env):
     builtin_exceptions.add(NovaError)
     
     for e in builtin_exceptions:
-        globals_env.define(e.__name__, e)
+        globals_env.define(e.__name__, e) # more for error checking and better controll over what to raise instead of Runtime.panic
     globals_env.define("print", pprint)
     globals_env.define("write", lambda t, to: print(t, file=to))
     globals_env.define("input", input)

@@ -48,7 +48,7 @@ func wasteClient(rec)
 		const chunk = rec(1024)
 		if #chunk == 0 break end
 		data+=chunk.decode("utf8")
-		if Has.item(data,"\r\n\r\n") break end
+		if Has.inside(data,"\r\n\r\n") break end
 	end
 end
 

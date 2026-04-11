@@ -199,7 +199,7 @@ end
 func Box(items, prepend = "")
     var inner = new BoxBuilder()
     foreach item in items do
-        if Is.string(item) && Has.item(item,"\n")  // naive detection of multi-line
+        if Is.string(item) && Has.inside(item,"\n")  // naive detection of multi-line
             foreach line in item.split("\n") do
                 inner.AddLine(prepend + line)
             end
