@@ -370,5 +370,12 @@ failed err
 end
 print({x,y,z})
 
+func simpl(name, age)
+    print("name = {}, age = {}" % [name, age])
+end
+
+simpl(explode ["cross", 18])
+simpl(explode {age: 18, name: "cross"})
+
 print("---" * 24)
 print("success")
