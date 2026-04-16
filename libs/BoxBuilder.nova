@@ -95,7 +95,7 @@ class BoxBuilder
     func _compute_max_width()
         var current_line = ""
         var local_max = 0
-        foreach instr in self.instructions do
+        for instr in self.instructions do
             if instr.type == "text" || instr.type == "centered"
                 current_line += instr.content
             elseif instr.type == "box"
@@ -125,7 +125,7 @@ class BoxBuilder
         var rendered_lines = [top_border]
 
         var current_line = ""
-        foreach instr in self.instructions do
+        for instr in self.instructions do
             if instr.type == "text"
                 current_line += instr.content
             elseif instr.type == "centered"
@@ -139,7 +139,7 @@ class BoxBuilder
                 end
 
                 var rendered = instr.sub.RenderBox()
-                foreach line in rendered.split("\n") do
+                for line in rendered.split("\n") do
                     rendered_lines.append(ASCII.V + " " + line.ljust(self.max_width) + " " + ASCII.V)
                 end
             elseif instr.type == "newline"
@@ -176,7 +176,7 @@ const _box = new BoxBuilder()
 using _box
 
 func AddMultiline(text)
-    foreach line in text.split("\n") do
+    for line in text.split("\n") do
         AddLine(line)
     end
 end
@@ -189,7 +189,7 @@ func Indent(text, spaces = 2)
     var pad = " " * spaces
     var out = []
 
-    foreach line in text.split("\n") do
+    for line in text.split("\n") do
         out.append(pad + line)
     end
 
@@ -198,9 +198,9 @@ end
 
 func Box(items, prepend = "")
     var inner = new BoxBuilder()
-    foreach item in items do
+    for item in items do
         if Is.string(item) && Has.inside(item,"\n")  // naive detection of multi-line
-            foreach line in item.split("\n") do
+            for line in item.split("\n") do
                 inner.AddLine(prepend + line)
             end
         elseif Is.dict(item) && item.type
@@ -232,11 +232,11 @@ func Table(props)
     var col_widths = []
     var max_rows = 0
 
-    foreach key in props do
+    for key in props do
         col_names.append(key)
         var rows = props[key]
         var max_len = #key
-        foreach row in rows do
+        for row in rows do
             max_len = math.max(max_len, #row)
         end
         col_widths.append(max_len)

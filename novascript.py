@@ -556,7 +556,9 @@ def init_globals(interpreter, globals_env):
         def toNumber(s):
             if not isinstance(s, str):
                 raise ValueError(f"this function expects a string, got {type(s)}")
-            return int(s) if not "." in s else float(s)
+            elif not s.isdigit():
+                raise ValueError(f"'{s}' should be a digit")
+            return int(s) if "." not in s else float(s)
 
         @staticmethod
         def toStr(thing):
@@ -913,7 +915,6 @@ class Interpreter:
         "scope",
         "while",
         "until",
-        "foreach",
         "for",
         "do",
         "in",
@@ -1857,28 +1858,6 @@ class Interpreter:
                     token.column,
                 )
 
-            elif token.value == "foreach":
-                self.consume_token()
-                for_each_var_token = self.expect_type("identifier")
-                for_each_variable = for_each_var_token.value
-                self.consume_token()
-                self.expect_token("in")
-                self.consume_token()
-                for_each_list_expr = self.parse_expression()
-                self.expect_token("do")
-                self.consume_token()
-                for_each_body = self.parse_block_until(["end"])
-                self.expect_token("end")
-                self.consume_token()
-                return ForEachStmt(
-                    for_each_variable,
-                    for_each_list_expr,
-                    for_each_body,
-                    token.file,
-                    token.line,
-                    token.column,
-                )
-
             elif token.value == "with":
                 self.consume_token()
                 expr = self.parse_expression()
@@ -1898,31 +1877,49 @@ class Interpreter:
                 for_var_token = self.expect_type("identifier")
                 for_variable = for_var_token.value
                 self.consume_token()
-                self.expect_token("=")
-                self.consume_token()
-                for_start_expr = self.parse_expression()
-                self.expect_token(",")
-                self.consume_token()
-                for_end_expr = self.parse_expression()
-                for_step_expr = None
-                if self.get_next_token() and self.get_next_token().value == ",":
+                if self.get_next_token() and self.get_next_token().value == "in":
+                    self.expect_token("in")
                     self.consume_token()
-                    for_step_expr = self.parse_expression()
-                self.expect_token("do")
-                self.consume_token()
-                for_body = self.parse_block_until(["end"])
-                self.expect_token("end")
-                self.consume_token()
-                return ForStmt(
-                    for_variable,
-                    for_start_expr,
-                    for_end_expr,
-                    for_step_expr,
-                    for_body,
-                    token.file,
-                    token.line,
-                    token.column,
-                )
+                    for_each_list_expr = self.parse_expression()
+                    self.expect_token("do")
+                    self.consume_token()
+                    for_each_body = self.parse_block_until(["end"])
+                    self.expect_token("end")
+                    self.consume_token()
+                    return ForEachStmt(
+                        for_variable,
+                        for_each_list_expr,
+                        for_each_body,
+                        token.file,
+                        token.line,
+                        token.column,
+                    )
+                else:
+                    self.expect_token("=")
+                    self.consume_token()
+                    for_start_expr = self.parse_expression()
+                    self.expect_token(",")
+                    self.consume_token()
+                    for_end_expr = self.parse_expression()
+                    for_step_expr = None
+                    if self.get_next_token() and self.get_next_token().value == ",":
+                        self.consume_token()
+                        for_step_expr = self.parse_expression()
+                    self.expect_token("do")
+                    self.consume_token()
+                    for_body = self.parse_block_until(["end"])
+                    self.expect_token("end")
+                    self.consume_token()
+                    return ForStmt(
+                        for_variable,
+                        for_start_expr,
+                        for_end_expr,
+                        for_step_expr,
+                        for_body,
+                        token.file,
+                        token.line,
+                        token.column,
+                    )
 
             elif token.value == "while":
                 self.consume_token()
@@ -2288,7 +2285,18 @@ class Interpreter:
                     args = []
                     if self.get_next_token() and self.get_next_token().value != ")":
                         while True:
-                            args.append(self.parse_expression())
+                            if self.get_next_token().value == "explode":
+                                token = self.consume_token()
+                                args.append(
+                                    ExplodeExpr(
+                                        self.parse_expression(),
+                                        token.file,
+                                        token.line,
+                                        token.column,
+                                    )
+                                )
+                            else:
+                                args.append(self.parse_expression())
                             if (
                                 self.get_next_token()
                                 and self.get_next_token().value == ","
@@ -3489,13 +3497,27 @@ class Interpreter:
             if obj is None:
                 raise NovaError(expr, f"Cannot call method '{expr.method}' on None.")
 
-            arg_vals = [self.evaluate_expr(arg, env) for arg in expr.arguments]
+            args = []
+            kwargs = {}
+            for arg in expr.arguments:
+                if arg.type == "ExplodeExpr":
+                    v = self.evaluate_expr(arg.args, env)
+                    if isinstance(v, dict):
+                        for name in v.keys():
+                            kwargs[name] = v[name]
+                    elif isinstance(v, Iterable) and not isinstance(v, (str, bytes)):
+                        args.extend(v)
+                    else:
+                        args.append(v)
+                else:
+                    v = self.evaluate_expr(arg, env)
+                    args.append(v)
 
             # Handle NovaClass static methods
             if isinstance(obj, NovaClass):
                 static_method = obj.static_members.get(expr.method)
                 if callable(static_method):
-                    return static_method(*arg_vals)
+                    return static_method(*args, **kwargs)
                 raise NovaError(
                     expr,
                     f"Static method '{expr.method}' not found or is not a function on class '{obj.name}'.",
@@ -3520,7 +3542,7 @@ class Interpreter:
 
             # Call the method.
             # If it's a Python method, it's already bound. If it's a NovaScript method, it's a closure.
-            return fn(*arg_vals)
+            return fn(*args, **kwargs)
 
         elif expr.type == "ArrayAccess":
             arr = self.evaluate_expr(expr.object, env)

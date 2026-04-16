@@ -93,20 +93,20 @@ for k = 10, 2, -2 do
     print("  For loop iteration:", k)
 end
 
-// ForEach loop (array iteration)
+// for loop (array iteration)
 var fruits = ["apple", "banana", "cherry"]
-print("ForEach loop:")
-foreach fruit in fruits do
+print("for(array) loop:")
+for fruit in fruits do
     print("  Fruit:", fruit)
 end
 
-// forEach loop (object iteration)
+// for loop (object iteration)
 var actions = {
   hi: "hello",
   bye: "goodbye"
 }
 // js style loop thingy
-foreach k in actions do
+for k in actions do
   print(k, actions[k])
 end
 
