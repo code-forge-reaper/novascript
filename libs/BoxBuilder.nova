@@ -1,5 +1,8 @@
 // novascript/libs/BoxBuilder
 // this is the most hacky lib i ever made
+
+// what i operate under: make it simple, and make it easy
+
 const mlib = load("mathlib") // mlib is simple math utils that python doesn't add to the math module
 const sys = load("py:sys")
 /*
@@ -17,7 +20,7 @@ In EndBox:
 1. First pass: Simulate building lines to compute max_width.
 2. Second pass: Build actual rendered lines with padding/centering.
 
-my entire reason for making this, is for a stupid bit in a story i was writting,
+my entire reason for making this, is for a stupid bit in a web story i was writting,
 it was meant for like, one, maybe two scenes, that's it
 */
 
@@ -39,7 +42,7 @@ const ASCII = {
             MB: "┴"
 }
 
-class BoxBuilder
+export class BoxBuilder
     var instructions = []  // List of dicts for ops
     var max_width = 0      // Computed in EndBox now
 
@@ -72,18 +75,6 @@ class BoxBuilder
         return self
     end
 
-    func Bar(current, max, maxWidth=0, display="#", empty="*")
-        if maxWidth == 0
-            current = math.min(current, max)
-            return display * current + empty * (max - current)
-        else
-            current = mlib.clamp(current, 0, max)
-
-            var filled = math.floor((current / max) * maxWidth)
-
-            return display * filled + empty * (maxWidth - filled)
-        end
-    end
     func Center(text, width)
         var remaining = width - #text
         if remaining < 0 return text end
@@ -101,7 +92,6 @@ class BoxBuilder
             elseif instr.type == "box"
                 var sub_width = instr.width + PADDING
                 local_max = math.max(local_max, sub_width)
-                //local_max += math.max(local_max, instr.sub._compute_max_width())
             elseif instr.type == "newline"
                 local_max = math.max(local_max, #current_line)
                 current_line = ""
@@ -112,6 +102,7 @@ class BoxBuilder
         end
         return local_max
     end
+
     func Border(left, right, width) return left + ASCII.H * (width - 2) + right end
 
     func RenderBox()
@@ -172,20 +163,34 @@ class BoxBuilder
         write(self.RenderBox(), printTo)
     end
 end
+
 const _box = new BoxBuilder()
 using _box
 
-func AddMultiline(text)
+export func Bar(current, max, maxWidth=0, display="#", empty="*")
+    if maxWidth == 0
+        current = math.min(current, max)
+        return display * current + empty * (max - current)
+    else
+        current = mlib.clamp(current, 0, max)
+
+        var filled = math.floor((current / max) * maxWidth)
+
+        return display * filled + empty * (maxWidth - filled)
+    end
+end
+
+export func AddMultiline(text)
     for line in text.split("\n") do
         AddLine(line)
     end
 end
 
-func CheckBox(txt, check = false)
+export func CheckBox(txt, check = false)
     if check return("[x] - " + txt) else return("[ ] - " + txt) end
 end
 
-func Indent(text, spaces = 2)
+export func Indent(text, spaces = 2)
     var pad = " " * spaces
     var out = []
 
@@ -196,7 +201,7 @@ func Indent(text, spaces = 2)
     return "\n".join(out)
 end
 
-func Box(items, prepend = "")
+export func Box(items, prepend = "")
     var inner = new BoxBuilder()
     for item in items do
         if Is.string(item) && Has.inside(item,"\n")  // naive detection of multi-line
@@ -217,8 +222,9 @@ func Box(items, prepend = "")
 
     }
 end
+// instructions is visible(scopping stuff)
 // if your function just needs to do one thing, i recomend you do this
-func BoxStr(items, prepend="") = instructions.append(Box(items, prepend))
+export func BoxStr(items, prepend="") = instructions.append(Box(items, prepend))
 
 // same as
 /*
@@ -226,7 +232,7 @@ func BoxStr(items, prepend="") return instructions.append(Box(items, prepend)) e
 
 but looks better
 */
-func Table(props)
+export func Table(props)
     // Step 1: collect column names and compute widths
     var col_names = []
     var col_widths = []
@@ -310,28 +316,7 @@ if __IS_MAIN__
     }) -> AddMultiline
     EndBox()
 else
-
-    // --- Export public API ---
-    exports = {
-        ASCII,
-        AddText,
-        NewLine,
-        Sep,
-        AddLine,
-        AddCentered,
-        AddSpacer,
-        Bar,
-        Center,
-        _compute_max_width,
-        Border,
-        RenderBox,
-        EndBox,
-        AddMultiline,
-        CheckBox,
-        Indent,
-        Box,
-        BoxStr,
-        BoxStr,
-        Table
-    }
+    for name in _box do
+        if Is.callable(Object.get(_box, name)) exports[name] = _box[name] end
+    end
 end

@@ -8,7 +8,7 @@
  * This script demonstrates various features of NovaScript.
  */
 
-const mmath = load("mathlib")
+const mmath = load("mathlib") // this just adds things the global "math" doesn't have
 print("mmath.grid2D(20,20): ", mmath.grid2D(20,20))
 Logger.info("Starting NovaScript Example!")
 
@@ -23,11 +23,10 @@ print("Count:", count)
 print("Is Active:", isActive)
 print("Price:", price)
 
-// nil, Undefined, NaN
+// nil, NaN
 var nothing = nil
-var notDefined = undefined
 var notANumber = NaN
-print("Nothing:", nothing, "Not Defined:", notDefined, "Not a Number:", notANumber)
+print("Nothing:", nothing, "Not a Number:", notANumber)
 
 // String formatting and concatenation (from String.prototype extensions)
 var formattedString = "The value is {} and the name is {}.".format(count, "Item")
