@@ -5,7 +5,7 @@ Greeting: Hello, NovaScript!
 Count: 10
 Is Active: True
 Price: 99.99
-Nothing: None Not Defined: undefined Not a Number: nan
+Nothing: None Not a Number: nan
 Formatted String: The value is 10 and the name is Item.
 Concatenated String: Part1 Part2 Part3
 Sum: 109.99 Diff: -89.99 Prod: 999.9 Quot: 5.0 Rem: 1
