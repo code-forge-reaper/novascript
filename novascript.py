@@ -21,11 +21,6 @@ from collections.abc import Iterable
 import importlib
 impLib = importlib.import_module
 
-class Undefined(object):
-    def __str__(self):
-        return "undefined"
-
-
 __no_variable_set__ = object()
 
 
@@ -217,9 +212,7 @@ class NovaClass:
                                 )
                                 if isinstance(result, ReturnFlow):
                                     return result.value
-                                # FIX: Get value of undefined
-                                return self.interpreter.globals.get("undefined").value
-
+                                return None
                             super_obj[super_method_name] = super_method_wrapper
                     elif isinstance(self.super_class, type):
                         # Case 2: Python Superclass
@@ -272,8 +265,7 @@ class NovaClass:
                 result = self.interpreter.execute_block(_method_def.body, method_env)
                 if isinstance(result, ReturnFlow):
                     return result.value
-                # FIX: Get value of undefined
-                return self.interpreter.globals.get("undefined").value
+                return None
 
             instance[method_name] = nova_method
 
@@ -513,9 +505,6 @@ def init_globals(interpreter, globals_env):
         @staticmethod
         def callable(c):
             return callable(c)
-
-        def undefined(s):
-            return s == globals_env.get("undefined").value
 
     # Has.<relation>(target, value) -> {target} Has {value} <relation>
     class Has:
@@ -857,7 +846,6 @@ def init_globals(interpreter, globals_env):
     globals_env.define("math", mmath)
     globals_env.define("NaN", math.nan)
     globals_env.define("nil", None, True)
-    globals_env.define("undefined", Undefined())
     globals_env.define("Runtime", Runtime)
     globals_env.define("Uri", Uri)
     globals_env.define("Fs", Fs)
@@ -2998,7 +2986,7 @@ class Interpreter:
                 result = self.execute_block(stmt.body, func_env)
                 if isinstance(result, ReturnFlow):
                     return result.value
-                return self.globals.get("undefined").value
+                return None
 
             func_wrapper.__name__ = stmt.name
             env.define(stmt.name, func_wrapper)
@@ -3084,8 +3072,8 @@ class Interpreter:
                             result = self.execute_block(_member.body, method_env)
                             if isinstance(result, ReturnFlow):
                                 return result.value
-                            # FIX: Get value of undefined
-                            return self.globals.get("undefined").value
+
+                            return None
 
                         nova_class.static_members[member.name] = static_method_wrapper
                     else:
@@ -3690,7 +3678,7 @@ class Interpreter:
                 result = self.execute_block(expr.body, func_env)
                 if isinstance(result, ReturnFlow):
                     return result.value
-                return self.globals.get("undefined").value
+                return None
 
             lambda_func_wrapper.__name__ = str(uuid.uuid4())
             return lambda_func_wrapper
