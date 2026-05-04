@@ -1,0 +1,108 @@
+#!/usr/bin/env nova.py
+using load("PyQt6.QtWidgets")
+using load("PyQt6.QtCore")
+using load("PyQt6.QtGui")
+using load("PyQt6.QtWebEngineCore")
+using load("PyQt6.QtWebEngineWidgets")
+
+class Win inherits QMainWindow
+  func init(app) super()
+    $app = app
+    $setWindowTitle("Sample engine")
+    
+    // Setup UI components and layout
+    $_setupUi()
+    $_setupWebEngine()
+    $_setupConnections()
+    $devToolsView.setVisible(false)
+    // Load initial page
+    $webView.setUrl(QUrl("https://example.com"))
+  end
+  
+  // --------------------------------------------------------------------
+  // Private helper methods
+  // --------------------------------------------------------------------
+  
+  func _setupUi()
+    // Main container and layout
+    $container = QWidget()
+    $mainLayout = QVBoxLayout()
+    $container.setLayout($mainLayout)
+    
+    // Create splitter for web view (left) and dev tools (right)
+    $splitter = QSplitter(Qt.Orientation.Horizontal)
+    
+    // Web view (main browser)
+    $webView = QWebEngineView()
+    $splitter.addWidget($webView)
+    
+    // Dev tools view (attached to the web view's page)
+    $devToolsView = QWebEngineView()
+    $splitter.addWidget($devToolsView)
+    
+    // Set initial splitter proportions (70% web view, 30% dev tools)
+    $splitter.setSizes([700, 300])
+    
+    // URL input bar at the bottom
+    $urlInput = QLineEdit()
+    $urlInput.setPlaceholderText("Enter URL and press Enter")
+    
+    // Assemble main layout
+    $mainLayout.addWidget($splitter)     // Takes most of the space
+    $mainLayout.addWidget($urlInput)     // Fixed height at bottom
+    
+    $setCentralWidget($container)
+  end
+  
+  func _setupWebEngine()
+    // Enable required web engine features
+    var settings = $webView.settings()
+    settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, true)
+    settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, true)
+    settings.setAttribute(QWebEngineSettings.WebAttribute.ErrorPageEnabled, true)
+    settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, true)
+    
+    // Attach dev tools to the separate view
+    $webView.page().setDevToolsPage($devToolsView.page())
+  end
+  
+  func _setupConnections()
+    // Update URL bar when navigation changes
+    $webView.urlChanged.connect(def(qUrl)
+      $urlInput.setText(qUrl.toString())
+    end)
+    
+    // Navigate when Enter is pressed in the URL bar
+    $urlInput.returnPressed.connect(def()
+      var url = $urlInput.text()
+      if !url.startswith("http") && !url.startswith("https")
+        url = 'https://' + url
+      end
+      $webView.setUrl(QUrl(url))
+    end)
+  end
+  
+  // --------------------------------------------------------------------
+  // Key event handling (F12 toggles dev tools)
+  // --------------------------------------------------------------------
+  
+  func keyPressEvent(event)
+    if event.key() == Qt.Key.Key_F12
+      $_toggleDevTools()
+    else
+      super.keyPressEvent(event)   // forward other keys
+    end
+  end
+
+  func _toggleDevTools()
+    var isVisible = $devToolsView.isVisible()
+    $devToolsView.setVisible(!isVisible)
+    // The splitter will automatically adjust and remember the size
+  end
+end
+
+// Application entry point
+const app = QApplication(Runtime.args)
+const win = new Win(app)
+win.show()
+app.exec()

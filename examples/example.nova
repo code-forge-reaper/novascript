@@ -310,6 +310,7 @@ cat.describe()
 
 class Vector2
     func init(x number, y number)
+        // $ is just shorthand for "self."
         $x=x $y=y
     end
 

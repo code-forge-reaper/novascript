@@ -1,100 +1,244 @@
 # NovaScript
 
-**A fun, expressive, Python-hosted scripting language** with Lua-inspired syntax, seamless Python interop, and a focus on developer joy.
-
-Built from the ground up because I wanted something that felt *right* — simple syntax, powerful features, and zero bullshit.
-
----
-
-## Features
-
-- **Clean, readable syntax** — `do ... end` blocks, short functions, and expressive control flow
-- **Modern module system** — `load("module")` with priority for `.nova` files + fallback to Python
-- **`export` keyword** for clean, declarative modules
-- **Static-ish type checking** with runtime enforcement (`var x number`, custom `define` types)
-- **Operator overloading** (`__Add`, `__Str`, `__Mul`, etc.)
-- **Compound assignments** and chained assignments (`z *= y *= x *= 42`)
-- **`test ... failed` blocks** — expressive error handling
-- **Pipe operators** `->` and `=>` (map-style on arrays/objects)
-- **Full Python interop** via `load("py:module")`
-- **Built-in standard library** (`mathlib`, `BoxBuilder`, `Fs`, `Runtime`, `Convert`, etc.)
-- **Sublime Text syntax highlighting** included
+NovaScript is made for convenience and ease of writting.
+By consequence, you don't get conventional syntax out of it.
 
 ---
 
-## Quick Start
+## Files
+`nova.py`          - main script file that you run nova scripts with
+`novascript.py`    - main AST-walking interpreter
+`nodes.py`         - the ast representation of the nodes
+`parsel.py`        - a renpy-inspired text adventure lang, self-encapsulated and made from a copy of nova's tokenizer
+`parsel/nova.sublime-syntax` - highlighting for both languages
+`nova.sublime-build` - ctrl+b to run nova :)
 
-```bash
-# Run an example
-python ./nova.py examples/example.nova
+- Nova and Parsel are hand-rolled AST-walker(nova)/recursive descent(Parsel) interpreters
+- even then, somehow this monolith of stuff manages to run fast
+200ms to 2 seconds at most from what i can see while running the example.nova
 
-# Or make it even shorter
-chmod +x nova.py
-./nova.py examples/server.nova
+---
+sizes if you care about them
+
+```txt
+> scc --by-file *.py
+───────────────────────────────────────────────────────────────────────────────
+Language            Files       Lines    Blanks  Comments       Code Complexity
+───────────────────────────────────────────────────────────────────────────────
+Python                  4       5,837       606       206      5,025        984
+───────────────────────────────────────────────────────────────────────────────
+novascript.py                   3,782       425       186      3,171        904
+parsel.py                       1,268         0         2      1,266          3
+nodes.py                          761       174        16        571         72
+nova.py                            26         7         2         17          5
+───────────────────────────────────────────────────────────────────────────────
+Total                   4       5,837       606       206      5,025        984
+───────────────────────────────────────────────────────────────────────────────
+> cat examples/example.nova | wc -l
+562
+
 ```
 
-### Requirements
+---
+
+## Requirements
 - Python 3.8+
-- No external dependencies (pure Python interpreter)
+- No external dependencies (pure Python-based interpreter)
 
 ---
 
-## Project Structure
+## Parsel example
+(this isn't a good language example, but it works for an example of what you can do)
+```par
+var player = {
+    inventory: [],
+    visitedScenes:{}
+}
 
-| Folder / File         | Purpose |
-|-----------------------|-------|
-| `novascript.py`       | Core interpreter (parser + runtime) |
-| `nodes.py`            | AST node definitions |
-| `nova.py`             | CLI entry point |
-| `examples/`           | Demo scripts (HTTP server, game, BoxBuilder, etc.) |
-| `libs/`               | Standard library (mathlib, BoxBuilder, etc.) |
-| `nova.sublime-syntax` | Syntax highlighting for Sublime Text |
+var give = player.inventory.append
+func has(itemName) return includes(player.inventory, itemName) end
 
----
+func reset()
+    player.inventory.clear()
+    player.visitedScenes = {}
+end
 
-## Example
+func visited(name, checking)
+    if player.visitedScenes.get(name, nil)
+        return true
+    end
+    if !checking
+        player.visitedScenes[name] = true
+    end
+    return false
+end
 
-```nova
-const mmath = load("mathlib")
-const sock = load("socket")
+scene "start"
+    goto "bedroom"
+end
 
-var v1 = new mmath.Vec2(20, 30)
-var v2 = new mmath.Vec2(50, 10)
+scene "bedroom"
+    if visited("bedroom", false)
+        narrate "The bedroom is still filled with dust"
+    else
+        narrate "You wake up in a dark bedroom, dust covers the entire room."
+        narrate "You see a locked door and a cabinet nearby"
+    end
+    narrate "You:..."
+    options
+        "Check cabinet" if !has("key") begin
+            narrate "You check the cabinet, and find a key"
+            give("key")
+            return
+        end
+        "Check the door" begin
+            narrate "You walk up to the door and try to open it, only to find that it is locked"
+            if has("key")
+                narrate "Fortunately, you have a key"
+                goto "escape"
+            else
+                narrate "If only you had a key..."
+            end
+        end
+    end
+end
 
-print(v1 + v2)                    // Vector2(x: 70, y: 40)
-print("hello from NovaScript!")
 
-test
-    var s string = "hello"
-    s = 42                        // will trigger type error
-failed err
-    print("expected error:", err)
+scene "escape"
+    narrate "You place key in the lock, and turn it."
+    narrate "When you open it, you are greeted with the moonlit street."
+    narrate "You escaped"
+    exit
 end
 ```
 
-Check out `examples/example.nova` and `examples/server.nova` for more.
+## NovaScript Example(examples/pyqt6.nova)
 
----
+```nova
+#!/usr/bin/env nova.py
+using load("PyQt6.QtWidgets")
+using load("PyQt6.QtCore")
+using load("PyQt6.QtGui")
+using load("PyQt6.QtWebEngineCore")
+using load("PyQt6.QtWebEngineWidgets")
 
-## Why NovaScript?
+class Win inherits QMainWindow
+  func init(app) super()
+    $app = app
+    $setWindowTitle("Sample engine")
+    
+    // Setup UI components and layout
+    $_setupUi()
+    $_setupWebEngine()
+    $_setupConnections()
+    $devToolsView.setVisible(false)
+    // Load initial page
+    $webView.setUrl(QUrl("https://example.com"))
+  end
+  
+  // --------------------------------------------------------------------
+  // Private helper methods
+  // --------------------------------------------------------------------
+  
+  func _setupUi()
+    // Main container and layout
+    $container = QWidget()
+    $mainLayout = QVBoxLayout()
+    $container.setLayout($mainLayout)
+    
+    // Create splitter for web view (left) and dev tools (right)
+    $splitter = QSplitter(Qt.Orientation.Horizontal)
+    
+    // Web view (main browser)
+    $webView = QWebEngineView()
+    $splitter.addWidget($webView)
+    
+    // Dev tools view (attached to the web view's page)
+    $devToolsView = QWebEngineView()
+    $splitter.addWidget($devToolsView)
+    
+    // Set initial splitter proportions (70% web view, 30% dev tools)
+    $splitter.setSizes([700, 300])
+    
+    // URL input bar at the bottom
+    $urlInput = QLineEdit()
+    $urlInput.setPlaceholderText("Enter URL and press Enter")
+    
+    // Assemble main layout
+    $mainLayout.addWidget($splitter)     // Takes most of the space
+    $mainLayout.addWidget($urlInput)     // Fixed height at bottom
+    
+    $setCentralWidget($container)
+  end
+  
+  func _setupWebEngine()
+    // Enable required web engine features
+    var settings = $webView.settings()
+    settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, true)
+    settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, true)
+    settings.setAttribute(QWebEngineSettings.WebAttribute.ErrorPageEnabled, true)
+    settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, true)
+    
+    // Attach dev tools to the separate view
+    $webView.page().setDevToolsPage($devToolsView.page())
+  end
+  
+  func _setupConnections()
+    // Update URL bar when navigation changes
+    $webView.urlChanged.connect(def(qUrl)
+      $urlInput.setText(qUrl.toString())
+    end)
+    
+    // Navigate when Enter is pressed in the URL bar
+    $urlInput.returnPressed.connect(def()
+      var url = $urlInput.text()
+      if !url.startswith("http") && !url.startswith("https")
+        url = 'https://' + url
+      end
+      $webView.setUrl(QUrl(url))
+    end)
+  end
+  
+  // --------------------------------------------------------------------
+  // Key event handling (F12 toggles dev tools)
+  // --------------------------------------------------------------------
+  
+  func keyPressEvent(event)
+    if event.key() == Qt.Key.Key_F12
+      $_toggleDevTools()
+    else
+      super.keyPressEvent(event)   // forward other keys
+    end
+  end
 
-This is my longest-running personal project. I started it because I was tired of languages that were either too verbose or too magical. NovaScript sits in a sweet spot:
+  func _toggleDevTools()
+    var isVisible = $devToolsView.isVisible()
+    $devToolsView.setVisible(!isVisible)
+    // The splitter will automatically adjust and remember the size
+  end
+end
 
-- Expressive like Lua/Python
-- Safe-ish with optional types
-- Extremely easy to extend with Python
-- Actually fun to write
+// Application entry point
+const app = QApplication(Runtime.args)
+const win = new Win(app)
+win.show()
+app.exec()
 
-(Yes, some commits were just `git commit -m "$(date)"`. We’ve all been there.)
+```
+
+Check out `examples/` for more.
 
 ---
 
 ## Syntax Highlighting
 
-Sublime Text support is included (`nova.sublime-syntax`). Just copy it to your Sublime packages folder.
+Sublime Text support is included (`nova.sublime-syntax`).
+Just run this and you'll get a up-to-date syntax every time you to `git pull`
+```bash
+ln -sf $(pwd)/*.subl* ~/.config/sublime-text/Packages/User/
+```
 
 ---
 
 ## License
-
-This is my personal passion project. Feel free to explore, fork, or use pieces of it. Just don’t call it “enterprise ready” — we both know better.
+GPLv3

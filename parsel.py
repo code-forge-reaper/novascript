@@ -27,14 +27,16 @@ class Token:
 
     def __repr__(self):
         return (
-            f"Token({self.type}, {self.value!r}, {self.file}:{self.line}:{self.column})"
+            f"Token({self.type}, {self.value!r}, {
+                self.file}:{self.line}:{self.column})"
         )
 
 
 class ParselError(Exception):
     def __init__(self, token: Optional[Token], message: str):
         if token:
-            super().__init__(f"{token.file}:{token.line}:{token.column} {message}")
+            super().__init__(f"{token.file}:{
+                token.line}:{token.column} {message}")
         else:
             super().__init__(message)
         self.token = token
@@ -126,8 +128,9 @@ def tokenize(source: str, file: str) -> List[Token]:
             "&&",
             "||",
         ]
-        if i + 1 < length and source[i : i + 2] in two_char_ops:
-            tokens.append(Token("operator", source[i : i + 2], file, line, start_col))
+        if i + 1 < length and source[i: i + 2] in two_char_ops:
+            tokens.append(
+                Token("operator", source[i: i + 2], file, line, start_col))
             i += 2
             col += 2
             continue
@@ -192,15 +195,18 @@ def tokenize(source: str, file: str) -> List[Token]:
                 i += 1
                 col += 1
             if ident in ("true", "false"):
-                tokens.append(Token("boolean", ident == "true", file, line, start_col))
+                tokens.append(Token("boolean", ident ==
+                              "true", file, line, start_col))
             elif ident in keywords:
                 tokens.append(Token("keyword", ident, file, line, start_col))
             else:
-                tokens.append(Token("identifier", ident, file, line, start_col))
+                tokens.append(
+                    Token("identifier", ident, file, line, start_col))
             continue
 
         raise ParselError(
-            Token("error", ch, file, line, start_col), f"Unexpected character: {ch}"
+            Token("error", ch, file, line,
+                  start_col), f"Unexpected character: {ch}"
         )
 
     return tokens
@@ -440,7 +446,8 @@ class ParselParser:
         if not tok:
             raise ParselError(None, f"Expected {typ} but got EOF")
         if tok.type != typ:
-            raise ParselError(tok, f"Expected token type {typ}, got {tok.type}")
+            raise ParselError(tok, f"Expected token type {
+                              typ}, got {tok.type}")
         if value is not None and tok.value != value:
             raise ParselError(tok, f"Expected '{value}', got {tok.value}")
         return self.consume()
@@ -634,7 +641,8 @@ class ParselParser:
         else:
             base = path + ".par"
         script_dir = os.path.dirname(self.filename)
-        candidates = [os.path.join(script_dir, base), os.path.join(os.getcwd(), base)]
+        candidates = [os.path.join(script_dir, base),
+                      os.path.join(os.getcwd(), base)]
         for cand in candidates:
             if os.path.isfile(cand):
                 return cand
@@ -668,7 +676,8 @@ class ParselParser:
             right = self.parse_assignment()
             if not isinstance(left, (Identifier, PropertyAccess, ArrayAccess)):
                 raise ParselError(
-                    left.token, f"Invalid assignment target: {type(left).__name__}"
+                    left.token, f"Invalid assignment target: {
+                        type(left).__name__}"
                 )
             return Assignment(left, right, op_tok)
         return left
@@ -892,6 +901,8 @@ class ParselRuntime:
         # built‑ins
         self.globals.define("print", print)
         self.globals.define("input", input)
+        self.globals.define("includes", lambda x, y: y in x)
+        self.globals.define("nil", None)
         self.globals.define("load", self._load_module)
         self.globals.define("fmtStr", lambda s, t: s.format(**t))
 
@@ -914,7 +925,8 @@ class ParselRuntime:
         else:
             base = path + ".par"
         script_dir = os.path.dirname(self.filename)
-        candidates = [os.path.join(script_dir, base), os.path.join(os.getcwd(), base)]
+        candidates = [os.path.join(script_dir, base),
+                      os.path.join(os.getcwd(), base)]
         full_path = None
         for cand in candidates:
             if os.path.isfile(cand):
@@ -997,7 +1009,8 @@ class ParselRuntime:
                         arg_val = args[i]
                     else:
                         raise ParselError(
-                            stmt.token, f"Missing argument for parameter '{param}'"
+                            stmt.token, f"Missing argument for parameter '{
+                                param}'"
                         )
                     func_env.define(param, arg_val)
                 try:
@@ -1064,7 +1077,8 @@ class ParselRuntime:
                     self.execute_stmt(sub, env)
         elif isinstance(stmt, GotoStmt):
             if stmt.scene not in self.scenes:
-                raise ParselError(stmt.token, f"Scene '{stmt.scene}' not defined")
+                raise ParselError(stmt.token, f"Scene '{
+                                  stmt.scene}' not defined")
             raise GotoSignal(stmt.scene)
         elif isinstance(stmt, PauseStmt):
             input("(Press Enter to continue)")
@@ -1081,7 +1095,8 @@ class ParselRuntime:
                     env.define(name, var)
             else:
                 raise ParselError(
-                    stmt.token, f"Cannot 'use' non-namespace value: {stmt.name}"
+                    stmt.token, f"Cannot 'use' non-namespace value: {
+                        stmt.name}"
                 )
         elif isinstance(stmt, ImportStmt):
             if stmt.is_os:
@@ -1165,13 +1180,15 @@ class ParselRuntime:
                 obj[idx] = val
             else:
                 raise ParselError(
-                    expr.token, f"Invalid assignment target: {type(target).__name__}"
+                    expr.token, f"Invalid assignment target: {
+                        type(target).__name__}"
                 )
             return val
         if isinstance(expr, FuncCall):
             func = env.get(expr.name, expr.token)
             if not callable(func):
-                raise ParselError(expr.token, f"'{expr.name}' is not a function")
+                raise ParselError(
+                    expr.token, f"'{expr.name}' is not a function")
             args = [self.evaluate_expr(a, env) for a in expr.args]
             return func(*args)
         if isinstance(expr, MethodCall):
@@ -1181,7 +1198,8 @@ class ParselRuntime:
                 method = obj.get(expr.method)
             if not callable(method):
                 raise ParselError(
-                    expr.token, f"Method '{expr.method}' not found or not callable"
+                    expr.token, f"Method '{
+                        expr.method}' not found or not callable"
                 )
             args = [self.evaluate_expr(a, env) for a in expr.args]
             return method(*args)
@@ -1189,7 +1207,8 @@ class ParselRuntime:
             obj = self.evaluate_expr(expr.obj, env)
             if isinstance(obj, dict):
                 if expr.prop not in obj:
-                    raise ParselError(expr.token, f"Property '{expr.prop}' not found")
+                    raise ParselError(expr.token, f"Property '{
+                                      expr.prop}' not found")
                 return obj[expr.prop]
             return getattr(obj, expr.prop)
         if isinstance(expr, ArrayAccess):
@@ -1204,7 +1223,8 @@ class ParselRuntime:
                 obj[key] = self.evaluate_expr(val_expr, env)
             return obj
         raise ParselError(
-            getattr(expr, "token", None), f"Unknown expression: {type(expr).__name__}"
+            getattr(expr, "token", None), f"Unknown expression: {
+                type(expr).__name__}"
         )
 
     def interpolate(self, text: str, env: Environment) -> str:
