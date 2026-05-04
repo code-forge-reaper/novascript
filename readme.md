@@ -26,7 +26,7 @@ Built from the ground up because I wanted something that felt *right* — simple
 
 ```bash
 # Run an example
-./nova.py examples/example.nova
+python ./nova.py examples/example.nova
 
 # Or make it even shorter
 chmod +x nova.py
@@ -48,7 +48,6 @@ chmod +x nova.py
 | `nova.py`             | CLI entry point |
 | `examples/`           | Demo scripts (HTTP server, game, BoxBuilder, etc.) |
 | `libs/`               | Standard library (mathlib, BoxBuilder, etc.) |
-| `legacy/`             | Old JavaScript/TypeScript version |
 | `nova.sublime-syntax` | Syntax highlighting for Sublime Text |
 
 ---
@@ -96,18 +95,6 @@ Sublime Text support is included (`nova.sublime-syntax`). Just copy it to your S
 
 ---
 
-## Legacy
-
-The original implementation was written in TypeScript/Node.js (see the `legacy/` folder). The current Python version is significantly more mature and performant for what it is.
-
----
-
 ## License
 
 This is my personal passion project. Feel free to explore, fork, or use pieces of it. Just don’t call it “enterprise ready” — we both know better.
-
----
-
-**Made with love (and occasional existential crises) by cross**
-
-Star it if you enjoy it. Issues and PRs welcome.

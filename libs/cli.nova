@@ -1,0 +1,33 @@
+// novascript/libs/cli.nova
+const boxBuilder = load("BoxBuilder")
+// the "py:" prefix just forces novascript to just import the python module
+// instead of going [local -> "<NS>/libs/" -> python]
+
+const sys = load("py:sys")
+
+export const ESC = "\033"
+
+export const cursor = {
+	up: def (n=1)      = sys.stdout.write(ESC + "[{}A".format(n))
+	down: def (n=1)    = sys.stdout.write(ESC + "[{}B".format(n))
+	forward: def (n=1) = sys.stdout.write(ESC + "[{}C".format(n))
+	back: def (n=1)    = sys.stdout.write(ESC + "[{}D".format(n))
+	home: def ()       = sys.stdout.write(ESC + "[H")
+	save: def ()       = sys.stdout.write(ESC + "[s")
+	restore: def ()    = sys.stdout.write(ESC + "[u")
+	hide: def ()       = sys.stdout.write(ESC + "[?25l")
+	show: def ()       = sys.stdout.write(ESC + "[?25h")
+	// Move cursor to specific row, col (1‑based)
+	goto : def(row, col)      = sys.stdout.write(ESC + "[{};{}H".format(row, col))
+}
+
+export const clear = {
+	line: def()        = sys.stdout.write(ESC + "[2K")
+	screen: def()      = sys.stdout.write(ESC + "[2J")
+	to_end: def()      = sys.stdout.write(ESC + "[J")
+}
+
+
+for c in boxBuilder do
+	exports[c] = boxBuilder[c]
+end

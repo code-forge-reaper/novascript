@@ -10,6 +10,7 @@ sys.path.insert(0, os.getcwd())
 
 import math
 import re
+import array
 import datetime
 import time, json
 import codecs
@@ -17,8 +18,9 @@ from urllib.parse import unquote, quote
 import struct, builtins
 from nodes import *
 import uuid
-from collections.abc import Iterable
-import importlib
+from collections.abc import Iterable, Callable
+import importlib, traceback
+
 impLib = importlib.import_module
 
 __no_variable_set__ = object()
@@ -35,6 +37,7 @@ class Var:
         const_flag = "const " if self.const else ""
         type_info = f":{self.type_annotation} " if self.type_annotation else ""
         return f"Var({const_flag}{self.name}{type_info}= {self.value!r})"
+
 
 # --- Environment for variable scoping ---
 class Environment:
@@ -127,305 +130,286 @@ class Environment:
         return str(v)
 
 
-# --- Runtime representation of a NovaScript class ---
 class NovaClass:
     def __init__(self, name, super_class, interpreter, env):
-        # super_class can be None, a NovaClass instance, or a Python type/class
         self.name = name
-        self.super_class = super_class
+        self.super_class = super_class  # NovaClass or Python type
         self.interpreter = interpreter
         self.env = env
         self.static_members = {}
-        self.instance_properties = {}  # Stores PropertyDefinition AST nodes
-        self.instance_methods = {}  # Stores MethodDefinition AST nodes
+        self.instance_properties = {}  # PropertyDefinition AST nodes
+        self.instance_methods = {}  # MethodDefinition AST nodes
         self.constructor_def = None
 
-    def instantiate(self, args, instance_token, instance_obj=None):
-        instance = instance_obj if instance_obj is not None else {}
+        # Determine the top-most Python root, if any
+        self._python_root = self._find_python_root()
 
-        # Initialize instance properties
+    def _find_python_root(self):
+        """Return the most foundational Python superclass, or None."""
+        cls = self
+        root = None
+        while cls is not None:
+            if isinstance(cls.super_class, type):
+                root = cls.super_class
+            cls = cls.super_class if isinstance(cls.super_class, NovaClass) else None
+        return root
+
+    # ------------------------------------------------------------------
+    #  Unified instance creation
+    # ------------------------------------------------------------------
+    def instantiate(self, args, instance_token):
+        if self._python_root is not None:
+            instance = self._python_root.__new__(self._python_root)
+        else:
+            instance = {}
+
+        # Walk the NovaClass hierarchy from the root Python subclass down,
+        # adding all Nova properties and methods.
+        self._build_instance_layout(instance)
+
+        # Run constructor chain (most derived first, super calls move up)
+        self._run_constructor_chain(args, instance, instance_token)
+        return instance
+
+    # ------------------------------------------------------------------
+    #  Build layout: properties + methods in order (top-down)
+    # ------------------------------------------------------------------
+    def _build_instance_layout(self, instance):
+        # Recursively build from superclass first
+        if isinstance(self.super_class, NovaClass):
+            self.super_class._build_instance_layout(instance)
+
+        # Add properties
         for prop_name, prop_def in self.instance_properties.items():
-            prop_value = None
+            value = None
             if prop_def.initializer:
-                # Evaluate initializer in the context of the class definition environment
-                prop_value = self.interpreter.evaluate_expr(
-                    prop_def.initializer, self.env
-                )
-            instance[prop_name] = (
-                prop_value  # Default value if no initializer is None in Python
-            )
+                value = self.interpreter.evaluate_expr(prop_def.initializer, self.env)
+            self._set_instance_attr(instance, prop_name, value)
 
-        # Bind instance methods to the instance
+        # Add methods
         for method_name, method_def in self.instance_methods.items():
-            # Create a Python function that wraps the NovaScript method body
-            def nova_method(
-                *method_args, _method_def=method_def, _method_name=method_name
-            ):  # Capture method_def and method_name
-                method_env = Environment(self.env)  # Method's scope
-                method_env.define("self", instance)  # 'self' refers to the instance
+            bound = self._create_method(method_def, instance)
+            self._set_instance_attr(instance, method_name, bound)
 
-                # Handle 'super' object for instance methods
-                if self.super_class:
-                    super_obj = {}
-                    if isinstance(self.super_class, NovaClass):
-                        # Case 1: NovaScript Superclass
-                        for (
-                            super_method_name,
-                            super_method_def,
-                        ) in self.super_class.instance_methods.items():
+    @staticmethod
+    def _set_instance_attr(instance, name, value):
+        if isinstance(instance, dict):
+            instance[name] = value
+        else:
+            setattr(instance, name, value)
 
-                            def super_method_wrapper(
-                                *super_args,
-                                _super_method_def=super_method_def,
-                                _super_method_name=super_method_name,
-                            ):
-                                # The environment for the super method call should be based on the superclass's definition environment
-                                # but with 'self' bound to the current instance.
-                                super_method_env = Environment(self.super_class.env)
-                                super_method_env.define(
-                                    "self", instance
-                                )  # 'self' still refers to the current instance
+    # ------------------------------------------------------------------
+    #  Method binding (with super support)
+    # ------------------------------------------------------------------
+    def _create_method(self, method_def, instance):
+        interpreter = self.interpreter
+        env = self.env
+        super_class = self.super_class
 
-                                # Handle parameters for the super method
-                                for i, param in enumerate(_super_method_def.parameters):
-                                    arg_val = (
-                                        super_args[i] if i < len(super_args) else None
-                                    )
-                                    if arg_val is None and param.default is not None:
-                                        # Evaluate default in the superclass's definition environment
-                                        arg_val = self.interpreter.evaluate_expr(
-                                            param.default, self.super_class.env
+        def bound_method(*method_args):
+            method_env = Environment(env)
+            method_env.define("self", instance)
+
+            # Build 'super' object for method calls
+            if super_class:
+                super_obj = {}
+                if isinstance(super_class, NovaClass):
+                    for sm_name, sm_def in super_class.instance_methods.items():
+
+                        def make_super_method(mdef=sm_def, sname=sm_name):
+                            def super_call(*super_args):
+                                super_env = Environment(super_class.env)
+                                super_env.define("self", instance)
+                                for i, param in enumerate(mdef.parameters):
+                                    val = super_args[i] if i < len(super_args) else None
+                                    if val is None and param.default is not None:
+                                        val = interpreter.evaluate_expr(
+                                            param.default, super_class.env
                                         )
-                                    elif arg_val is None and param.default is None:
+                                    elif val is None and param.default is None:
                                         raise NovaError(
                                             param,
-                                            f"Missing argument for parameter '{param.name}' in super method '{_super_method_name}'.",
+                                            f"Missing argument for '{param.name}' in super method '{sname}'",
                                         )
                                     if param.annotation_type:
-                                        check_type(
-                                            param.annotation_type, arg_val, param
-                                        )
-                                    super_method_env.define(param.name, arg_val)
-
-                                result = self.interpreter.execute_block(
-                                    _super_method_def.body, super_method_env
-                                )
+                                        check_type(param.annotation_type, val, param)
+                                    super_env.define(param.name, val)
+                                result = interpreter.execute_block(mdef.body, super_env)
                                 if isinstance(result, ReturnFlow):
                                     return result.value
                                 return None
-                            super_obj[super_method_name] = super_method_wrapper
-                    elif isinstance(self.super_class, type):
-                        # Case 2: Python Superclass
-                        # Expose public methods of the Python superclass
-                        for attr_name in dir(self.super_class):
-                            if not attr_name.startswith(
-                                "_"
-                            ):  # Skip private/magic methods
-                                attr = getattr(self.super_class, attr_name)
-                                if callable(attr):
 
-                                    def python_super_method_wrapper(
-                                        *super_args, _attr_name=attr_name
-                                    ):
-                                        super_method = getattr(
-                                            self.super_class, _attr_name
+                            return super_call
+
+                        super_obj[sm_name] = make_super_method()
+                elif isinstance(super_class, type):
+                    # Expose Python superclass methods
+                    for attr_name in dir(super_class):
+                        if not attr_name.startswith("_"):
+                            attr = getattr(super_class, attr_name, None)
+                            if callable(attr):
+
+                                def python_super_call(*args, aname=attr_name):
+                                    method = getattr(super_class, aname)
+                                    try:
+                                        return method(instance, *args)
+                                    except Exception as e:
+                                        raise NovaError(
+                                            None,
+                                            f"Error calling super Python method '{aname}': {e}",
                                         )
-                                        try:
-                                            # Call the Python method, passing the NovaScript instance (dict) as 'self'
-                                            return super_method(instance, *super_args)
-                                        except Exception as e:
-                                            # Wrap Python exceptions
-                                            raise NovaError(
-                                                instance_token,
-                                                f"Error calling super Python method '{_attr_name}': {e}",
-                                            )
 
-                                    super_obj[attr_name] = python_super_method_wrapper
+                                super_obj[attr_name] = python_super_call
+                method_env.define("super", super_obj)
 
-                    method_env.define(
-                        "super", super_obj
-                    )  # Define 'super' as the object containing super methods
-
-                # Handle parameters for current method
-                for i, param in enumerate(_method_def.parameters):
-                    arg_val = method_args[i] if i < len(method_args) else None
-                    if arg_val is None and param.default is not None:
-                        arg_val = self.interpreter.evaluate_expr(
-                            param.default, self.env
-                        )  # Evaluate default in class's env
-                    elif arg_val is None and param.default is None:
-                        raise NovaError(
-                            param,
-                            f"Missing argument for parameter '{param.name}' in method '{_method_name}'.",
-                        )
-                    if param.annotation_type:
-                        check_type(param.annotation_type, arg_val, param)
-                    method_env.define(param.name, arg_val)
-
-                result = self.interpreter.execute_block(_method_def.body, method_env)
-                if isinstance(result, ReturnFlow):
-                    return result.value
-                return None
-
-            instance[method_name] = nova_method
-
-        # The constructor should always be called for the current class when its instantiate method is invoked,
-        # regardless of whether it's the top-level instantiation or a call from super().
-        if self.constructor_def:
-            constructor_env = Environment(self.env)
-            constructor_env.define("self", instance)
-
-            # Define 'super' for constructor's environment IF a superclass exists
-            if self.super_class:
-                if isinstance(self.super_class, NovaClass):
-
-                    def super_constructor_call(*super_args):
-                        if not self.super_class:
-                            raise NovaError(
-                                instance_token,
-                                "Cannot call super() in a class without a superclass.",
-                            )
-                        self.super_class.instantiate(
-                            super_args, instance_token, instance
-                        )  # Pass current instance
-
-                elif isinstance(self.super_class, type):
-
-                    def super_constructor_call(*super_args):
-                        if not self.super_class:
-                            raise NovaError(
-                                instance_token,
-                                "Cannot call super() in a class without a superclass.",
-                            )
-                        try:
-                            # Call Python superclass's __init__ method
-                            self.super_class.__init__(instance, *super_args)
-                        except Exception as e:
-                            raise NovaError(
-                                instance_token,
-                                f"Error calling superclass Python constructor: {e}",
-                            )
-
-                else:
-                    raise NovaError(
-                        instance_token,
-                        f"Internal error: Invalid superclass type {type(self.super_class).__name__}.",
-                    )
-
-                constructor_env.define("super", super_constructor_call)
-
-            # Handle constructor parameters
-            for i, param in enumerate(self.constructor_def.parameters):
-                arg_val = args[i] if i < len(args) else None
-                if arg_val is None and param.default is not None:
-                    arg_val = self.interpreter.evaluate_expr(param.default, self.env)
-                elif arg_val is None and param.default is None:
+            # Bind method parameters
+            for i, param in enumerate(method_def.parameters):
+                val = method_args[i] if i < len(method_args) else None
+                if val is None and param.default is not None:
+                    val = interpreter.evaluate_expr(param.default, env)
+                elif val is None and param.default is None:
                     raise NovaError(
                         param,
-                        f"Missing argument for parameter '{param.name}' in constructor of '{self.name}'.",
+                        f"Missing argument for parameter '{param.name}' in method '{method_def.name}'",
                     )
                 if param.annotation_type:
-                    check_type(param.annotation_type, arg_val, param)
-                constructor_env.define(param.name, arg_val)
+                    check_type(param.annotation_type, val, param)
+                method_env.define(param.name, val)
 
-            result = self.interpreter.execute_block(
-                self.constructor_def.body, constructor_env
+            result = interpreter.execute_block(method_def.body, method_env)
+            if isinstance(result, ReturnFlow):
+                return result.value
+            return None
+
+        return bound_method
+
+    # ------------------------------------------------------------------
+    #  Constructor chain
+    # ------------------------------------------------------------------
+    def _run_constructor_chain(self, args, instance, instance_token):
+        """Start the chain from the most derived class."""
+        if self.constructor_def:
+            self._execute_constructor(
+                self.constructor_def, args, instance, instance_token
             )
-            # Constructors don't typically return values, but if they do, ignore it.
-        # print(instance, self.name)
-        return instance
+
+    def _execute_constructor(self, constructor_def, args, instance, instance_token):
+        constructor_env = Environment(self.env)
+        constructor_env.define("self", instance)
+
+        # Define 'super' for constructor
+        if self.super_class:
+            if isinstance(self.super_class, NovaClass):
+                parent = self.super_class
+
+                def super_constructor_call(*super_args):
+                    if parent.constructor_def:
+                        parent._execute_constructor(
+                            parent.constructor_def, super_args, instance, instance_token
+                        )
+
+                constructor_env.define("super", super_constructor_call)
+            elif isinstance(self.super_class, type):
+                parent_type = self.super_class
+
+                def super_constructor_call(*super_args):
+                    try:
+                        parent_type.__init__(instance, *super_args)
+                    except Exception as e:
+                        raise NovaError(
+                            instance_token,
+                            f"Error calling superclass Python constructor: {e}",
+                        )
+
+                constructor_env.define("super", super_constructor_call)
+            else:
+                raise NovaError(
+                    instance_token,
+                    f"Invalid superclass type: {type(self.super_class).__name__}",
+                )
+
+        # Bind constructor parameters
+        for i, param in enumerate(constructor_def.parameters):
+            val = args[i] if i < len(args) else None
+            if val is None and param.default is not None:
+                val = self.interpreter.evaluate_expr(param.default, self.env)
+            elif val is None and param.default is None:
+                raise NovaError(
+                    param,
+                    f"Missing argument for '{param.name}' in constructor of '{self.name}'",
+                )
+            if param.annotation_type:
+                check_type(param.annotation_type, val, param)
+            constructor_env.define(param.name, val)
+
+        self.interpreter.execute_block(constructor_def.body, constructor_env)
 
 
-BUILTIN_VAR_TYPES = [
-    "string",
-    "number",
-    "bool",
-    "function",
-    "list",
-    "any",
-    "int",
-    "float",
-]
+BUILTIN_VAR_TYPES: dict[str, Type] = {
+    "string": str,
+    "number": (int, float),
+    "bool": bool,
+    "function": Callable,
+    "list": list,
+    "int": int,
+    "float": float,
+}
+
+BUILTIN_VAR_TYPES_INFER: dict[str, str] = {
+    "str": "string",
+    "bool": "bool",
+    "function": "function",
+    "list": "list",
+    "int": "int",
+    "float": "float",
+}
+
 CUSTOM_TYPES = {}  # Dictionary for custom types
 
 
-# --- Helper function for type checking ---
 def check_type(expected, value, token):
-    """
-    possible:
-        VAR_TYPES
-    """
-    if expected == "any" or expected == None:
-        return value
-    if expected == "number":
-        if not isinstance(value, (int, float)):
+    if expected in ["any", None]:
+        return
+    custom_type_definition = BUILTIN_VAR_TYPES.get(expected, None)
+    if not custom_type_definition:
+        custom_type_definition = CUSTOM_TYPES.get(expected)
+        if custom_type_definition is None:
+            raise NovaError(token, f"unknown type definition: {expected}")
+        check_custom_type(expected, custom_type_definition, value, token)
+    else:
+        if not isinstance(value, custom_type_definition):
             raise NovaError(
                 token,
-                f"Type mismatch: expected number(int, float), got {type(value).__name__}",
+                f"Type mismatch: expected {custom_type_definition}, got {type(value).__name__}",
             )
-    elif expected == "int":
-        if not isinstance(value, int):
-            raise NovaError(
-                token, f"Type mismatch: expected int, got {type(value).__name__}"
-            )
-    elif expected == "float":
-        if not isinstance(value, float):
-            raise NovaError(
-                token, f"Type mismatch: expected float, got {type(value).__name__}"
-            )
-    elif expected == "string":
-        if not isinstance(value, str):
-            raise NovaError(
-                token, f"Type mismatch: expected string, got {type(value).__name__}"
-            )
-    elif expected == "bool":
-        if not isinstance(value, bool):
-            raise NovaError(
-                token, f"Type mismatch: expected bool, got {type(value).__name__}"
-            )
-    elif expected == "function":
-        if not callable(value):
-            raise NovaError(
-                token, f"Type mismatch: expected function, got {type(value).__name__}"
-            )
-    elif expected == "list":
-        if not isinstance(value, list):
-            raise NovaError(
-                token, f"Type mismatch: expected list, got {type(value).__name__}"
-            )
-    else:
-        # Check for custom types
-        custom_type_definition = CUSTOM_TYPES.get(
-            expected
-        )  # Use original 'expected' for lookup
-        if custom_type_definition:
-            if not isinstance(value, dict) or value is None:
-                raise NovaError(
-                    token,
-                    f"Type mismatch: expected custom type '{expected}', got {type(value).__name__}",
-                )
-            missing = []
 
-            # Collect missing properties
-            for prop_def in custom_type_definition.properties:
-                if prop_def.name not in value:
-                    missing.append(prop_def)
 
-            if missing:
-                missing_list = ""
-                for f in missing:
-                    missing_list += f"\n- {f.name} ({f.type})"
-                raise NovaError(
-                    token,
-                    f"Type mismatch: custom type '{expected}' is missing properties: {missing_list}",
-                )
+def check_custom_type(expected, custom_type_definition, value, token):
+    if custom_type_definition:
+        if not isinstance(value, dict):
+            raise NovaError(
+                token,
+                f"Type mismatch: expected custom type '{expected}', got {type(value).__name__}",
+            )
+        missing = []
 
-            # Now check each property type
-            for prop_def in custom_type_definition.properties:
-                check_type(prop_def.type, value[prop_def.name], token)
-        else:
-            raise NovaError(token, f"Unknown type: {expected}")
-    return value
+        # Collect missing properties
+        for prop_def in custom_type_definition.properties:
+            if prop_def.name not in value:
+                missing.append(prop_def)
+
+        if missing:
+            missing_list = ""
+            for f in missing:
+                missing_list += f"\n- {f.name} ({f.type})"
+            raise NovaError(
+                token,
+                f"Type mismatch: custom type '{expected}' is missing properties: {missing_list}",
+            )
+
+        # Now check each property type
+        for prop_def in custom_type_definition.properties:
+            check_type(prop_def.type, value[prop_def.name], token)
 
 
 # --- Global Initialization ---
@@ -448,6 +432,12 @@ def init_globals(interpreter, globals_env):
                 else:
                     print(obj, end=end)
         print()
+
+    def _slice(a, b, c=None):
+        if c is not None:
+            return a[b:c]
+        else:
+            return a[b:]
 
     def shift(x: list):
         v = x.pop(0)
@@ -480,7 +470,7 @@ def init_globals(interpreter, globals_env):
 
         @staticmethod
         def instance(what, parent):
-            return isinstance(what,parent)
+            return isinstance(what, parent)
 
         @staticmethod
         def int(n):
@@ -563,7 +553,9 @@ def init_globals(interpreter, globals_env):
             return bool(s)
 
         @staticmethod
-        def toArray(s):
+        def toArray(s, n=None):
+            if n:
+                return array.array(s, n)
             return list(s)
 
         @staticmethod
@@ -579,7 +571,9 @@ def init_globals(interpreter, globals_env):
             return ord(s)
 
         @staticmethod
-        def toBytes(s):
+        def toBytes(s, c=None):
+            if isinstance(s, str):
+                return bytes(s, c)
             return bytes(s)
 
         @staticmethod
@@ -615,14 +609,14 @@ def init_globals(interpreter, globals_env):
     mmath["min"] = min
 
     def load(path: str, env=None):  # const <modname> = load("modname")
-        if not env: env = {}
+        if not env:
+            env = {}
         # ── FORCE Python import ──
         if path.startswith("py:"):
             py_path = path[3:].replace("/", ".")
             if py_path in interpreter.modules_loaded:
                 return interpreter.modules_loaded[py_path]
 
-            
             result = impLib(py_path)
             interpreter.modules_loaded[py_path] = result
             return result
@@ -683,7 +677,8 @@ def init_globals(interpreter, globals_env):
     class Runtime:
         @staticmethod
         def dumpGlobals():
-            print("global stuff = ",interpreter.globals)
+            print("global stuff = ", interpreter.globals)
+
         @staticmethod
         def exit(code=0):
             sys.exit(code)
@@ -708,21 +703,24 @@ def init_globals(interpreter, globals_env):
 
     class Fs:
         @staticmethod
-        def read(path, opts = None):
-            if not opts: opts = opts={"mode": "r", "encoding": "utf8"}
+        def read(path, opts=None):
+            if not opts:
+                opts = opts = {"mode": "r", "encoding": "utf8"}
             with open(path, **opts) as f:
                 return f.read()
 
         @staticmethod
-        def open(path, opts = None):
-            if not opts: opts = opts={"mode": "r", "encoding": "utf8"}
+        def open(path, opts=None):
+            if not opts:
+                opts = opts = {"mode": "r", "encoding": "utf8"}
             return open(
                 path, **opts
             )  # interpreter turns nova's objects into dicts when passing back to python, so this is safe
 
         @staticmethod
-        def write(path, contents, opts = None):
-            if not opts: opts = opts={"mode": "w", "encoding": "utf8"}
+        def write(path, contents, opts=None):
+            if not opts:
+                opts = opts = {"mode": "w", "encoding": "utf8"}
             with open(path, **opts) as f:
                 f.write(contents)
 
@@ -816,18 +814,23 @@ def init_globals(interpreter, globals_env):
         @staticmethod
         def delattr(obj, key):
             builtins.delattr(obj, key)
+
         @staticmethod
         def attrs(obj):
             return dir(obj)
-            
-    builtin_exceptions = {
-        obj for name, obj in vars(builtins).items()
+
+    builtin_values = {
+        name: obj
+        for name, obj in vars(builtins).items()
         if isinstance(obj, type) and issubclass(obj, BaseException)
     }
-    builtin_exceptions.add(NovaError)
-    
-    for e in builtin_exceptions:
-        globals_env.define(e.__name__, e) # more for error checking and better controll over what to raise instead of Runtime.panic
+    builtin_values["NovaError"] = NovaError
+    builtin_values.update(BUILTIN_VAR_TYPES)
+
+    for e, v in builtin_values.items():
+        globals_env.define(
+            e, v
+        )  # more for error checking and better controll over what to raise instead of Runtime.panic
     globals_env.define("print", pprint)
     globals_env.define("write", lambda t, to: print(t, file=to))
     globals_env.define("input", input)
@@ -842,7 +845,8 @@ def init_globals(interpreter, globals_env):
     globals_env.define("fhex", float.hex)
     globals_env.define("json", json)
     globals_env.define("load", load)
-    globals_env.define("slice", lambda s, i, j: s[i:j])
+    globals_env.define("range", range)
+    globals_env.define("slice", _slice)
     globals_env.define("math", mmath)
     globals_env.define("NaN", math.nan)
     globals_env.define("nil", None, True)
@@ -851,8 +855,10 @@ def init_globals(interpreter, globals_env):
     globals_env.define("Fs", Fs)
     globals_env.define("Object", Object)
     globals_env.define("Time", Time)
+
     def r(x):
         raise x
+
     r.__name__ = "raise"
     globals_env.define("raise", r)
 
@@ -918,12 +924,13 @@ class Interpreter:
         "enum",
         "assert",
         "class",
-        "object",
+        "record",
         "inherits",
         "static",
         "new",
         "with",
-        "explode",
+        "unpack",
+        "compact",
     ]
 
     def __init__(self, file_path):
@@ -957,7 +964,24 @@ class Interpreter:
             char = source[i]
             start_col = col
             next_char = source[i + 1] if i + 1 < length else ""
-
+            # --- Shebang support (must be at file start) ---
+            if (
+                line == 1
+                and col == 1
+                and char == "#"
+                and i + 1 < length
+                and source[i + 1] == "!"
+            ):
+                # Consume everything until newline or EOF
+                while i < length and source[i] != "\n":
+                    i += 1
+                # If we stopped at a newline, consume it so the whitespace handler doesn't see it
+                if i < length and source[i] == "\n":
+                    i += 1
+                    line += 1
+                    col = 1
+                # else: reached EOF without newline – that's fine, just stop
+                continue
             # Skip whitespace.
             if char.isspace():
                 if char == "\n":
@@ -1110,8 +1134,8 @@ class Interpreter:
                         continue
 
                 # decimal / float (with underscores, no trailing dot)
-                int_part = collect_digits("0123456789")   # integer part mandatory
-                
+                int_part = collect_digits("0123456789")  # integer part mandatory
+
                 if i < length and source[i] == ".":
                     i += 1
                     col += 1
@@ -1122,13 +1146,17 @@ class Interpreter:
                         # collect_digits raised because no digits found -> that's a trailing dot
                         raise NovaError(
                             Token("error", "Invalid numeric literal", file, line, col),
-                            "Trailing dot in numeric literal"
+                            "Trailing dot in numeric literal",
                         )
                     num_str = f"{int_part}.{frac_part}"
-                    tokens.append(Token("number", float(num_str), file, line, start_col))
+                    tokens.append(
+                        Token("number", float(num_str), file, line, start_col)
+                    )
                 else:
                     # plain integer
-                    tokens.append(Token("number", int(int_part, 10), file, line, start_col))
+                    tokens.append(
+                        Token("number", int(int_part, 10), file, line, start_col)
+                    )
                 continue
             if char in ['"', "'"]:
                 quote = char
@@ -1151,6 +1179,21 @@ class Interpreter:
 
                         esc = source[i]
 
+                        # Check for octal escape (digit 0-7)
+                        if source[i] in "01234567":
+                            # Read up to 3 octal digits
+                            oct_digits = []
+                            for _ in range(3):
+                                if i < length and source[i] in "01234567":
+                                    oct_digits.append(source[i])
+                                    i += 1
+                                else:
+                                    break
+                            octal_str = "".join(oct_digits)
+                            value.append(chr(int(octal_str, 8)))
+                            # Continue the outer loop – do not increment i again here
+                            continue  # skip the final i+=1 of the loop
+
                         escapes = {
                             "n": "\n",
                             "t": "\t",
@@ -1158,7 +1201,6 @@ class Interpreter:
                             "\\": "\\",
                             '"': '"',
                             "'": "'",
-                            "0": "\0",
                         }
 
                         if esc not in escapes:
@@ -1255,12 +1297,18 @@ class Interpreter:
         func_parameters = []
         if self.get_next_token() and self.get_next_token().value != ")":
             while True:
+                is_compact = False
+                if self.get_next_token() and self.get_next_token().value == "compact":
+                    self.consume_token()  # consume 'compact'
+                    is_compact = True
+
                 param_token = self.expect_type("identifier")
                 param_name = param_token.value
                 self.consume_token()
-
                 annotation_type = None
                 if self.get_next_token() and self.get_next_token().type == "identifier":
+                    if is_compact:
+                        raise NovaError(token, "'compact' does not support this")
                     type_token = self.get_next_token()
                     if (
                         type_token.value in BUILTIN_VAR_TYPES
@@ -1271,6 +1319,8 @@ class Interpreter:
 
                 default_expr = None
                 if self.get_next_token() and self.get_next_token().value == "=":
+                    if is_compact:
+                        raise NovaError(token, "'compact' does not support this")
                     self.consume_token()
                     default_expr = self.parse_expression()
                     if annotation_type:
@@ -1281,14 +1331,7 @@ class Interpreter:
 
                     if default_expr.type == "Literal":
                         inferred_type = type(default_expr.value).__name__
-                        if inferred_type == "str":
-                            annotation_type = "string"
-                        elif inferred_type in ["int", "float"]:
-                            annotation_type = "number"
-                        elif inferred_type == "bool":
-                            annotation_type = "bool"
-                        else:
-                            annotation_type = None
+                        annotation_type = BUILTIN_VAR_TYPES_INFER.get(inferred_type, None)
                     else:
                         annotation_type = None
 
@@ -1297,6 +1340,7 @@ class Interpreter:
                         param_name,
                         annotation_type,
                         default_expr,
+                        is_compact,
                         param_token.file,
                         param_token.line,
                         param_token.column,
@@ -1457,6 +1501,14 @@ class Interpreter:
                 parameters = []
                 if self.get_next_token() and self.get_next_token().value != ")":
                     while True:
+                        is_compact = False
+                        if (
+                            self.get_next_token()
+                            and self.get_next_token().value == "compact"
+                        ):
+                            self.consume_token()  # consume 'compact'
+                            is_compact = True
+
                         param_token = self.expect_type("identifier")
                         param_name = param_token.value
                         self.consume_token()
@@ -1489,6 +1541,7 @@ class Interpreter:
                                 param_name,
                                 annotation_type,
                                 default_expr,
+                                is_compact,
                                 param_token.file,
                                 param_token.line,
                                 param_token.column,
@@ -1587,8 +1640,8 @@ class Interpreter:
                 t = None
                 self.expect_token(",")
                 self.consume_token()
-                if self.get_next_token() and self.get_next_token().type == "string":
-                    t = self.consume_token().value
+                self.expect_type("string")
+                t = self.consume_token().value
                 return AssertStmt(assert_expr, t, token.file, token.line, token.column)
             elif token.value == "define":
                 self.consume_token()  # consume 'define'
@@ -1621,7 +1674,7 @@ class Interpreter:
 
                     self.expect_token(":")
                     self.consume_token()  # consume ':'
-                    
+
                     prop_type_token = self.expect_type("identifier")
                     prop_type = prop_type_token.value
                     self.consume_token()  # consume property type
@@ -1639,7 +1692,9 @@ class Interpreter:
                 #    print("before",k)
                 for t in copyFroms:
                     # print(t)
-                    tt = CUSTOM_TYPES[t.value]
+                    tt = CUSTOM_TYPES.get(t.value)
+                    if tt is None:
+                        raise NovaError(t, f"Unknown type '{t.value}'")
                     for k in tt.properties:
                         if not k in properties:
                             properties.append(k)
@@ -1757,6 +1812,8 @@ class Interpreter:
                     and self.get_next_token().type == "keyword"
                     and self.get_next_token().value == "default"
                 ):
+                    if strict:
+                        raise NovaError(self.consume_token(), "Cannot use 'default' when strict is enabled")
                     self.consume_token()
                     default_body = self.parse_block_until(["end"])
                     self.expect_token("end")
@@ -1811,20 +1868,8 @@ class Interpreter:
                         values = self.parse_expression()
                         return UsingStmt(values, token.file, token.line, token.column)
                 else:
-                    # Parse the fully qualified name, e.g., "module.sub.name"
-                    name_parts = []
-                    name_part_token = self.expect_type("identifier")
-                    name_parts.append(name_part_token.value)
-                    self.consume_token()  # Consume the first identifier
-
-                    while self.get_next_token() and self.get_next_token().value == ".":
-                        self.consume_token()  # Consume the dot
-                        name_part_token = self.expect_type("identifier")
-                        name_parts.append(name_part_token.value)
-                        self.consume_token()  # Consume the next identifier
-
-                    full_name = ".".join(name_parts)
-                    return UsingStmt(full_name, token.file, token.line, token.column)
+                    expr = self.parse_expression()
+                    return UsingStmt(expr, token.file, token.line, token.column)
 
             elif token.value == "test":
                 self.consume_token()
@@ -1921,6 +1966,8 @@ class Interpreter:
             elif token.value == "until":
                 self.consume_token()
                 while_condition = self.parse_expression()
+                self.expect_token("do")
+                self.consume_token()
                 while_body = self.parse_block_until(["end"])
                 self.expect_token("end")
                 self.consume_token()
@@ -2047,7 +2094,7 @@ class Interpreter:
 
             elif token.value == "class":
                 return self.parse_class_definition()
-            elif token.value == "object":
+            elif token.value == "record":
                 return self.parse_object_definition()
 
         # --- Expression statement (fallback) ---
@@ -2273,7 +2320,7 @@ class Interpreter:
                     args = []
                     if self.get_next_token() and self.get_next_token().value != ")":
                         while True:
-                            if self.get_next_token().value == "explode":
+                            if self.get_next_token().value == "unpack":
                                 token = self.consume_token()
                                 args.append(
                                     ExplodeExpr(
@@ -2329,7 +2376,7 @@ class Interpreter:
                 args = []
                 if self.get_next_token() and self.get_next_token().value != ")":
                     while True:
-                        if self.get_next_token().value == "explode":
+                        if self.get_next_token().value == "unpack":
                             token = self.consume_token()
                             args.append(
                                 ExplodeExpr(
@@ -2361,12 +2408,18 @@ class Interpreter:
         parameters = []
         if self.get_next_token() and self.get_next_token().value != ")":
             while True:
+                is_compact = False
+                if self.get_next_token() and self.get_next_token().value == "compact":
+                    self.consume_token()  # consume 'compact'
+                    is_compact = True
+
                 param_token = self.expect_type("identifier")
                 param_name = param_token.value
                 self.consume_token()
-
                 annotation_type = None
                 if self.get_next_token() and self.get_next_token().type == "identifier":
+                    if is_compact:
+                        raise NovaError(token, "'compact' does not support this")
                     type_token = self.get_next_token()
                     if (
                         type_token.value in BUILTIN_VAR_TYPES
@@ -2377,6 +2430,8 @@ class Interpreter:
 
                 default_expr = None
                 if self.get_next_token() and self.get_next_token().value == "=":
+                    if is_compact:
+                        raise NovaError(token, "'compact' does not support this")
                     self.consume_token()
                     default_expr = self.parse_expression()
                     if annotation_type:
@@ -2387,14 +2442,7 @@ class Interpreter:
 
                     if default_expr.type == "Literal":
                         inferred_type = type(default_expr.value).__name__
-                        if inferred_type == "str":
-                            annotation_type = "string"
-                        elif inferred_type in ["int", "float"]:
-                            annotation_type = "number"
-                        elif inferred_type == "bool":
-                            annotation_type = "bool"
-                        else:
-                            annotation_type = None
+                        annotation_type = BUILTIN_VAR_TYPES_INFER.get(inferred_type, None)
                     else:
                         annotation_type = None
 
@@ -2403,6 +2451,7 @@ class Interpreter:
                         param_name,
                         annotation_type,
                         default_expr,
+                        is_compact,
                         param_token.file,
                         param_token.line,
                         param_token.column,
@@ -2552,40 +2601,58 @@ class Interpreter:
             )
 
         elif token.value == "$":
-            dollar_token = self.consume_token()  # Consume '$'
+            dollar_token = self.consume_token()  # consume '$'
             identifier_token = self.expect_type("identifier")
             identifier_name = identifier_token.value
-            self.consume_token()  # Consume the identifier
+            self.consume_token()  # consume the identifier
 
-            # Construct 'self.<identifier>'
+            # Construct 'self'
             self_identifier = Identifier(
                 "self", dollar_token.file, dollar_token.line, dollar_token.column
             )
-            property_access = PropertyAccess(
-                self_identifier,
-                identifier_name,
-                identifier_token.file,
-                identifier_token.line,
-                identifier_token.column,
-            )
 
-            # Construct '<identifier>' for the right-hand side
-            value_identifier = Identifier(
-                identifier_name,
-                identifier_token.file,
-                identifier_token.line,
-                identifier_token.column,
-            )
+            # If followed by '(', it's a method call directly on self
+            if self.get_next_token() and self.get_next_token().value == "(":
+                self.consume_token()  # consume '('
+                args = []
+                if self.get_next_token() and self.get_next_token().value != ")":
+                    while True:
+                        if self.get_next_token().value == "unpack":
+                            unpack_token = self.consume_token()
+                            args.append(
+                                ExplodeExpr(
+                                    self.parse_expression(),
+                                    unpack_token.file,
+                                    unpack_token.line,
+                                    unpack_token.column,
+                                )
+                            )
+                        else:
+                            args.append(self.parse_expression())
+                        if self.get_next_token() and self.get_next_token().value == ",":
+                            self.consume_token()
+                        else:
+                            break
+                self.expect_token(")")
+                self.consume_token()  # consume ')'
 
-            # Construct 'self.<identifier> = <identifier>'
-            node = AssignmentExpr(
-                property_access,
-                value_identifier,
-                "=",  # The assignment operator
-                dollar_token.file,
-                dollar_token.line,
-                dollar_token.column,
-            )
+                node = MethodCall(
+                    self_identifier,
+                    identifier_name,
+                    args,
+                    identifier_token.file,
+                    identifier_token.line,
+                    identifier_token.column,
+                )
+            else:
+                # Plain property / attribute access
+                node = PropertyAccess(
+                    self_identifier,
+                    identifier_name,
+                    identifier_token.file,
+                    identifier_token.line,
+                    identifier_token.column,
+                )
         elif token.value == "def":  # Lambda expression (def (...) ... end)
             return self.parse_def()
 
@@ -2942,47 +3009,69 @@ class Interpreter:
                 stmt.fn.name, _env.get(stmt.fn.name).value, _env.get(stmt.fn.name).const
             )
         elif stmt.type == "FuncDecl":
+
             def func_wrapper(*args, **kwargs):
                 func_env = Environment(env)
-                param_names = [p.name for p in stmt.parameters]
-                num_params = len(param_names)
+                param_list = stmt.parameters  # list of Parameter objects
 
-                # 1. Handle positional arguments
-                if len(args) > num_params:
-                    raise NovaError(stmt, f"Too many positional arguments (expected {num_params})")
+                # --- identify compact parameter (if any) ---
+                compact_param = None
+                normal_params = []  # parameters before compact
+                for p in param_list:
+                    if p.is_compact:
+                        compact_param = p
+                        break
+                    normal_params.append(p)
 
-                # 2. Build a value dict from positionals
+                num_normal = len(normal_params)
+
+                # 1. Assign positional arguments to normal parameters
                 values = {}
-                for i, param in enumerate(stmt.parameters):
+                for i, param in enumerate(normal_params):
                     if i < len(args):
                         values[param.name] = args[i]
+                    # else: will be handled by defaults later
 
-                # 3. Overlay keyword arguments (with conflict detection)
+                # 2. Assign remaining positional arguments to compact parameter
+                if compact_param:
+                    if len(args) > num_normal:
+                        values[compact_param.name] = list(args[num_normal:])
+                    else:
+                        values[compact_param.name] = []
+
+                # 3. Keyword arguments
+                param_names = {p.name for p in param_list}
                 for kw_name, kw_val in kwargs.items():
                     if kw_name not in param_names:
-                        raise NovaError(stmt, f"Unexpected keyword argument '{kw_name}'")
+                        raise NovaError(
+                            stmt, f"Unexpected keyword argument '{kw_name}'"
+                        )
                     if kw_name in values:
-                        raise NovaError(stmt, f"Parameter '{kw_name}' given both positionally and by keyword")
+                        raise NovaError(
+                            stmt,
+                            f"Parameter '{kw_name}' given both positionally and by keyword",
+                        )
                     values[kw_name] = kw_val
 
-                # 4. Apply defaults for missing parameters and type check
-                for param in stmt.parameters:
+                # 4. Apply defaults & type check for all parameters
+                for param in param_list:
                     if param.name in values:
                         arg_val = values[param.name]
+                    elif param.is_compact:
+                        continue  # already handled (empty list)
                     else:
-                        # Missing – try default
+                        # missing normal parameter -> use default
                         if param.default is not None:
                             arg_val = self.evaluate_expr(param.default, env)
                         else:
-                            raise NovaError(param, f"Missing argument for parameter '{param.name}'")
-
-                    # Soft type check
+                            raise NovaError(
+                                param, f"Missing argument for parameter '{param.name}'"
+                            )
                     if param.annotation_type:
                         check_type(param.annotation_type, arg_val, param)
-
                     func_env.define(param.name, arg_val)
 
-                # 5. Execute function body
+                # 5. Execute body
                 result = self.execute_block(stmt.body, func_env)
                 if isinstance(result, ReturnFlow):
                     return result.value
@@ -3083,83 +3172,57 @@ class Interpreter:
         elif stmt.type == "AssertStmt":
             e = self.evaluate_expr(stmt.expression, env)
             if not e:
-                raise NovaError(stmt, f"{stmt.message}{stmt.expression}")
+                raise NovaError(stmt, f"{stmt.message}")
         elif stmt.type == "UsingStmt":
-
-            def handle(name, env):
-                if isinstance(name, ObjectLiteral):
-                    val = self.evaluate_expr(name, env)
-                    for k, v in val.items():
-                        env.define(k, v)
-                    return
-                # Resolve the fully qualified namespace name
-                name_parts = name.split(".")
-                current_resolved_object = (
-                    env  # Start resolution from current environment
-                )
-
-                for i, part in enumerate(name_parts):
-                    if isinstance(current_resolved_object, Environment):
-                        # NovaScript Environment: use its get method
-                        # FIX: Get value from var
-                        var_obj = current_resolved_object.get(part, stmt)
-                        next_resolved_part = var_obj.value
-                    elif isinstance(current_resolved_object, dict):
-                        # Python dictionary (e.g., NovaScript object literal, or imported dict-like module): use dict access
-                        next_resolved_part = current_resolved_object.get(part)
-                    elif hasattr(current_resolved_object, part):
-                        # Python object (e.g., imported Python module): use getattr
-                        next_resolved_part = getattr(current_resolved_object, part)
-                    else:
-                        raise NovaError(
-                            stmt,
-                            f"Cannot resolve part '{part}' in '{'.'.join(name_parts[:i])}'. Not a namespace, dict, or object with attribute.",
-                        )
-
-                    if next_resolved_part is None:
-                        raise NovaError(
-                            stmt, f"scope '{name}' part '{part}' not found."
-                        )
-
-                    current_resolved_object = next_resolved_part
-
-                # After resolving the full path, current_resolved_object holds the target namespace/object
-                target_namespace = current_resolved_object
-
-                if isinstance(target_namespace, Environment):
-                    # Import from NovaScript Environment
-                    # FIX: unwrap vars
-                    for key, var_obj in target_namespace.values.items():
+            # Helper to import members from a dict/Environment/module into env
+            def import_members(value):
+                if isinstance(value, Environment):
+                    for key, var_obj in value.values.items():
                         env.define(
                             key, var_obj.value, var_obj.const, var_obj.type_annotation
                         )
-                elif isinstance(target_namespace, dict):
-                    # Import from Python dictionary
-                    for key, value in target_namespace.items():
-                        env.define(key, value)
-                elif hasattr(target_namespace, "__dict__"):
-                    # Import from Python module or class instance (its __dict__)
-                    # Filter out built-in/private attributes if desired, or just import all.
-                    # For simplicity, let's import all public attributes.
-                    for key, value in target_namespace.__dict__.items():
-                        if not key.startswith(
-                            "_"
-                        ):  # Avoid importing Python's internal/private attributes
-                            env.define(key, value)
+                elif isinstance(value, dict):
+                    for key, val in value.items():
+                        env.define(key, val)
+                elif hasattr(value, "__dict__"):
+                    for key, val in value.__dict__.items():
+                        if not key.startswith("_"):
+                            env.define(key, val)
                 else:
                     raise NovaError(
                         stmt,
-                        f"Cannot 'use' value of type {type(target_namespace).__name__}. Expected a namespace, dict, or Python object with attributes.",
+                        f"Cannot 'use' value of type {type(value).__name__}. "
+                        "Expected a namespace, dict, or Python object with attributes.",
                     )
 
-            # print(stmt)
             if isinstance(stmt.name, list):
-                for name in stmt.name:
-                    # print(name)
-                    handle(name, env)
+                # List of string paths: resolve each and import members
+                for path_str in stmt.name:
+                    parts = path_str.split(".")
+                    current = env
+                    for part in parts:
+                        if isinstance(current, Environment):
+                            var_obj = current.get(part, stmt)
+                            current = var_obj.value
+                        elif isinstance(current, dict):
+                            current = current.get(part)
+                        elif hasattr(current, part):
+                            current = getattr(current, part)
+                        else:
+                            raise NovaError(
+                                stmt,
+                                f"Cannot resolve part '{part}' in path '{path_str}'.",
+                            )
+                        if current is None:
+                            raise NovaError(
+                                stmt,
+                                f"Name '{path_str}' part '{part}' not found.",
+                            )
+                    import_members(current)
             else:
-                handle(stmt.name, env)
-
+                # Single expression: evaluate it, then import members from the result
+                value = self.evaluate_expr(stmt.name, env)
+                import_members(value)
         else:
             raise NovaError(stmt, f"Unknown statement type: {stmt.type}")
 
@@ -3648,31 +3711,50 @@ class Interpreter:
                     expr,
                 )
             return c
-
         elif expr.type == "LambdaDecl":
 
             def lambda_func_wrapper(*args):
-                func_env = Environment(
-                    env
-                )  # Closure over the environment where lambda was defined
+                func_env = Environment(env)
 
-                for i, param in enumerate(expr.parameters):
-                    arg_val = args[i] if i < len(args) else None
+                param_list = expr.parameters
 
-                    # apply default if missing
-                    if arg_val is None and param.default is not None:
-                        arg_val = self.evaluate_expr(
-                            param.default, env
-                        )  # Default evaluated in outer env
-                    elif arg_val is None and param.default is None:
-                        raise NovaError(
-                            param, f"Missing argument for parameter '{param.name}'."
-                        )
+                compact_param = None
+                normal_params = []
+                for p in param_list:
+                    if p.is_compact:
+                        compact_param = p
+                        break
+                    normal_params.append(p)
 
-                    # soft type check
+                num_normal = len(normal_params)
+
+                # positional arguments for normal parameters
+                values = {}
+                for i, param in enumerate(normal_params):
+                    if i < len(args):
+                        values[param.name] = args[i]
+
+                if compact_param:
+                    if len(args) > num_normal:
+                        values[compact_param.name] = list(args[num_normal:])
+                    else:
+                        values[compact_param.name] = []
+
+                # apply defaults / type check
+                for param in param_list:
+                    if param.name in values:
+                        arg_val = values[param.name]
+                    elif param.is_compact:
+                        continue
+                    else:
+                        if param.default is not None:
+                            arg_val = self.evaluate_expr(param.default, env)
+                        else:
+                            raise NovaError(
+                                param, f"Missing argument for parameter '{param.name}'"
+                            )
                     if param.annotation_type:
                         check_type(param.annotation_type, arg_val, param)
-
                     func_env.define(param.name, arg_val)
 
                 result = self.execute_block(expr.body, func_env)

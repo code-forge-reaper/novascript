@@ -1,3 +1,5 @@
+// novascript/examples/server.nova
+
 // i'll turn this into a server framework eventualy
 const sock = load("socket")
 
@@ -28,7 +30,7 @@ Content-Length: {}\r
 {}"
 
 export class Client
-	func init(socket)$socket end
+	func init(socket)$socket=socket end
 	func send(res ResponseType)
 		const body = res.data
 		self.socket.sendall(basicHttp.format(

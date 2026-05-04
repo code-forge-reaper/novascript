@@ -14,17 +14,17 @@ end
 
 export class Vec2
 	func init(x,y)
-		$x
-		$y
+		$x=x
+		$y=y
 	end
 	func __Add(v2)  // vec2 + vec2
-		return new Vec2(self.x + v2.x, self.y + v2.y)
+		return new Vec2($x + v2.x, $y + v2.y)
 	end
 	func __Sub(v2)
-		return new Vec2(self.x - v2.x, self.y - v2.y)
+		return new Vec2($x - v2.x, $y - v2.y)
 	end
 	func __Mul(v2)
-		return new Vec2(self.x * v2.x, self.y * v2.y)
+		return new Vec2($x * v2.x, $y * v2.y)
 	end
 end
 

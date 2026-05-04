@@ -260,14 +260,17 @@ class NewInstance(Expression):
 
 
 class Parameter(Token):
-    def __init__(self, name, annotation_type, default, file, line, column, type, value):
+    def __init__(self, name, annotation_type, default, is_compact, file, line, column, type, value):
         super().__init__(type, value, file, line, column)
         self.name = name
         self.annotation_type = annotation_type
         self.default = default
+        self.is_compact = is_compact
 
     def __str__(self, indent_level=0):
         param_str = self.name
+        if self.is_compact:
+            param_str += "compact "
         if self.annotation_type:
             param_str += f": {self.annotation_type}"
         if self.default:

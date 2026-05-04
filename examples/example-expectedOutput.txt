@@ -1,6 +1,6 @@
-> nova.py examples/example.nova
+> nova.py ../novascript/examples/example.nova
 mmath.grid2D(20,20):  [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]
-[info at: 03:38:21]: Starting NovaScript Example!
+[info at: 01:20:57]: Starting NovaScript Example!
 Greeting: Hello, NovaScript!
 Count: 10
 Is Active: True
@@ -47,7 +47,7 @@ Break and Continue example:
 Mid-week.
 Test-Failed example:
   Inside test block.
-[error at: 03:38:21]:   Caught an error: Simulated division by zero error!
+[error at: 01:20:57]:   Caught an error: Simulated division by zero error!
 Defer example:
   Entering defer block scope.
   Exiting defer block scope.
@@ -58,7 +58,7 @@ Sum (func): 12
 Hello, Alice! You are 30 years old.
 Hello, Guest! You are 30 years old.
 Hello, Bob! You are 25 years old.
-Multiply (lambda): 24
+div(20,15): 1.3333333333333333
 Numbers array: [10, 20, 30, 40]
 First element: 10
 Modified array: [10, 25, 30, 40]
@@ -69,6 +69,7 @@ Person city: Anytown
 Modified age: 31
 Point p1: 10 20
 Rectangle rect1: 0 0 100 50
+point3d: {'x': 35, 'y': 12, 'z': 25}
 Animal created: Lion
 Animal created: Cat
 Lion says Roar!
@@ -78,7 +79,7 @@ This is an animal named Cat.
 vector math : v1 + v2 =  Vector2(x: 70, y: 40)
   v is 24
   v is 25
-/home/cross/Documents/projects/novascript/examples/example.nova:305:9: Switch statement did not match any case for value: 27
+/home/cross/Documents/projects/novascript/examples/example.nova:329:9: Switch statement did not match any case for value: 27
   v is neither 24 nor 25, it is 10
   v is neither 24 nor 25, it is 11
   v is neither 24 nor 25, it is 13
@@ -98,9 +99,13 @@ A
 24
 18
 24
-expected error: /home/cross/Documents/projects/novascript/examples/example.nova:366:5: Type mismatch: expected string, got int
+expected error: /home/cross/Documents/projects/novascript/examples/example.nova:390:5: Type mismatch: expected <class 'str'>, got int
 {'x': 24, 'y': 252, 'z': 1008}
 name = cross, age = 18
 name = cross, age = 18
+['simple', 'bag', 'of', 'words'] True
+Me and my cursed ObjectLiteral parser, somehow makes this work
+pretty neat
+{'why': <function Interpreter.evaluate_expr.<locals>.lambda_func_wrapper at 0x7f64c2808300>, 'sample': <function Interpreter.execute_stmt.<locals>.func_wrapper at 0x7f64c28081a0>, 'text': <function Interpreter.execute_stmt.<locals>.func_wrapper at 0x7f64c2808250>}
 ------------------------------------------------------------------------
 success

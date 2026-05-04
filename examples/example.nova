@@ -8,6 +8,7 @@
  * This script demonstrates various features of NovaScript.
  */
 
+
 const mmath = load("mathlib") // this just adds things the global "math" doesn't have
 print("mmath.grid2D(20,20): ", mmath.grid2D(20,20))
 Logger.info("Starting NovaScript Example!")
@@ -28,7 +29,7 @@ var nothing = nil
 var notANumber = NaN
 print("Nothing:", nothing, "Not a Number:", notANumber)
 
-// String formatting and concatenation (from String.prototype extensions)
+// String formatting and concatenation
 var formattedString = "The value is {} and the name is {}.".format(count, "Item")
 print("Formatted String:", formattedString)
 
@@ -184,12 +185,27 @@ greet("Alice")
 greet()
 greet("Bob", 25)
 
-// Lambda function (anonymous function)
-var multiply = def (x, y)
-    return x * y
-end
+// This is a lambda/anonymous function,
+// like `const dive = (a, b) => a/b
+/*
+> node
+const div = Welcome to Node.js v25.9.0.
+Type ".help" for more information.
+> const div = (a,b)=>a/b
+undefined
+> div(20,15)
+1.3333333333333333
+>
+*/
+const div = def(a number, b number) = a / b
+print("div(20,15):", div(20,15))
 
-print("Multiply (lambda):", multiply(4, 6))
+// the "=" after the params is a short-hand for "return (expr) end"
+/*
+const div = def(a,b)
+    return a / b
+end
+*/
 
 // --- 5. Data Structures ---
 
@@ -200,8 +216,9 @@ print("First element:", numbers[0])
 numbers[1] = 25 // Modify element
 print("Modified array:", numbers)
 
-// Singleton
-object instant
+// `record` is a singleton that makes a class, instantiates it,
+// and assigns that instance to the name given to it
+record instant
     func hi(name string) print("hello,",name) end
 end
 
@@ -224,6 +241,8 @@ person.age = 31 // Modify property
 print("Modified age:", person.age)
 
 // --- 6. Custom Types ---
+// types in nova are literally what ducktyping is
+// "If it walks like a duck and it quacks like a duck, then it must be a duck"
 
 // Define a custom type 'Point'
 define Point = {
@@ -248,6 +267,13 @@ var rect1 Rectangle = {
     height: 50
 }
 print("Rectangle rect1:", rect1.topLeft.x, rect1.topLeft.y, rect1.width, rect1.height)
+
+// types must be declared before being used, that applies to this:
+define Point3D : [Point] = {
+    z: number
+}
+var point3d Point3D = {x:35,y:12,z:25}
+print("point3d:", point3d)
 
 // --- 7. Classes ---
 
@@ -284,7 +310,7 @@ cat.describe()
 
 class Vector2
     func init(x number, y number)
-        $x $y
+        $x=x $y=y
     end
 
     func __Add(v2) return new Vector2(self.x + v2.x, self.y + v2.y) end
@@ -313,6 +339,12 @@ test
 failed e
     e -> print
 end
+
+enum BunchOfTypes {
+    String Integer FloatingPoint
+}
+print(BunchOfTypes)
+
 test
     v = 10
     for i=0, 10 do
@@ -340,11 +372,12 @@ end
 
 class Temp2
 	func init(max number, min number, current number)
-		$max
-		$min
-		$current
+		$max = max
+		$min = min
+		$current = current
 	end
 end
+print(new Temp2(100,10,24))
 
 var ob = {x:2,y:3,z:4}
 using ob
@@ -352,6 +385,7 @@ print(z *= y *= x *= 42) // 1008
 print(x) // 84
 print(y) // 252
 print(z) // 1008
+// these are 'copies', the original object is unmutated
 
 // numerical stuff
 print(0u41) // A
@@ -373,8 +407,156 @@ func simpl(name, age)
     print("name = {}, age = {}" % [name, age])
 end
 
-simpl(explode ["cross", 18])
-simpl(explode {age: 18, name: "cross"})
+func bag(compact words)
+    print(words, Is.instance(words, list))
+end
+
+simpl(unpack ["cross", 18])
+simpl(unpack {age: 18, name: "cross"})
+bag("simple", "bag", "of", "words")
+
+const obj = {
+    hi: def()
+        print("Me and my cursed ObjectLiteral parser, somehow makes this work")
+    end
+    bye: def()
+        print("pretty neat")
+    end
+}
+obj.hi()
+obj.bye()
+
+func sample() = nil
+
+func text() = nil
+
+const obj2 = { // only required if you do this, aparently
+    why: def() end sample, text
+}
+print(obj2)
+/*
+blame past me for writting this cursed-ass object literal parser
+        elif token.value == "{":
+            self.consume_token()
+            properties = []
+            while self.get_next_token() and self.get_next_token().value != "}":
+                if self.get_next_token().value == "}":
+                    self.consume_token()
+                    break
+                key_token = self.get_next_token()
+                if key_token.type not in ["identifier", "string"]:
+                    raise NovaError(
+                        key_token,
+                        "Expected identifier or string as object key, got {}({})".format(
+                            key_token.type, key_token.value
+                        ),
+                    )
+                key = key_token.value
+                self.consume_token()
+                if key_token.type == "identifier" and self.get_next_token().value in [
+                    ",",
+                    "}",
+                ]:
+                    properties.append(
+                        {
+                            "key": key,
+                            "value": Identifier(
+                                key_token.value,
+                                key_token.file,
+                                key_token.line,
+                                key_token.column,
+                            ),
+                        }
+                    )
+                else:
+                    self.expect_token(":")
+                    self.consume_token()
+                    value = self.parse_expression()
+                    properties.append({"key": key, "value": value})
+                if self.get_next_token() and self.get_next_token().value == ",":
+                    self.consume_token()
+            self.expect_token("}")
+            self.consume_token()
+            node = ObjectLiteral(properties, token.file, token.line, token.column)
+*/
+
+
+var ValueTested = 1
+until ValueTested>= 24 do
+    ValueTested *= 1.2
+    print(ValueTested)
+end
+
+class SimpleManager
+    func __enter__()print("hello")
+    return {name : "Simple manager", self} end
+    func __exit__()print("bye")end
+end
+
+with (new SimpleManager()) as sample do
+    print(sample.name)
+end
+
+scope IsolatedBlock // modules are more or less scopped the same as a "scope" block
+    func names()print("richard", "roxane")end
+end
+print(IsolatedBlock)
+IsolatedBlock.names()
+const random = load("py:random")
+func decorator(fn)=
+    def (compact args)
+        print("random:",random.randint(0, 200))
+        return fn(unpack args)
+    end
+
+var sampleDeco=
+@decorator
+def()
+    print(random.randint(0, 200))
+end
+sampleDeco()
+var stuff = []
+for i = 1,10, 0.2 do
+    stuff.append(random.randint(1,20) * i)
+end
+print(stuff)
+stuff = stuff => def(val)=val*=2
+if !false
+    print(stuff, "number of stuff:", #stuff)
+end
+print("bit", 2 | 4)
+print("bit", 2 ^ 8)
+print("bit", 16 << 2)
+print("bit", 8 >> 2)
+
+/*
+don't you just love imprecision?
+0
+0.1
+0.2
+0.30000000000000004
+0.4
+0.5
+0.6
+0.7
+0.7999999999999999
+0.8999999999999999
+0.9999999999999999
+*/
+for i=0,1,0.1 do
+    print(i)
+end
+
+test
+    assert false, "Hello, world"
+failed e
+    print(e, "\nassert error :D")
+end
+
+local func sample()
+    print("this just locks a single function into local mode")
+end
+sample()
 
 print("---" * 24)
-print("success")
+print("done")

@@ -10,7 +10,7 @@ setRenderTarget(win2)
 clearBackground("red")
 restoreRenderTarget()
 
-object p
+record p
 	var x = 0
 	var y = 0
 	func move(dt)
