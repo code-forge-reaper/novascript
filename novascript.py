@@ -3433,12 +3433,15 @@ class Interpreter:
                 return left | right
             elif expr.operator == "%":
                 if isinstance(left, str):
-                    if not isinstance(right, list):
+                    if isinstance(right, list):
+                        left = left.format(*right)
+                    elif isinstance(right, dict):
+                        left = left.format(**right)
+                    else:
                         raise NovaError(
                             expr,
-                            "'%' formatting is only available when right side is an array",
+                            "'%' formatting is only available when right side is an array or object",
                         )
-                    left = left.format(*right)
                     return left
                 return left % right
             elif expr.operator == "^":

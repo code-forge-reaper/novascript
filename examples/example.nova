@@ -10,6 +10,134 @@
 
 
 const mmath = load("mathlib") // this just adds things the global "math" doesn't have
+/*
+Example error message if the lib isn't found:
+[20:19:46] cross@endeavourOS /home/cross/Documents/projects/novascript
+> echo "const np = load('numpy')
+  const PIL = load('PIL')
+  print(np, PIL)" | nova.py -
+Traceback (most recent call last):
+  File "/home/cross/Documents/projects/novascript/novascript.py", line 666, in load
+    result = impLib(py_path)
+  File "/usr/lib/python3.14/importlib/__init__.py", line 88, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1406, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1335, in _find_and_load_unlocked
+ModuleNotFoundError: No module named 'numpy'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/cross/bin/nova.py", line 26, in <module>
+    main()
+    ~~~~^^
+  File "/home/cross/bin/nova.py", line 21, in main
+    interpreter.interpret()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/cross/Documents/projects/novascript/novascript.py", line 2681, in interpret
+    raise err
+  File "/home/cross/Documents/projects/novascript/novascript.py", line 2673, in interpret
+    self.execute_block(statements, self.globals)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/cross/Documents/projects/novascript/novascript.py", line 2688, in execute_block
+    result = self.execute_stmt(stmt, env)
+  File "/home/cross/Documents/projects/novascript/novascript.py", line 2702, in execute_stmt
+    value = self.evaluate_expr(stmt.initializer, env)
+  File "/home/cross/Documents/projects/novascript/novascript.py", line 3543, in evaluate_expr
+    return func(*args, **kwargs)
+  File "/home/cross/Documents/projects/novascript/novascript.py", line 670, in load
+    raise RuntimeError(
+    ...<4 lines>...
+    )
+RuntimeError: Cannot find module: numpy
+Tried Nova:
+  numpy.nova
+  /dev/numpy.nova
+  /home/cross/Documents/projects/novascript/libs/numpy.nova
+Tried Python import: numpy
+Error: No module named 'numpy'
+[20:19:50] cross@endeavourOS /home/cross/Documents/projects/novascript [0|1]
+> yay -S python-numpy
+Sync Explicit (1): python-numpy-2.4.4-1
+🔐 [sudo] password for cross:  ••••••••
+resolving dependencies...
+looking for conflicting packages...
+
+Package (4)         New Version  Net Change  Download Size
+
+extra/blas          3.12.1-2       0,74 MiB       0,24 MiB
+extra/cblas         3.12.1-2       0,34 MiB       0,06 MiB
+extra/lapack        3.12.1-2      15,06 MiB       4,83 MiB
+extra/python-numpy  2.4.4-1       47,62 MiB       7,87 MiB
+
+Total Download Size:   13,00 MiB
+Total Installed Size:  63,75 MiB
+
+:: Proceed with installation? [Y/n]
+:: Retrieving packages...
+ cblas-3.12.1-2-x86_64          57,0 KiB   123 KiB/s 00:00 [-------------------------------] 100%
+ blas-3.12.1-2-x86_64          249,6 KiB   471 KiB/s 00:01 [-------------------------------] 100%
+ lapack-3.12.1-2-x86_64          4,8 MiB  3,41 MiB/s 00:01 [-------------------------------] 100%
+ python-numpy-2.4.4-1-x86_64     7,9 MiB  5,20 MiB/s 00:02 [-------------------------------] 100%
+ Total (4/4)                    13,0 MiB  8,00 MiB/s 00:02 [-------------------------------] 100%
+(4/4) checking keys in keyring                             [-------------------------------] 100%
+(4/4) checking package integrity                           [-------------------------------] 100%
+(4/4) loading package files                                [-------------------------------] 100%
+(4/4) checking for file conflicts                          [-------------------------------] 100%
+:: Processing package changes...
+(1/4) installing blas                                      [-------------------------------] 100%
+(2/4) installing cblas                                     [-------------------------------] 100%
+(3/4) installing lapack                                    [-------------------------------] 100%
+(4/4) installing python-numpy                              [-------------------------------] 100%
+Optional dependencies for python-numpy
+    blas-openblas: faster linear algebra
+:: Running post-transaction hooks...
+(1/1) Arming ConditionNeedsUpdate...
+[20:21:35] cross@endeavourOS /home/cross/Documents/projects/novascript
+> yay -S python-pillow
+Sync Explicit (1): python-pillow-12.2.0-1
+resolving dependencies...
+looking for conflicting packages...
+
+Package (2)          New Version  Net Change  Download Size
+
+extra/libimagequant  4.4.1-2        0,60 MiB       0,26 MiB
+extra/python-pillow  12.2.0-1       4,84 MiB       0,92 MiB
+
+Total Download Size:   1,18 MiB
+Total Installed Size:  5,44 MiB
+
+:: Proceed with installation? [Y/n]
+:: Retrieving packages...
+ libimagequant-4.4.1-2-x86_64  265,6 KiB  1235 KiB/s 00:00 [-------------------------------] 100%
+ python-pillow-12.2.0-1-x...   940,5 KiB  3,49 MiB/s 00:00 [-------------------------------] 100%
+ Total (2/2)                  1206,1 KiB  2,92 MiB/s 00:00 [-------------------------------] 100%
+(2/2) checking keys in keyring                             [-------------------------------] 100%
+(2/2) checking package integrity                           [-------------------------------] 100%
+(2/2) loading package files                                [-------------------------------] 100%
+(2/2) checking for file conflicts                          [-------------------------------] 100%
+:: Processing package changes...
+(1/2) installing libimagequant                             [-------------------------------] 100%
+(2/2) installing python-pillow                             [-------------------------------] 100%
+Optional dependencies for python-pillow
+    libwebp: for webp images [installed]
+    tk: for the ImageTK module [installed]
+    python-olefile: OLE2 file support
+    python-pyqt6: for the ImageQt module [installed]
+    python-defusedxml: for reading XMP tags [installed]
+:: Running post-transaction hooks...
+(1/1) Arming ConditionNeedsUpdate...
+[20:22:04] cross@endeavourOS /home/cross/Documents/projects/novascript
+> echo "const np = load('numpy')
+  const PIL = load('PIL')
+  print(np, PIL)" | nova.py -
+<module 'numpy' from '/usr/lib/python3.14/site-packages/numpy/__init__.py'> <module 'PIL' from '/usr/lib/python3.14/site-packages/PIL/__init__.py'>
+[20:22:15] cross@endeavourOS /home/cross/Documents/projects/novascript
+>
+
+*/
 print("mmath.grid2D(20,20): ", mmath.grid2D(20,20))
 Logger.info("Starting NovaScript Example!")
 
@@ -341,6 +469,18 @@ failed e
     e -> print
 end
 
+/*
+-> is basically what "|" does in shells
+> echo "
+  const s = 60
+  const w = 16 * s
+  const h = 9 * s
+  print(w, h)
+  " | grep "const s"
+const s = 60
+*/
+"-> takes what is before it, and passes into what is after it" -> print
+
 enum BunchOfTypes {
     String Integer FloatingPoint
 }
@@ -381,7 +521,14 @@ end
 print(new Temp2(100,10,24))
 
 var ob = {x:2,y:3,z:4}
-using ob
+using ob // the pyqt example uses this
+/*
+using load("PyQt6.QtWidgets")
+using load("PyQt6.QtCore")
+using load("PyQt6.QtGui")
+using load("PyQt6.QtWebEngineCore")
+using load("PyQt6.QtWebEngineWidgets")
+*/
 print(z *= y *= x *= 42) // 1008
 print(x) // 84
 print(y) // 252
@@ -520,11 +667,71 @@ var stuff = []
 for i = 1,10, 0.2 do
     stuff.append(random.randint(1,20) * i)
 end
+/*
+=> is .map, it creates a copy of the value behind it, and passes that to what you give it
+
+    elif expr.operator == "=>":
+        if not callable(right):
+            raise NovaError(expr, f"right side of pipe expr must be a function")
+        if isinstance(left, dict):
+            clone = {}
+            for k, v in left.items():
+                clone[k] = right(v, k)
+            return clone
+        elif isinstance(left, list):
+            clone = list(left)
+
+            for i, v in enumerate(left):
+                clone[i] = right(v, i)
+            return clone
+        else:
+            raise NovaError(expr, "=> only works on arrays or objects")
+*/
 print(stuff)
 stuff = stuff => def(val)=val*=2
-if !false
-    print(stuff, "number of stuff:", #stuff)
-end
+
+const data = [24,512,21,124]
+var x = data.copy()
+x = x => def(value, index) = value *= (index + 1)
+print(x)
+print("--"*4)
+
+var y = data.copy()
+y => def(value, index) = value *= (index + 1)
+print(y)
+print("--"*4)
+
+print(data.copy() => def(value, index) = value *= (index + 1))
+print("--"*4)
+
+data => def(value, index) = print(value, index)
+print("--"*4)
+data => def(value) = print(value)
+/*
+[24, 1024, 63, 496]
+--------
+[24, 512, 21, 124]
+--------
+[24, 1024, 63, 496]
+--------
+24 0
+512 1
+21 2
+124 3
+--------
+24
+512
+21
+124
+*/
+
+// this however, mutates the data itself
+var data2 = [{x:1}, {x:2}]
+print(data2)
+data2 => def(v)= v.x *= 2
+print(data2)
+
+print(stuff, "number of stuff:", #stuff)
 print("bit", 2 | 4)
 print("bit", 2 ^ 8)
 print("bit", 16 << 2)

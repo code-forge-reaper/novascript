@@ -1,4 +1,20 @@
 # NovaScript
+A language started almost 2 years ago
+```
+[00:28:12] cross@endeavourOS /home/cross/Documents/projects/novascript [0|1]
+> git log | tail
+Author: code-forge-reaper <cross.code.forge@gmail.com>
+Date:   Thu Feb 13 00:30:24 2025 -0300
+
+    Create NovaScript.js
+
+commit 1e26202e4817ecd088a78eadaccb53532f6d0eeb
+Author: code-forge-reaper <cross.code.forge@gmail.com>
+Date:   Thu Feb 13 00:29:52 2025 -0300
+
+    Initial commit
+```
+
 
 NovaScript is made for convenience and ease of writting.
 By consequence, you don't get conventional syntax out of it.
@@ -7,11 +23,13 @@ By consequence, you don't get conventional syntax out of it.
 
 ## Files
 `nova.py`          - main script file that you run nova scripts with
-`novascript.py`    - main AST-walking interpreter
-`nodes.py`         - the ast representation of the nodes
-`parsel.py`        - a renpy-inspired text adventure lang, self-encapsulated and made from a copy of nova's tokenizer
+`novascript.py`    - AST-walking interpreter
+`nodes.py`         - the ast representation of the nodes nova uses
+
+`parsel.py`        - a renpy-inspired text adventure lang, self-encapsulated(AKA, not dependant on nova) and made from a copy of nova's tokenizer
+
 `parsel/nova.sublime-syntax` - highlighting for both languages
-`nova.sublime-build` - ctrl+b to run nova :)
+`parsel/nova.sublime-build` - ctrl+b to run them :)
 
 - Nova and Parsel are hand-rolled AST-walker(nova)/recursive descent(Parsel) interpreters
 - even then, somehow this monolith of stuff manages to run fast
@@ -25,25 +43,23 @@ sizes if you care about them
 ───────────────────────────────────────────────────────────────────────────────
 Language            Files       Lines    Blanks  Comments       Code Complexity
 ───────────────────────────────────────────────────────────────────────────────
-Python                  4       5,837       606       206      5,025        984
+Python                  4       5,742       606       206      4,930        985
 ───────────────────────────────────────────────────────────────────────────────
-novascript.py                   3,782       425       186      3,171        904
-parsel.py                       1,268         0         2      1,266          3
+novascript.py                   3,785       425       186      3,174        906
+parsel.py                       1,170         0         2      1,168          2
 nodes.py                          761       174        16        571         72
 nova.py                            26         7         2         17          5
 ───────────────────────────────────────────────────────────────────────────────
-Total                   4       5,837       606       206      5,025        984
+Total                   4       5,742       606       206      4,930        985
 ───────────────────────────────────────────────────────────────────────────────
 > cat examples/example.nova | wc -l
-562
-
+770
 ```
 
 ---
 
 ## Requirements
-- Python 3.8+
-- No external dependencies (pure Python-based interpreter)
+- Python 3.13+
 
 ---
 
@@ -113,7 +129,7 @@ end
 ```
 
 ## NovaScript Example(examples/pyqt6.nova)
-
+($ is just shorthand for `self.`, e.g: `$_setup()`->`self.setup()`)
 ```nova
 #!/usr/bin/env nova.py
 using load("PyQt6.QtWidgets")

@@ -18,7 +18,8 @@ from typing import List, Dict, Any, Optional, Union, Tuple, Callable
 class Token:
     __slots__ = ("type", "value", "file", "line", "column")
 
-    def __init__(self, type_: str, value: Any, file: str, line: int, column: int):
+    def __init__(self, type_: str, value: Any,
+                 file: str, line: int, column: int):
         self.type = type_
         self.value = value
         self.file = file
@@ -26,17 +27,15 @@ class Token:
         self.column = column
 
     def __repr__(self):
-        return (
-            f"Token({self.type}, {self.value!r}, {
-                self.file}:{self.line}:{self.column})"
-        )
+        return (f"Token({self.type}, {self.value!r}, " +
+                f"{self.file}:{self.line}:{self.column})")
 
 
 class ParselError(Exception):
     def __init__(self, token: Optional[Token], message: str):
         if token:
-            super().__init__(f"{token.file}:{
-                token.line}:{token.column} {message}")
+            super().__init__(
+                f"{token.file}:{token.line}:{token.column} {message}")
         else:
             super().__init__(message)
         self.token = token
@@ -58,15 +57,11 @@ def tokenize(source: str, file: str) -> List[Token]:
         "options",
         "begin",
         "goto",
-        "set",
-        "to",
-        "in",
         "if",
         "else",
         "elseif",
         "pause",
         "exit",
-        "import",
         "using",
         "true",
         "false",
@@ -389,7 +384,8 @@ class GotoStmt(Stmt):
 
 
 class PauseStmt(Stmt):
-    def __init__(self, token: Token):
+    def __init__(self, duration: Optional[Expr], token: Token):
+        self.duration = duration   # None means default (e.g., 2 seconds)
         self.token = token
 
 
@@ -402,15 +398,6 @@ class UsingStmt(Stmt):
     def __init__(self, name: str, token: Token):
         self.name = name
         self.token = token
-
-
-class ImportStmt(Stmt):
-    def __init__(self, path: str, alias: Optional[str], is_os: bool, token: Token):
-        self.path = path
-        self.alias = alias
-        self.is_os = is_os
-        self.token = token
-        self.body = []  # filled during parsing for .par imports
 
 
 class ExpressionStmt(Stmt):
@@ -429,7 +416,17 @@ class ParselParser:
         self.tokens = tokenize(source, filename)
         self.pos = 0
         self.filename = filename
-        self.import_cache = {}  # path -> ImportStmt (for inlining)
+
+    @classmethod
+    def parse_expr_from_string(cls, source: str, filename: str = "<string>"):
+        """Tokenize and parse a single expression from source."""
+        parser = cls(source, filename)
+        expr = parser.parse_expr()
+        # Ensure there are no leftover tokens
+        if parser.current() is not None:
+            raise ParselError(parser.current(),
+                              "Unexpected extra tokens after expression")
+        return expr
 
     def current(self) -> Optional[Token]:
         return self.tokens[self.pos] if self.pos < len(self.tokens) else None
@@ -481,8 +478,12 @@ class ParselParser:
             if kw == "if":
                 return self.parse_if()
             if kw == "pause":
-                self.consume()
-                return PauseStmt(tok)
+                pause_token = self.consume()
+                duration_expr = None
+                # Check if the next token is a number or an expression
+                if self.current() and self.current().type in ("number", "identifier", "("):
+                    duration_expr = self.parse_expr()
+                return PauseStmt(duration_expr, pause_token)
             if kw == "exit":
                 self.consume()
                 return ExitStmt(tok)
@@ -494,8 +495,6 @@ class ParselParser:
                 return self.parse_return()
             if kw == "using":
                 return self.parse_using()
-            if kw == "import":
-                return self.parse_import()
         # expression statement
         expr = self.parse_expr()
         return ExpressionStmt(expr, self.current() or tok)
@@ -607,58 +606,13 @@ class ParselParser:
         name = self.expect("identifier").value
         return UsingStmt(name, tok)
 
-    def parse_import(self) -> ImportStmt:
-        tok = self.consume()  # 'import'
-        path_tok = self.expect("string")
-        path = path_tok.value
-        alias = None
-        if self.current() and self.current().value == "as":
-            self.consume()
-            alias_tok = self.expect("identifier")
-            alias = alias_tok.value
-        if path.startswith("os:"):
-            # OS import – keep as node
-            return ImportStmt(path[3:], alias, True, tok)
-        else:
-            # File import – inline the module's AST
-            full_path = self.resolve_import_path(path)
-            if full_path in self.import_cache:
-                return self.import_cache[full_path]
-            # Parse the imported file
-            with open(full_path, "r", encoding="utf-8") as f:
-                source = f.read()
-            subparser = ParselParser(source, full_path)
-            subparser.import_cache = self.import_cache
-            body = subparser.parse()
-            stmt = ImportStmt(full_path, alias, False, tok)
-            stmt.body = body
-            self.import_cache[full_path] = stmt
-            return stmt
-
-    def resolve_import_path(self, path: str) -> str:
-        if path.endswith(".par"):
-            base = path
-        else:
-            base = path + ".par"
-        script_dir = os.path.dirname(self.filename)
-        candidates = [os.path.join(script_dir, base),
-                      os.path.join(os.getcwd(), base)]
-        for cand in candidates:
-            if os.path.isfile(cand):
-                return cand
-        raise ParselError(None, f"Import file not found: {path}")
-
     def parse_block_until(self, terminators: Union[str, List[str]]) -> List[Stmt]:
         if isinstance(terminators, str):
             terminators = [terminators]
         stmts = []
         while self.current() and self.current().value not in terminators:
             stmt = self.parse_stmt()
-            # Inline non-os imports
-            if isinstance(stmt, ImportStmt) and not stmt.is_os:
-                stmts.extend(stmt.body)
-            else:
-                stmts.append(stmt)
+            stmts.append(stmt)
         return stmts
 
     # Expression parsing (recursive descent, same as before)
@@ -891,11 +845,13 @@ class ParselRuntime:
         self.scene_stack: List[str] = []
         self.ast = ast
         self.filename = filename
-        self.loaded_modules: Dict[str, Any] = {}  # path -> exports dict
 
         # collect scenes
         for stmt in ast:
             if isinstance(stmt, SceneDecl):
+                if stmt.name in self.scenes:
+                    raise ParselError(
+                        stmt, "This scene has already been declared")
                 self.scenes[stmt.name] = stmt.body
 
         # built‑ins
@@ -903,67 +859,19 @@ class ParselRuntime:
         self.globals.define("input", input)
         self.globals.define("includes", lambda x, y: y in x)
         self.globals.define("nil", None)
-        self.globals.define("load", self._load_module)
         self.globals.define("fmtStr", lambda s, t: s.format(**t))
 
         # default handler for os: imports
         def os_import_handler(module_name: str) -> Any:
             try:
-                return importlib.import_module(module_name)
+                return importlib.import_module(
+                    module_name)
             except ImportError as e:
                 raise ParselError(
                     None, f"Could not import os module '{module_name}': {e}"
                 )
 
-        self.globals.define("os-import-handler", os_import_handler)
-
-    def _load_module(self, path: str) -> Dict[str, Any]:
-        """Load a .par file and return its exports (top‑level variables)."""
-        # resolve path
-        if path.endswith(".par"):
-            base = path
-        else:
-            base = path + ".par"
-        script_dir = os.path.dirname(self.filename)
-        candidates = [os.path.join(script_dir, base),
-                      os.path.join(os.getcwd(), base)]
-        full_path = None
-        for cand in candidates:
-            if os.path.isfile(cand):
-                full_path = cand
-                break
-        if not full_path:
-            raise ParselError(None, f"Module not found: {path}")
-
-        if full_path in self.loaded_modules:
-            return self.loaded_modules[full_path]
-
-        # parse the module
-        with open(full_path, "r", encoding="utf-8") as f:
-            source = f.read()
-        parser = ParselParser(source, full_path)
-        module_ast = parser.parse()
-
-        # execute module in a fresh environment (child of globals)
-        module_env = Environment(self.globals)
-        # we need a temporary runtime just to execute the module's statements?
-        # But we can reuse the current runtime's execute_stmt, passing module_env.
-        # However, we must avoid adding module's scenes to main scenes.
-        # We'll collect exports after execution.
-        for stmt in module_ast:
-            if isinstance(stmt, SceneDecl):
-                continue  # ignore scenes in modules
-            self.execute_stmt(stmt, module_env)
-
-        # collect exports (all vars except built‑ins)
-        exports = {}
-        builtins = {"print", "input", "load", "os-import-handler"}
-        for name, var in module_env.vars.items():
-            if name not in builtins and not name.startswith("_"):
-                exports[name] = var
-
-        self.loaded_modules[full_path] = exports
-        return exports
+        self.globals.define("import", os_import_handler)
 
     def run(self):
         # execute top‑level statements (non‑scene)
@@ -992,16 +900,19 @@ class ParselRuntime:
                 break
 
     def _run_scene(self, name: str):
+        # overwrite this part of the engine, if you want to add a gui
         env = Environment(self.globals)
-        for stmt in self.scenes[name]:
+        i = 0
+        while i < len(self.scenes[name]):
+            stmt = self.scenes[name][i]
             self.execute_stmt(stmt, env)
+            i += 1
 
     def execute_stmt(self, stmt: Stmt, env: Environment):
         if isinstance(stmt, VarDecl):
             val = self.evaluate_expr(stmt.init, env)
             env.define(stmt.name, val)
         elif isinstance(stmt, FuncDecl):
-
             def func_wrapper(*args):
                 func_env = Environment(env)
                 for i, param in enumerate(stmt.params):
@@ -1081,7 +992,18 @@ class ParselRuntime:
                                   stmt.scene}' not defined")
             raise GotoSignal(stmt.scene)
         elif isinstance(stmt, PauseStmt):
-            input("(Press Enter to continue)")
+            import time
+            if stmt.duration is None:
+                time.sleep(2)      # default 2 seconds
+            else:
+                dur = self.evaluate_expr(stmt.duration, env)
+                if not isinstance(dur, (int, float)):
+                    raise ParselError(stmt.token, f"Pause duration must be a number, got {
+                                      type(dur).__name__}")
+                if dur < 0:
+                    raise ParselError(
+                        stmt.token, "Pause duration cannot be negative")
+                time.sleep(dur)
         elif isinstance(stmt, ExitStmt):
             raise ExitSignal()
         elif isinstance(stmt, UsingStmt):
@@ -1098,18 +1020,7 @@ class ParselRuntime:
                     stmt.token, f"Cannot 'use' non-namespace value: {
                         stmt.name}"
                 )
-        elif isinstance(stmt, ImportStmt):
-            if stmt.is_os:
-                handler = self.globals.get("os-import-handler", stmt.token)
-                module = handler(stmt.path)
-                name = stmt.alias or stmt.path
-                env.define(name, module)
-            else:
-                # Inlined imports should not appear here (they were inlined during parsing)
-                # But if they do, we execute the body in a new environment and export?
-                # We'll just execute the body directly.
-                for s in stmt.body:
-                    self.execute_stmt(s, env)
+
         elif isinstance(stmt, ExpressionStmt):
             self.evaluate_expr(stmt.expr, env)
         else:
@@ -1124,9 +1035,13 @@ class ParselRuntime:
         if isinstance(expr, Identifier):
             return env.get(expr.name, expr.token)
         if isinstance(expr, BinaryExpr):
+            op = expr.op
+            if op == "&&":
+                return self.evaluate_expr(expr.left, env) and self.evaluate_expr(expr.right, env)
+            if op == "||":
+                return self.evaluate_expr(expr.left, env) or self.evaluate_expr(expr.right, env)
             left = self.evaluate_expr(expr.left, env)
             right = self.evaluate_expr(expr.right, env)
-            op = expr.op
             if op == "+":
                 return left + right
             if op == "-":
@@ -1151,10 +1066,6 @@ class ParselRuntime:
                 return left > right
             if op == ">=":
                 return left >= right
-            if op == "&&":
-                return left and right
-            if op == "||":
-                return left or right
             raise ParselError(expr.token, f"Unknown binary operator: {op}")
         if isinstance(expr, UnaryExpr):
             val = self.evaluate_expr(expr.right, env)
@@ -1230,38 +1141,45 @@ class ParselRuntime:
     def interpolate(self, text: str, env: Environment) -> str:
         def repl(match):
             expr_str = match.group(1).strip()
-            # Create a temporary parser for this expression
-            fake_source = f"{{_ = {expr_str}}}"
-            parser = ParselParser(fake_source, "<interpolate>")
-            expr = parser.parse_expr()
+            expr = ParselParser.parse_expr_from_string(
+                expr_str, "<interpolate>")
             val = self.evaluate_expr(expr, env)
             return str(val)
-
         return re.sub(r"\{\{(.+?)\}\}", repl, text)
 
 
-# ----------------------------------------------------------------------
-# Main
-# ----------------------------------------------------------------------
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python parsel.py <game.par>")
+    if len(sys.argv) not in (1, 2):
+        print("Usage: python parsel.py [game_directory]")
         sys.exit(1)
-    filename = sys.argv[1]
-    with open(filename, "r", encoding="utf-8") as f:
-        source = f.read()
-    parser = ParselParser(source, filename)
-    try:
+
+    root_dir = sys.argv[1] if len(sys.argv) == 2 else os.getcwd()
+
+    # 1. Collect all .par files, sorted alphabetically
+    par_files = []
+    for dirpath, dirs, filenames in os.walk(root_dir):
+        # Remove hidden directories from the search
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        for fname in filenames:
+            if fname.endswith(".par"):
+                par_files.append(os.path.join(dirpath, fname))
+
+    if not par_files:
+        print(f"No .par files found in {root_dir}.")
+        sys.exit(1)
+    par_files.sort()
+    # 2. Parse each file and combine ASTs
+    all_stmts = []
+    for fpath in par_files:
+        with open(fpath, "r", encoding="utf-8") as f:
+            source = f.read()
+        parser = ParselParser(source, fpath)
         ast = parser.parse()
-    except ParselError as e:
-        print(e)
-        sys.exit(1)
-    runtime = ParselRuntime(ast, filename)
-    try:
-        runtime.run()
-    except ParselError as e:
-        print(e)
-        sys.exit(1)
+        all_stmts.extend(ast)
+
+    # 3. Run the game with the combined AST
+    runtime = ParselRuntime(all_stmts, root_dir)
+    runtime.run()
 
 
 if __name__ == "__main__":

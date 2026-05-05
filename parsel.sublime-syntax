@@ -58,15 +58,15 @@ contexts:
     - match: \b(var|func|def|return|import|char|scene)\b
       scope: keyword.declaration.parsel
 
-    # Control flow and structural keywords: end, if, else, elseif, goto, pause, exit, begin, to, in
-    - match: \b(end|if|else|elseif|goto|pause|exit|begin|to|in)\b
+    # Control flow and structural keywords: end, if, else, elseif, goto, pause, exit, begin
+    - match: \b(end|if|else|elseif|goto|pause|exit|begin)\b
       scope: keyword.control.flow.parsel
 
-    # Ren'Py specific statement keywords: say, think, options, set
-    - match: \b(say|think|narrate|options|set)\b
+    # Ren'Py specific statement keywords: say, think, options
+    - match: \b(say|think|narrate|options)\b
       scope: keyword.statement.parsel
 
-    # The 'as' keyword used in 'import ... as' and 'say ... as'
+    # The 'as' keyword used in 'think ... as' and 'say ... as'
     - match: \bas\b\s+(\w+)
       captures:
         1: entity.name.label.parsel # Captures the alias/character name

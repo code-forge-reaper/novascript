@@ -1,0 +1,55 @@
+#!/usr/bin/env nova.py
+//novascript/examples/ppm.nova
+const boxBuilder = load("BoxBuilder")
+const sys = load("sys")
+func ec(s string) = Convert.toBytes(s, "ascii")
+const scl = 30
+const w = 16 * scl
+const h = 9 * scl
+print(w, h, w+h)
+const red = Convert.toArray('B',[255,0,0])
+const black = Convert.toArray('B',[0,0,0])
+
+
+const REPORT_STEP = 1000
+
+func report(x, y, w, h)
+    const processed = y * w + x + 1   // +1 because we're about to process pixel (x,y)
+    const total = w * h
+    const prog = processed / total
+    sys.stdout.write("\033[2K\033[A\033[2K {}/{:.5}\n[" % [
+        [processed, total],
+        prog * 100
+    ] + boxBuilder.Bar(processed, total, 40) + "]\r")
+end
+
+with Fs.open("output.ppm", {mode:"wb"}) as fd do
+	func write(c)
+		if Is.string(c)
+			fd.write(ec(c))
+		elseif Is.array(c)
+			fd.write(Convert.toByteArray(c))
+		else
+			fd.write(c)
+		end
+	end
+
+	write("P6 {} {} 255\n".format(w, h))
+	var count = 0
+	var buff = []
+	for y in range(h) do
+		for x in range(w) do
+			if count % REPORT_STEP == 0
+				report(x,y, w, h)
+			end
+			if (math.floor(x / scl) + math.floor(y / scl)) % 2
+				buff.extend(red)
+			else
+				buff.extend(black)
+			end
+			count+=1
+		end
+		write(buff)
+		buff.clear()
+	end
+end

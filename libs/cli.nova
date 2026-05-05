@@ -1,12 +1,12 @@
 // novascript/libs/cli.nova
-const boxBuilder = load("BoxBuilder")
 // the "py:" prefix just forces novascript to just import the python module
-// instead of going [local -> "<NS>/libs/" -> python]
+// instead of going [local -> "<NS>/libs/" -> python fallback]
 
 const sys = load("py:sys")
 
 export const ESC = "\033"
 
+// cursed object literals :)
 export const cursor = {
   up: def (n=1)      = sys.stdout.write(ESC + "[{}A".format(n))
   down: def (n=1)    = sys.stdout.write(ESC + "[{}B".format(n))
@@ -26,8 +26,3 @@ export const clear = {
   screen: def()      = sys.stdout.write(ESC + "[2J")
   to_end: def()      = sys.stdout.write(ESC + "[J")
 }
-
-
-for c in boxBuilder do
-  exports[c] = boxBuilder[c]
-end

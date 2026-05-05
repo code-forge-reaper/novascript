@@ -6,22 +6,9 @@
 const mlib = load("mathlib") // mlib is simple math utils that python doesn't add to the math module
 const sys = load("py:sys")
 /*
-This allows us to:
-- Precompute the max_width by simulating all lines first.
-- Apply transformations like centering during rendering, after knowing final widths.
-- More flexibility for future features (e.g., right-align, colors if you extend to ANSI).
-
-Instructions are stored as a list of dicts, like:
-{type: "text", content: "foo"}
-{type: "newline", sep: false}
-{type: "centered", content: "bar"}
-
-In EndBox:
-1. First pass: Simulate building lines to compute max_width.
-2. Second pass: Build actual rendered lines with padding/centering.
-
 my entire reason for making this, is for a stupid bit in a web story i was writting,
-it was meant for like, one, maybe two scenes, that's it
+it was meant for like, one, maybe two scenes, that's it.
+Just gonna leave this in novascript's included lib so i can re-use it sometime later.
 */
 
 const PADDING = 4
@@ -42,8 +29,24 @@ const ASCII = {
             MB: "┴"
 }
 
+
 export class BoxBuilder
     var instructions = []  // List of dicts for ops
+    /*
+    This allows us to:
+    - Precompute the max_width by simulating all lines first.
+    - Apply transformations like centering during rendering, after knowing final widths.
+    - More flexibility for future features (e.g., right-align, colors if you extend to ANSI).
+
+    Instructions are stored as a list of dicts, like:
+    {type: "text", content: "foo"}
+    {type: "newline", sep: false}
+    {type: "centered", content: "bar"}
+
+    In EndBox:
+    1. First pass: Simulate building lines to compute max_width.
+    2. Second pass: Build actual rendered lines with padding/centering.
+    */
     var max_width = 0      // Computed in EndBox now
 
     func AddText(content)

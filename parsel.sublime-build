@@ -1,0 +1,5 @@
+{
+	"cmd": ["parsel"],
+	"selector": "source.parsel",
+	"interactive": true,
+}

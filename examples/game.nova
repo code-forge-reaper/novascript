@@ -13,7 +13,7 @@ restoreRenderTarget()
 record p
   var x = 0
   var y = 0
-  func move(dt)
+  func move(dt float)
     self.x += axis(KEY_A, KEY_D) * 200 * dt
     self.y += axis(KEY_W, KEY_S) * 200 * dt
   end
