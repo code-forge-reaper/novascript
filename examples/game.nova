@@ -1,3 +1,5 @@
+// novascript/examples/game.nova
+
 const zcore = load("py:zcore/zcore")
 
 using [zcore.window,zcore.keys,zcore.draw]
@@ -7,7 +9,7 @@ const win = createWindow(800,600, "testing")
 const win2 = createRenderTarget(200,200)
 setRenderTarget(win)
 setRenderTarget(win2)
-clearBackground("red")
+clearBackground("#4f0f0f")
 restoreRenderTarget()
 
 record p

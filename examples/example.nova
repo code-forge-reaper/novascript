@@ -669,23 +669,20 @@ for i = 1,10, 0.2 do
 end
 /*
 => is .map, it creates a copy of the value behind it, and passes that to what you give it
-
+(i know this is overkill, but it's either this, or mutating the original dict)
     elif expr.operator == "=>":
         if not callable(right):
             raise NovaError(expr, f"right side of pipe expr must be a function")
-        if isinstance(left, dict):
-            clone = {}
-            for k, v in left.items():
+        clone = copy.deepcopy(left)
+        if isinstance(clone, dict):
+            for k, v in clone.items():
                 clone[k] = right(v, k)
-            return clone
-        elif isinstance(left, list):
-            clone = list(left)
-
-            for i, v in enumerate(left):
+        elif isinstance(clone, list):
+            for i, v in enumerate(clone):
                 clone[i] = right(v, i)
-            return clone
         else:
             raise NovaError(expr, "=> only works on arrays or objects")
+        return clone
 */
 print(stuff)
 stuff = stuff => def(val)=val*=2
@@ -725,7 +722,6 @@ data => def(value) = print(value)
 124
 */
 
-// this however, mutates the data itself
 var data2 = [{x:1}, {x:2}]
 print(data2)
 data2 => def(v)= v.x *= 2

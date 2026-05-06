@@ -7,7 +7,8 @@ const mlib = load("mathlib") // mlib is simple math utils that python doesn't ad
 const sys = load("py:sys")
 /*
 my entire reason for making this, is for a stupid bit in a web story i was writting,
-it was meant for like, one, maybe two scenes, that's it.
+it was meant for like, one, maybe two scenes, that's it
+(that's also why half the math looks drunkinly put toggether).
 Just gonna leave this in novascript's included lib so i can re-use it sometime later.
 */
 
@@ -93,8 +94,7 @@ export class BoxBuilder
             if instr.type == "text" || instr.type == "centered"
                 current_line += instr.content
             elseif instr.type == "box"
-                var sub_width = instr.width + PADDING
-                local_max = math.max(local_max, sub_width)
+                local_max = math.max(local_max, instr.width)
             elseif instr.type == "newline"
                 local_max = math.max(local_max, #current_line)
                 current_line = ""
@@ -127,21 +127,21 @@ export class BoxBuilder
             elseif instr.type == "box"
                 if current_line
                     rendered_lines.append(
-                        ASCII.V+" " + current_line.ljust(self.max_width) + " "+ASCII.V
+                        self.adjust(current_line)
                     )
                     current_line = ""
                 end
 
-                var rendered = instr.sub.RenderBox()
-                for line in rendered.split("\n") do
-                    rendered_lines.append(ASCII.V + " " + line.ljust(self.max_width) + " " + ASCII.V)
+                var rendered = instr.lines
+                for line in rendered do
+                    rendered_lines.append(self.adjust(line))
                 end
             elseif instr.type == "newline"
                 if current_line
-                    rendered_lines.append(ASCII.V+" " + current_line.ljust(self.max_width) + " "+ASCII.V)
+                    rendered_lines.append(self.adjust(current_line))
                     current_line = ""
                 else
-                    rendered_lines.append(ASCII.V+" " + " " * self.max_width + " "+ASCII.V)
+                    rendered_lines.append(self.adjust(""))
                 end
                 if instr.sep
                     rendered_lines.append(sep_border)
@@ -150,7 +150,7 @@ export class BoxBuilder
         end
 
         if current_line
-            rendered_lines.append(ASCII.V+" " + current_line.ljust(self.max_width) + " "+ASCII.V)
+            rendered_lines.append(self.adjust(current_line))
         end
 
         rendered_lines.append(bottom_border)
@@ -161,6 +161,9 @@ export class BoxBuilder
         self.max_width = 0
 
         return out
+    end
+    func adjust(s string)
+        return ASCII.V+" " + s.ljust(self.max_width) + " "+ASCII.V
     end
     func EndBox(printTo = sys.stdout)
         write(self.RenderBox(), printTo)
@@ -203,28 +206,33 @@ export func Indent(text, spaces = 2)
 
     return "\n".join(out)
 end
-
 export func Box(items, prepend = "")
     var inner = new BoxBuilder()
     for item in items do
-        if Is.string(item) && Has.inside(item,"\n")  // naive detection of multi-line
+        if Is.string(item) && Has.inside(item, "\n")
             for line in item.split("\n") do
                 inner.AddLine(prepend + line)
             end
         elseif Is.dict(item) && item.type
-            //print(item)
             inner.instructions.append(item)
         else
             inner.AddLine(prepend + Convert.toStr(item))
         end
     end
+    // Render the inner box completely and capture its output
+    var rendered = inner.RenderBox()
+    var lines = rendered.split("\n")
+    var max_width = 0
+    for line in lines do
+        max_width = math.max(max_width, #line)
+    end
     return {
         type: 'box',
-        sub: inner,
-        width: inner._compute_max_width()
-
+        lines: lines,
+        width: max_width   // full width including borders and internal padding
     }
 end
+
 // instructions is visible(scopping stuff)
 // if your function just needs to do one thing, i recomend you do this
 export func BoxStr(items, prepend="") = instructions.append(Box(items, prepend))

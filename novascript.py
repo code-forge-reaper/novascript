@@ -20,7 +20,7 @@ from nodes import *
 import uuid
 from collections.abc import Iterable, Callable
 import importlib, traceback
-
+import copy
 impLib = importlib.import_module
 
 __no_variable_set__ = object()
@@ -736,6 +736,10 @@ def init_globals(interpreter, globals_env):
         def listdir(path="."):
             return os.listdir(path)
 
+        @staticmethod
+        def isdir(path):
+            return os.path.isdir(path)
+
     class Uri:
         @staticmethod
         def decode(s):
@@ -777,6 +781,7 @@ def init_globals(interpreter, globals_env):
                 return time.perf_counter_ns() / 1_000_000_000
             else:
                 raise ValueError(f"unknown {resolution = }")
+    Time.sleep = staticmethod(time.sleep)
 
     class Object:
         @staticmethod
@@ -3297,7 +3302,6 @@ class Interpreter:
         return None
 
     def evaluate_expr(self, expr, env):
-        # print(expr)
         if expr.type == "Literal":
             return expr.value
         elif expr.type == "Identifier":
@@ -3484,19 +3488,16 @@ class Interpreter:
             elif expr.operator == "=>":
                 if not callable(right):
                     raise NovaError(expr, f"right side of pipe expr must be a function")
-                if isinstance(left, dict):
-                    clone = {}
-                    for k, v in left.items():
+                clone = copy.deepcopy(left)
+                if isinstance(clone, dict):
+                    for k, v in clone.items():
                         clone[k] = right(v, k)
-                    return clone
-                elif isinstance(left, list):
-                    clone = list(left)
-
-                    for i, v in enumerate(left):
+                elif isinstance(clone, list):
+                    for i, v in enumerate(clone):
                         clone[i] = right(v, i)
-                    return clone
                 else:
                     raise NovaError(expr, "=> only works on arrays or objects")
+                return clone
             else:
                 raise NovaError(expr, f"Unknown binary operator: {expr.operator}")
 
