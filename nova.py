@@ -2,7 +2,6 @@
 
 from novascript import Interpreter, NovaError
 import sys
-
 import os
 
 
@@ -17,7 +16,10 @@ def main():
             script_file = "/dev/stdin"
         else:
             raise ValueError("cannot set stdin as the file on this platform")
-    interpreter = Interpreter(script_file)
+    with open(script_file, "r", encoding="utf8") as f:
+        source = f.read()
+
+    interpreter = Interpreter(source, script_file)
     interpreter.interpret()
 
 

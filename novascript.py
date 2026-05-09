@@ -535,9 +535,10 @@ def init_globals(interpreter, globals_env):
         def toNumber(s):
             if not isinstance(s, str):
                 raise ValueError(f"this function expects a string, got {type(s)}")
-            elif not s.isdigit():
-                raise ValueError(f"'{s}' should be a digit")
-            return int(s) if "." not in s else float(s)
+            try:
+                return int(s)
+            except ValueError:
+                return float(s)
 
         @staticmethod
         def toStr(thing):
@@ -640,8 +641,9 @@ def init_globals(interpreter, globals_env):
         if file_path:
             if file_path in interpreter.modules_loaded:
                 return interpreter.modules_loaded[file_path]
-
-            imported_interpreter = Interpreter(file_path)
+            with open(file_path) as f:
+                source = f.read()
+            imported_interpreter = Interpreter(source, file_path)
             imported_env = Environment(globals_env)
             imported_env.define("exports", {})
             for k, v in env.items():
@@ -847,7 +849,6 @@ def init_globals(interpreter, globals_env):
     globals_env.define("Convert", Convert)
     globals_env.define("len", len)
     globals_env.define("hex", hex)
-    globals_env.define("fhex", float.hex)
     globals_env.define("json", json)
     globals_env.define("load", load)
     globals_env.define("range", range)
@@ -857,6 +858,14 @@ def init_globals(interpreter, globals_env):
     globals_env.define("nil", None, True)
     globals_env.define("Runtime", Runtime)
     globals_env.define("Uri", Uri)
+    globals_env.define("iter", iter)
+    def nx(iter: Iterator):
+        try:
+            return next(iter)
+        except StopIteration:
+            return None
+    nx.__name__ = "next"
+    globals_env.define("next", nx)
     globals_env.define("Fs", Fs)
     globals_env.define("Object", Object)
     globals_env.define("Time", Time)
@@ -938,10 +947,9 @@ class Interpreter:
         "compact",
     ]
 
-    def __init__(self, file_path):
+    def __init__(self, source, file_path):
+        self.source = source
         self.file = os.path.abspath(file_path)
-        with open(file_path, "r", encoding="utf8") as f:
-            self.source = f.read()
 
         self.tokens = self.tokenize(self.source, self.file)
         self.current = 0
@@ -1804,13 +1812,34 @@ class Interpreter:
                     and not self.get_next_token().value in ["default", "end"]
                 ):
                     case_expr = self.parse_expression()
+                    if self.get_next_token().value == ",":
+                        self.consume_token()
+                        case_expr = [case_expr]
+                        while (
+                            self.get_next_token()
+                            # and not self.get_next_token().type == "keyword"
+                            and not self.get_next_token().value == ":"
+                        ):
+                            case_expr.append(self.parse_expression())
+                            if (
+                                self.get_next_token()
+                                # and not self.get_next_token().type == "keyword"
+                                and self.get_next_token().value == ","
+                            ):
+                                self.expect_token(",")
+                                self.consume_token()
                     self.expect_token(":")
                     self.consume_token()
                     case_body = self.parse_block_until(["end"])
                     self.expect_token("end")
                     self.consume_token()
-                    c = Case(case_expr, case_body)
-                    cases.append(c)
+                    if isinstance(case_expr, list):
+                        for cc in case_expr:
+                            c = Case(cc, case_body)
+                            cases.append(c)
+                    else:
+                        c = Case(case_expr, case_body)
+                        cases.append(c)
 
                 if (
                     self.get_next_token()
@@ -2980,7 +3009,6 @@ class Interpreter:
             value = self.evaluate_expr(stmt.expression, env)
             matched = False
             default_case_body = None
-
             for case in stmt.cases:
                 if case.case_expr is None:  # This is the default case
                     default_case_body = case.body
@@ -2992,7 +3020,7 @@ class Interpreter:
                             return result
                         matched = True
                         break  # Exit switch after first match
-
+                        
             if not matched and default_case_body and not stmt.strict:
                 result = self.execute_block(default_case_body, Environment(env))
                 if isinstance(result, ControlFlow):
