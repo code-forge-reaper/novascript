@@ -67,6 +67,7 @@ def tokenize(source: str, file: str) -> List[Token]:
         "true",
         "false",
         "rng",
+        "between"
     }
     tokens = []
     i = 0
@@ -670,19 +671,20 @@ class ParselParser:
 
     def parse_assignment(self) -> Expr:
         left = self.parse_logical_or()
-        if (
-            self.current()
-            and self.current().type == "operator"
-            and self.current().value in ("=", "+=", "-=", "*=", "/=", "%=")
-        ):
+        if self.current() and self.current().type == "operator" and self.current().value in ("=", "+=", "-=", "*=", "/=", "%="):
             op_tok = self.consume()
             right = self.parse_assignment()
             if not isinstance(left, (Identifier, PropertyAccess, ArrayAccess)):
-                raise ParselError(left.token, f"Invalid assignment target: {
-                        type(left).__name__}")
-            return Assignment(left, right, op_tok)
+                raise ParselError(left.token, f"Invalid assignment target: {type(left).__name__}")
+            
+            if op_tok.value != "=":
+                # compound assignment: left = left op right
+                base_op = op_tok.value[:-1]   # e.g. '+' from '+=', '-' from '-='
+                binary = BinaryExpr(base_op, left, right, op_tok)
+                return Assignment(left, binary, op_tok)
+            else:
+                return Assignment(left, right, op_tok)
         return left
-
     def parse_logical_or(self) -> Expr:
         left = self.parse_logical_and()
         while self.current() and self.current().value == "||":
@@ -709,7 +711,7 @@ class ParselParser:
 
     def parse_comparison(self) -> Expr:
         left = self.parse_term()
-        while self.current() and self.current().value in ("<", "<=", ">", ">="):
+        while self.current() and self.current().value in ("<", "<=", ">", ">=", "between"):
             op_tok = self.consume()
             right = self.parse_term()
             left = BinaryExpr(op_tok.value, left, right, op_tok)
@@ -1140,6 +1142,8 @@ class ParselRuntime:
                 return left <= right
             if op == ">":
                 return left > right
+            if op == "between":
+                return left >= right[0] and left <= right[1]
             if op == ">=":
                 return left >= right
             raise ParselError(expr.token, f"Unknown binary operator: {op}")
