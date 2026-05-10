@@ -929,7 +929,7 @@ class Interpreter:
         "test",
         "failed",
         "defer",
-        "switch",
+        "matches",
         "strict",
         "default",
         "using",
@@ -1793,7 +1793,7 @@ class Interpreter:
                     token.column,
                 )
 
-            elif token.value == "switch":
+            elif token.value == "matches":
                 self.consume_token()
                 strict = False
                 if (

@@ -252,9 +252,9 @@ for m = 0, 5 do
     print("  Current m:", m)
 end
 
-// Switch-Case-Default
+// matches-Case-Default
 var day = "Wednesday"
-switch day
+matches day
     "Monday":
         print("Start of the week.")
     end
@@ -451,12 +451,12 @@ end
 var v1 = new Vector2(20,20)
 var v2 = new Vector2(50,20)
 print("vector math : v1 + v2 = ",v1+v2)
-// this test the "switch" statement, as well as arrow/pipe("->")
+// this test the "matches" statement, as well as arrow/pipe("->")
 test
     var v = 24
     for i=0, 10 do
         v += i
-        switch strict v
+        matches strict v
             24:
                 print("  v is 24")
             end
@@ -490,7 +490,7 @@ test
     v = 10
     for i=0, 10 do
         v += i
-        switch v
+        matches v
             24:
                 print("  v is 24")
             end

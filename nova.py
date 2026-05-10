@@ -12,12 +12,11 @@ def main():
 
     script_file = sys.argv[1]
     if script_file == "-":
-        if sys.platform == "linux":
-            script_file = "/dev/stdin"
-        else:
-            raise ValueError("cannot set stdin as the file on this platform")
-    with open(script_file, "r", encoding="utf8") as f:
-        source = f.read()
+        source = sys.stdin.read()
+        script_file = "<stdin>"
+    else:
+        with open(script_file, "r", encoding="utf8") as f:
+            source = f.read()
 
     interpreter = Interpreter(source, script_file)
     interpreter.interpret()
