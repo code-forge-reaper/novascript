@@ -43,17 +43,17 @@ sizes if you care about them
 ───────────────────────────────────────────────────────────────────────────────
 Language            Files       Lines    Blanks  Comments       Code Complexity
 ───────────────────────────────────────────────────────────────────────────────
-Python                  4       5,742       606       206      4,930        985
+Python                  4       5,788       603       207      4,978        994
 ───────────────────────────────────────────────────────────────────────────────
-novascript.py                   3,785       425       186      3,174        906
-parsel.py                       1,170         0         2      1,168          2
+novascript.py                   3,814       422       187      3,205        915
+parsel.py                       1,186         0         2      1,184          2
 nodes.py                          761       174        16        571         72
-nova.py                            26         7         2         17          5
+nova.py                            27         7         2         18          5
 ───────────────────────────────────────────────────────────────────────────────
-Total                   4       5,742       606       206      4,930        985
+Total                   4       5,788       603       207      4,978        994
 ───────────────────────────────────────────────────────────────────────────────
 > cat examples/example.nova | wc -l
-770
+766
 ```
 
 ---
@@ -65,7 +65,19 @@ Total                   4       5,742       606       206      4,930        985
 
 ## Parsel example
 (this isn't a good language example, but it works for an example of what you can do)
-```par
+```txt
+[23:23:04] cross@endeavourOS /home/cross/Documents/projects/novascript
+> cd ../sample
+[23:23:06] cross@endeavourOS /home/cross/Documents/projects/sample
+> ls *.par
+► data.par :
+data.par
+
+
+► main.par :
+main.par
+[23:23:09] cross@endeavourOS /home/cross/Documents/projects/sample
+> cat data.par
 var player = {
     inventory: [],
     visitedScenes:{}
@@ -88,7 +100,8 @@ func visited(name, checking)
     end
     return false
 end
-
+[23:23:15] cross@endeavourOS /home/cross/Documents/projects/sample
+> cat main.par
 scene "start"
     goto "bedroom"
 end
@@ -105,7 +118,6 @@ scene "bedroom"
         "Check cabinet" if !has("key") begin
             narrate "You check the cabinet, and find a key"
             give("key")
-            return
         end
         "Check the door" begin
             narrate "You walk up to the door and try to open it, only to find that it is locked"
@@ -126,6 +138,38 @@ scene "escape"
     narrate "You escaped"
     exit
 end
+[23:23:19] cross@endeavourOS /home/cross/Documents/projects/sample
+> cp ../novascript/parsel.py .
+[23:23:22] cross@endeavourOS /home/cross/Documents/projects/sample
+> python parsel.py
+You wake up in a dark bedroom, dust covers the entire room.
+You see a locked door and a cabinet nearby
+You:...
+Choose an option:
+1) Check cabinet
+2) Check the door
+Choice: 2
+You walk up to the door and try to open it, only to find that it is locked
+If only you had a key...
+The bedroom is still filled with dust
+You:...
+Choose an option:
+1) Check cabinet
+2) Check the door
+Choice: 1
+You check the cabinet, and find a key
+The bedroom is still filled with dust
+You:...
+Choose an option:
+1) Check the door
+Choice: 1
+You walk up to the door and try to open it, only to find that it is locked
+Fortunately, you have a key
+You place key in the lock, and turn it.
+When you open it, you are greeted with the moonlit street.
+You escaped
+[23:23:28] cross@endeavourOS /home/cross/Documents/projects/sample
+>
 ```
 
 ## NovaScript Example(examples/pyqt6.nova)

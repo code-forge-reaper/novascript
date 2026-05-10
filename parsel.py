@@ -9,6 +9,7 @@ import os
 import re
 import importlib
 from typing import List, Dict, Any, Optional, Union, Tuple, Callable
+import random
 
 # ----------------------------------------------------------------------
 # Tokenizer (copied from NovaScript)
@@ -18,8 +19,7 @@ from typing import List, Dict, Any, Optional, Union, Tuple, Callable
 class Token:
     __slots__ = ("type", "value", "file", "line", "column")
 
-    def __init__(self, type_: str, value: Any,
-                 file: str, line: int, column: int):
+    def __init__(self, type_: str, value: Any, file: str, line: int, column: int):
         self.type = type_
         self.value = value
         self.file = file
@@ -27,15 +27,16 @@ class Token:
         self.column = column
 
     def __repr__(self):
-        return (f"Token({self.type}, {self.value!r}, " +
-                f"{self.file}:{self.line}:{self.column})")
+        return (
+            f"Token({self.type}, {self.value!r}, "
+            + f"{self.file}:{self.line}:{self.column})"
+        )
 
 
 class ParselError(Exception):
     def __init__(self, token: Optional[Token], message: str):
         if token:
-            super().__init__(
-                f"{token.file}:{token.line}:{token.column} {message}")
+            super().__init__(f"{token.file}:{token.line}:{token.column} {message}")
         else:
             super().__init__(message)
         self.token = token
@@ -65,6 +66,7 @@ def tokenize(source: str, file: str) -> List[Token]:
         "using",
         "true",
         "false",
+        "rng",
     }
     tokens = []
     i = 0
@@ -123,9 +125,8 @@ def tokenize(source: str, file: str) -> List[Token]:
             "&&",
             "||",
         ]
-        if i + 1 < length and source[i: i + 2] in two_char_ops:
-            tokens.append(
-                Token("operator", source[i: i + 2], file, line, start_col))
+        if i + 1 < length and source[i : i + 2] in two_char_ops:
+            tokens.append(Token("operator", source[i : i + 2], file, line, start_col))
             i += 2
             col += 2
             continue
@@ -190,18 +191,15 @@ def tokenize(source: str, file: str) -> List[Token]:
                 i += 1
                 col += 1
             if ident in ("true", "false"):
-                tokens.append(Token("boolean", ident ==
-                              "true", file, line, start_col))
+                tokens.append(Token("boolean", ident == "true", file, line, start_col))
             elif ident in keywords:
                 tokens.append(Token("keyword", ident, file, line, start_col))
             else:
-                tokens.append(
-                    Token("identifier", ident, file, line, start_col))
+                tokens.append(Token("identifier", ident, file, line, start_col))
             continue
 
         raise ParselError(
-            Token("error", ch, file, line,
-                  start_col), f"Unexpected character: {ch}"
+            Token("error", ch, file, line, start_col), f"Unexpected character: {ch}"
         )
 
     return tokens
@@ -344,7 +342,7 @@ class NarrateStmt(Stmt):
 
 
 class ThinkStmt(Stmt):
-    def __init__(self, text: str, character: Identifier, token: Token):
+    def __init__(self, text: str, character: Expr, token: Token):
         self.text = text
         self.character = character
         self.token = token
@@ -363,16 +361,26 @@ class OptionsBlock(Stmt):
         self.token = token
 
 
+class RngStmt(Stmt):
+    def __init__(
+        self,
+        weighted_entries: List[tuple[int, list[Stmt]]],
+        uniform_entries: List[Stmt],
+        token: Token,
+    ):
+        self.weighted_entries = weighted_entries
+        self.uniform_entries = uniform_entries
+        self.token = token
+
+
 class IfStmt(Stmt):
     def __init__(
         self,
-        cond: Expr,
-        then_body: List[Stmt],
+        branches: List[Tuple[Expr, List[Stmt]]],
         else_body: Optional[List[Stmt]],
         token: Token,
     ):
-        self.cond = cond
-        self.then_body = then_body
+        self.branches = branches
         self.else_body = else_body
         self.token = token
 
@@ -385,7 +393,7 @@ class GotoStmt(Stmt):
 
 class PauseStmt(Stmt):
     def __init__(self, duration: Optional[Expr], token: Token):
-        self.duration = duration   # None means default (e.g., 2 seconds)
+        self.duration = duration  # None means default (e.g., 2 seconds)
         self.token = token
 
 
@@ -424,8 +432,9 @@ class ParselParser:
         expr = parser.parse_expr()
         # Ensure there are no leftover tokens
         if parser.current() is not None:
-            raise ParselError(parser.current(),
-                              "Unexpected extra tokens after expression")
+            raise ParselError(
+                parser.current(), "Unexpected extra tokens after expression"
+            )
         return expr
 
     def current(self) -> Optional[Token]:
@@ -477,11 +486,17 @@ class ParselParser:
                 return self.parse_goto()
             if kw == "if":
                 return self.parse_if()
+            if kw == "rng":
+                return self.parse_rng()
             if kw == "pause":
                 pause_token = self.consume()
                 duration_expr = None
                 # Check if the next token is a number or an expression
-                if self.current() and self.current().type in ("number", "identifier", "("):
+                if self.current() and self.current().type in (
+                    "number",
+                    "identifier",
+                    "(",
+                ):
                     duration_expr = self.parse_expr()
                 return PauseStmt(duration_expr, pause_token)
             if kw == "exit":
@@ -504,6 +519,31 @@ class ParselParser:
         name = self.expect("identifier").value
         display = self.parse_expr()
         return CharDecl(name, display, tok)
+
+    def parse_rng(self) -> RngStmt:
+        tok = self.consume()  # rng
+        if self.current():
+            if self.current().value == "{":
+                self.consume()
+                act = []
+                while self.current() and self.current().value != "}":
+                    num = int(self.expect("number").value)
+                    self.expect("operator", ":")
+                    self.expect("keyword", "begin")
+                    body = self.parse_block_until(["end"])
+                    self.expect("keyword", "end")
+                    act.append((num, body))
+                self.expect("operator", "}")
+                return RngStmt(act, [], tok)
+            elif self.current().value == "[":
+                self.consume()
+                body = []
+                while self.current() and self.current().value != "]":
+                    self.expect("keyword", "begin")
+                    body.append(self.parse_block_until(["end"]))
+                    self.expect("keyword", "end")
+                self.expect("operator", "]")
+                return RngStmt([], body, tok)
 
     def parse_scene(self) -> SceneDecl:
         tok = self.consume()  # 'scene'
@@ -531,8 +571,8 @@ class ParselParser:
         tok = self.consume()  # 'think'
         text = self.expect("string").value
         self.expect("keyword", "as")
-        char_tok = self.expect("identifier")
-        return ThinkStmt(text, Identifier(char_tok.value, char_tok), tok)
+        char_tok = self.parse_expr()
+        return ThinkStmt(text, char_tok, tok)
 
     def parse_options(self) -> OptionsBlock:
         tok = self.consume()  # 'options'
@@ -554,17 +594,26 @@ class ParselParser:
         tok = self.consume()  # 'goto'
         scene = self.expect("string").value
         return GotoStmt(scene, tok)
-
     def parse_if(self) -> IfStmt:
         tok = self.consume()  # 'if'
+        branches = []
+        # first branch
         cond = self.parse_expr()
-        then_body = self.parse_block_until(["else", "end"])
+        then_body = self.parse_block_until(["elseif", "else", "end"])
+        branches.append((cond, then_body))
+        # additional elseif branches
+        while self.current() and self.current().value == "elseif":
+            self.consume()  # 'elseif'
+            cond = self.parse_expr()
+            then_body = self.parse_block_until(["elseif", "else", "end"])
+            branches.append((cond, then_body))
+        # optional else
         else_body = None
         if self.current() and self.current().value == "else":
             self.consume()  # 'else'
             else_body = self.parse_block_until("end")
         self.expect("keyword", "end")
-        return IfStmt(cond, then_body, else_body, tok)
+        return IfStmt(branches, else_body, tok)
 
     def parse_var(self) -> VarDecl:
         tok = self.consume()  # 'var'
@@ -629,10 +678,8 @@ class ParselParser:
             op_tok = self.consume()
             right = self.parse_assignment()
             if not isinstance(left, (Identifier, PropertyAccess, ArrayAccess)):
-                raise ParselError(
-                    left.token, f"Invalid assignment target: {
-                        type(left).__name__}"
-                )
+                raise ParselError(left.token, f"Invalid assignment target: {
+                        type(left).__name__}")
             return Assignment(left, right, op_tok)
         return left
 
@@ -850,8 +897,7 @@ class ParselRuntime:
         for stmt in ast:
             if isinstance(stmt, SceneDecl):
                 if stmt.name in self.scenes:
-                    raise ParselError(
-                        stmt, "This scene has already been declared")
+                    raise ParselError(stmt, "This scene has already been declared")
                 self.scenes[stmt.name] = stmt.body
 
         # built‑ins
@@ -864,8 +910,7 @@ class ParselRuntime:
         # default handler for os: imports
         def os_import_handler(module_name: str) -> Any:
             try:
-                return importlib.import_module(
-                    module_name)
+                return importlib.import_module(module_name)
             except ImportError as e:
                 raise ParselError(
                     None, f"Could not import os module '{module_name}': {e}"
@@ -913,6 +958,7 @@ class ParselRuntime:
             val = self.evaluate_expr(stmt.init, env)
             env.define(stmt.name, val)
         elif isinstance(stmt, FuncDecl):
+
             def func_wrapper(*args):
                 func_env = Environment(env)
                 for i, param in enumerate(stmt.params):
@@ -951,6 +997,27 @@ class ParselRuntime:
             who = self.evaluate_expr(stmt.character, env)
             text = self.interpolate(stmt.text, env)
             print(f"{who}: *{text}*")
+
+        elif isinstance(stmt, RngStmt):
+            if stmt.weighted_entries:
+                roll = random.randint(1, 100)
+                for (
+                    weight,
+                    body,
+                ) in stmt.weighted_entries:  # assuming tuple (weight, body)
+                    if roll <= weight:
+                        for sub_stmt in body:
+                            self.execute_stmt(sub_stmt, env)
+                        break  # stop after first match
+                # if no match, do nothing (move on)
+            else:
+                # uniform entries
+                chosen_body = random.choice(
+                    stmt.uniform_entries
+                )  # each is a list of statements
+                for sub_stmt in chosen_body:
+                    self.execute_stmt(sub_stmt, env)
+
         elif isinstance(stmt, OptionsBlock):
             available = []
             for ch in stmt.choices:
@@ -979,11 +1046,16 @@ class ParselRuntime:
                     print(f"Invalid choice: {raw}")
                 except EOFError:
                     sys.exit(0)
+
         elif isinstance(stmt, IfStmt):
-            if self.evaluate_expr(stmt.cond, env):
-                for sub in stmt.then_body:
-                    self.execute_stmt(sub, env)
-            elif stmt.else_body:
+            executed = False
+            for cond, body in stmt.branches:
+                if self.evaluate_expr(cond, env):
+                    for sub in body:
+                        self.execute_stmt(sub, env)
+                    executed = True
+                    break
+            if not executed and stmt.else_body:
                 for sub in stmt.else_body:
                     self.execute_stmt(sub, env)
         elif isinstance(stmt, GotoStmt):
@@ -993,16 +1065,18 @@ class ParselRuntime:
             raise GotoSignal(stmt.scene)
         elif isinstance(stmt, PauseStmt):
             import time
+
             if stmt.duration is None:
-                time.sleep(2)      # default 2 seconds
+                time.sleep(2)  # default 2 seconds
             else:
                 dur = self.evaluate_expr(stmt.duration, env)
                 if not isinstance(dur, (int, float)):
-                    raise ParselError(stmt.token, f"Pause duration must be a number, got {
-                                      type(dur).__name__}")
-                if dur < 0:
                     raise ParselError(
-                        stmt.token, "Pause duration cannot be negative")
+                        stmt.token, f"Pause duration must be a number, got {
+                                      type(dur).__name__}"
+                    )
+                if dur < 0:
+                    raise ParselError(stmt.token, "Pause duration cannot be negative")
                 time.sleep(dur)
         elif isinstance(stmt, ExitStmt):
             raise ExitSignal()
@@ -1016,10 +1090,8 @@ class ParselRuntime:
                 for name, var in namespace.vars.items():
                     env.define(name, var)
             else:
-                raise ParselError(
-                    stmt.token, f"Cannot 'use' non-namespace value: {
-                        stmt.name}"
-                )
+                raise ParselError(stmt.token, f"Cannot 'use' non-namespace value: {
+                        stmt.name}")
 
         elif isinstance(stmt, ExpressionStmt):
             self.evaluate_expr(stmt.expr, env)
@@ -1037,9 +1109,13 @@ class ParselRuntime:
         if isinstance(expr, BinaryExpr):
             op = expr.op
             if op == "&&":
-                return self.evaluate_expr(expr.left, env) and self.evaluate_expr(expr.right, env)
+                return self.evaluate_expr(expr.left, env) and self.evaluate_expr(
+                    expr.right, env
+                )
             if op == "||":
-                return self.evaluate_expr(expr.left, env) or self.evaluate_expr(expr.right, env)
+                return self.evaluate_expr(expr.left, env) or self.evaluate_expr(
+                    expr.right, env
+                )
             left = self.evaluate_expr(expr.left, env)
             right = self.evaluate_expr(expr.right, env)
             if op == "+":
@@ -1090,16 +1166,13 @@ class ParselRuntime:
                 idx = self.evaluate_expr(target.index, env)
                 obj[idx] = val
             else:
-                raise ParselError(
-                    expr.token, f"Invalid assignment target: {
-                        type(target).__name__}"
-                )
+                raise ParselError(expr.token, f"Invalid assignment target: {
+                        type(target).__name__}")
             return val
         if isinstance(expr, FuncCall):
             func = env.get(expr.name, expr.token)
             if not callable(func):
-                raise ParselError(
-                    expr.token, f"'{expr.name}' is not a function")
+                raise ParselError(expr.token, f"'{expr.name}' is not a function")
             args = [self.evaluate_expr(a, env) for a in expr.args]
             return func(*args)
         if isinstance(expr, MethodCall):
@@ -1108,10 +1181,8 @@ class ParselRuntime:
             if method is None and isinstance(obj, dict):
                 method = obj.get(expr.method)
             if not callable(method):
-                raise ParselError(
-                    expr.token, f"Method '{
-                        expr.method}' not found or not callable"
-                )
+                raise ParselError(expr.token, f"Method '{
+                        expr.method}' not found or not callable")
             args = [self.evaluate_expr(a, env) for a in expr.args]
             return method(*args)
         if isinstance(expr, PropertyAccess):
@@ -1133,18 +1204,16 @@ class ParselRuntime:
             for key, val_expr in expr.props:
                 obj[key] = self.evaluate_expr(val_expr, env)
             return obj
-        raise ParselError(
-            getattr(expr, "token", None), f"Unknown expression: {
-                type(expr).__name__}"
-        )
+        raise ParselError(getattr(expr, "token", None), f"Unknown expression: {
+                type(expr).__name__}")
 
     def interpolate(self, text: str, env: Environment) -> str:
         def repl(match):
             expr_str = match.group(1).strip()
-            expr = ParselParser.parse_expr_from_string(
-                expr_str, "<interpolate>")
+            expr = ParselParser.parse_expr_from_string(expr_str, "<interpolate>")
             val = self.evaluate_expr(expr, env)
             return str(val)
+
         return re.sub(r"\{\{(.+?)\}\}", repl, text)
 
 
@@ -1159,7 +1228,7 @@ def main():
     par_files = []
     for dirpath, dirs, filenames in os.walk(root_dir):
         # Remove hidden directories from the search
-        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
         for fname in filenames:
             if fname.endswith(".par"):
                 par_files.append(os.path.join(dirpath, fname))
