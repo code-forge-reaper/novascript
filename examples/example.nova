@@ -481,7 +481,7 @@ const s = 60
 */
 "-> takes what is before it, and passes into what is after it" -> print
 
-enum BunchOfTypes {
+const BunchOfTypes = enum {
     String Integer FloatingPoint
 }
 print(BunchOfTypes)

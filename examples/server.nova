@@ -21,6 +21,11 @@ define ResponseType = {
 this is still a multiline string
 which adds \n
 i know this because **i made the fucking language**
+
+> echo 'print("this
+  multi-line
+  string".split("\n"))' | nova.py -
+['this', 'multi-line', 'string']
 */
 
 const basicHttp = "HTTP/1.1 {} {}\r

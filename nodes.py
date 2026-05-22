@@ -1,7 +1,6 @@
 # --- Control Flow Classes ---
 class ControlFlow:
     """Base class for control flow signals"""
-
     pass
 
 
@@ -427,8 +426,6 @@ class ClassDefinition(Statement):
         class_str += f"{current_indent}end"
         return class_str
 
-
-# Add this class along with ClassDecl
 class ObjectDecl(Statement):
     def __init__(self, name, body, file, line, column):
         super().__init__("ObjectDecl", file, line, column)
@@ -546,20 +543,20 @@ class IfStmt(Statement):
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
-        s = f"{current_indent}if {self.condition.__str__(indent_level)} do\n"
+        s = f"{current_indent}if {self.condition.__str__(indent_level)}\n"
         s += "\n".join(stmt.__str__(indent_level + 1)
                        for stmt in self.then_block)
 
         if self.else_if:
             for elseif_block in self.else_if:
                 s += f"\n{current_indent}elseif {
-                    elseif_block['condition'].__str__(indent_level)} do\n"
+                    elseif_block['condition'].__str__(indent_level)}\n"
                 s += "\n".join(
                     stmt.__str__(indent_level + 1) for stmt in elseif_block["body"]
                 )
 
         if self.else_block:
-            s += f"\n{current_indent}else do\n"
+            s += f"\n{current_indent}else\n"
             s += "\n".join(stmt.__str__(indent_level + 1)
                            for stmt in self.else_block)
 
@@ -604,7 +601,7 @@ class ForEachStmt(Statement):
         current_indent = INDENT_STEP * indent_level
         body_str = "\n".join(stmt.__str__(indent_level + 1)
                              for stmt in self.body)
-        return f"{current_indent}forEach {self.variable} in {self.list.__str__(indent_level)} do\n{body_str}\n{current_indent}end"
+        return f"{current_indent}for {self.variable} in {self.list.__str__(indent_level)} do\n{body_str}\n{current_indent}end"
 
 
 # wraps "@thing\ndef _():..."
@@ -633,18 +630,17 @@ class ForStmt(Statement):
         )
 
 
-class EnumDef(Statement):
-    def __init__(self, name, values, file, line, column):
+class EnumDef(Expression):
+    def __init__(self, values, file, line, column):
         super().__init__("EnumDef", file, line, column)
         self.values = values
-        self.name = name
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
         next_indent = INDENT_STEP * (indent_level + 1)
         values_str = ",\n".join(
             f"{next_indent}{value}" for value in self.values)
-        return f"{current_indent}enum {self.name} {{\n{values_str}\n{current_indent}}}"
+        return f"{current_indent}enum  {{\n{values_str}\n{current_indent}}}"
 
 
 class ScopeStmt(Statement):
@@ -657,7 +653,7 @@ class ScopeStmt(Statement):
         current_indent = INDENT_STEP * indent_level
         body_str = "\n".join(stmt.__str__(indent_level + 1)
                              for stmt in self.body)
-        return f"{current_indent}scope {self.name} do\n{body_str}\n{current_indent}end"
+        return f"{current_indent}scope {self.name}\n{body_str}\n{current_indent}end"
 
 
 class SwitchStmt(Statement):
@@ -672,8 +668,8 @@ class SwitchStmt(Statement):
         cases_str = "\n".join(case.__str__(indent_level + 1)
                               for case in self.cases)
         if self.strict:
-            return f"{current_indent}switch strict {self.expression.__str__(indent_level)} do\n{cases_str}\n{current_indent}end"
-        return f"{current_indent}switch {self.expression.__str__(indent_level)} do\n{cases_str}\n{current_indent}end"
+            return f"{current_indent}switch strict {self.expression.__str__(indent_level)}\n{cases_str}\n{current_indent}end"
+        return f"{current_indent}switch {self.expression.__str__(indent_level)}\n{cases_str}\n{current_indent}end"
 
 
 class ReturnStmt(Statement):
@@ -713,7 +709,7 @@ class FuncDecl(Statement):
                                for p in self.parameters)
         body_str = "\n".join(stmt.__str__(indent_level + 1)
                              for stmt in self.body)
-        return f"{current_indent}func {self.name}({params_str}) do\n{body_str}\n{current_indent}end"
+        return f"{current_indent}func {self.name}({params_str}) \n{body_str}\n{current_indent}end"
 
 
 class WithStmt(Statement):
@@ -744,7 +740,7 @@ class LambdaDecl(
         body_str = "\n".join(stmt.__str__(indent_level + 1)
                              for stmt in self.body)
         # Lambda is an expression, so it doesn't get the outer indent, but its body does.
-        return f"def ({params_str}) do\n{body_str}\n{INDENT_STEP * indent_level}end"
+        return f"def ({params_str})\n{body_str}\n{INDENT_STEP * indent_level}end"
 
 
 class UsingStmt(Statement):

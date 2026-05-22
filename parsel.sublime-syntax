@@ -55,7 +55,7 @@ contexts:
 
   keywords:
     # Declarations: var, func, def, return, import, char, scene
-    - match: \b(var|func|def|return|import|char|scene)\b
+    - match: \b(var|rng|func|def|return|import|char|scene)\b
       scope: keyword.declaration.parsel
 
     # Control flow and structural keywords: end, if, else, elseif, goto, pause, exit, begin
@@ -111,7 +111,7 @@ contexts:
 
   operators:
     # Two-character operators (assignment, equality, logical, comparison)
-    - match: '==|!=|<=|>=|\+=|-=|\*=|/=|%=|&&|\|\|'
+    - match: '==|!=|<=|>=|\+=|between|-=|\*=|/=|%=|&&|\|\|'
       scope: keyword.operator.parsel
     # Single-character operators (assignment, arithmetic, comparison, logical NOT, member access)
     - match: '[=+\-*/%<>!.]'

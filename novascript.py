@@ -25,6 +25,19 @@ impLib = importlib.import_module
 
 __no_variable_set__ = object()
 
+class FuncWrapp:
+    def __init__(self, func, desc_repr, desc_str):
+        self.func = func
+        self.desc_repr = desc_repr
+        self.desc_str = desc_str
+
+    def __call__(self, *args, **kw):
+        return self.func(*args,**kw)
+
+    def __str__(self):
+        return self.desc_str()
+    def __repr__(self):
+        return self.desc_repr()
 
 class Var:
     def __init__(self, name, value, const=False, annotation=None):
@@ -35,7 +48,7 @@ class Var:
 
     def __repr__(self):
         const_flag = "const " if self.const else ""
-        type_info = f":{self.type_annotation} " if self.type_annotation else ""
+        type_info = f" {self.type_annotation} " if self.type_annotation else ""
         return f"Var({const_flag}{self.name}{type_info}= {self.value!r})"
 
 
@@ -639,7 +652,7 @@ def init_globals(interpreter, globals_env):
 
         # ── If Nova module found → load it ──
         if file_path:
-            if file_path in interpreter.modules_loaded:
+            if file_path in interpreter.modules_loaded and "ignore loaded module" not in env:
                 return interpreter.modules_loaded[file_path]
             with open(file_path) as f:
                 source = f.read()
@@ -655,8 +668,8 @@ def init_globals(interpreter, globals_env):
             imported_interpreter.interpret()
 
             result = {k: v for k, v in imported_env.get("exports").value.items()}
-
-            interpreter.modules_loaded[file_path] = result
+            if "ignore loaded module" not in env:
+                interpreter.modules_loaded[file_path] = result
             return result
 
         # ── Fallback: Python import (LAST RESORT) ──
@@ -2095,27 +2108,6 @@ class Interpreter:
                     token.column,
                 )
 
-            elif token.value == "enum":
-                self.consume_token()
-                name = self.expect_type("identifier")
-                self.consume_token()
-                self.expect_token("{")
-                self.consume_token()
-                values = []
-                while self.get_next_token() and self.get_next_token().value != "}":
-                    v = self.expect_type("identifier").value
-                    if v in values:
-                        raise NovaError(token, "Enum values must be unique.")
-                    values.append(v)
-                    self.consume_token()
-                self.expect_token("}")
-                self.consume_token()
-
-                if len(values) < 1:
-                    raise NovaError(token, "Enum must have at least one value.")
-
-                return EnumDef(name.value, values, token.file, token.line, token.column)
-
             elif token.value == "return":
                 self.consume_token()
                 return_expression = None
@@ -2584,6 +2576,25 @@ class Interpreter:
         elif token.type == "identifier":
             self.consume_token()
             node = Identifier(token.value, token.file, token.line, token.column)
+        elif token.value == "enum":
+            self.consume_token()
+            self.expect_token("{")
+            self.consume_token()
+            values = []
+            while self.get_next_token() and self.get_next_token().value != "}":
+                v = self.expect_type("identifier").value
+                if v in values:
+                    raise NovaError(token, "Enum values must be unique.")
+                values.append(v)
+                self.consume_token()
+            self.expect_token("}")
+            self.consume_token()
+
+            if len(values) < 1:
+                raise NovaError(token, "Enum must have at least one value.")
+
+            node = EnumDef(values, token.file, token.line, token.column)
+
         elif token.type == "keyword" and token.value == "new":
             self.consume_token()  # consume 'new'
             # Parse the fully qualified class name, e.g., "module.sub.ClassName"
@@ -2878,19 +2889,32 @@ class Interpreter:
 
             for member in stmt.body:
                 if member.type == "FuncDecl":
-                    # Treat functions inside 'object' as instance methods
-                    # Note: You may want to check for a 'constructor' or 'init' name
-                    method_def = MethodDefinition(
-                        member.name,
-                        member.parameters,
-                        member.body,
-                        False,
-                        False,
-                        member.file,
-                        member.line,
-                        member.column,
-                    )
-                    temp_class.instance_methods[member.name] = method_def
+                    if member.name == "init":
+                        
+                        method_def = MethodDefinition(
+                            member.name,
+                            member.parameters,
+                            member.body,
+                            False,
+                            True,
+                            member.file,
+                            member.line,
+                            member.column,
+                        )
+                        temp_class.constructor_def = method_def
+     
+                    else:
+                        method_def = MethodDefinition(
+                            member.name,
+                            member.parameters,
+                            member.body,
+                            False,
+                            False,
+                            member.file,
+                            member.line,
+                            member.column,
+                        )
+                        temp_class.instance_methods[member.name] = method_def
                 elif member.type == "VarDecl":
                     # Treat 'var' as instance properties
                     prop_def = PropertyDefinition(
@@ -2927,14 +2951,6 @@ class Interpreter:
                     return result
                 elif isinstance(result, ContinueFlow):
                     continue
-        elif stmt.type == "EnumDef":
-            v = Environment()  # no sense copying env here
-            v.values = {}
-            for i in range(len(stmt.values)):
-                v.define(stmt.values[i], i)
-
-            v.lock()
-            env.define(stmt.name, v)
 
         elif stmt.type == "ForEachStmt":
             list_val = self.evaluate_expr(stmt.list, env)
@@ -3111,7 +3127,10 @@ class Interpreter:
                 return None
 
             func_wrapper.__name__ = stmt.name
-            env.define(stmt.name, func_wrapper)
+            func_wrapper.__repr__ = stmt.__repr__
+            func_wrapper.__str__ = stmt.__str__
+            fg = FuncWrapp(func_wrapper, stmt.__repr__, stmt.__str__)
+            env.define(stmt.name, fg)
         elif stmt.type == "ClassDefinition":
             class_def = stmt
             super_class = None
@@ -3554,25 +3573,29 @@ class Interpreter:
                 raise NovaError(expr, f"Unknown unary operator: {expr.operator}")
 
         elif expr.type == "FuncCall":
-            func = env.get(expr.name, expr).value
-            if not callable(func):
-                raise NovaError(expr, f"{expr.name} is not a function")
-            args = []
-            kwargs = {}
-            for arg in expr.arguments:
-                if arg.type == "ExplodeExpr":
-                    v = self.evaluate_expr(arg.args, env)
-                    if isinstance(v, dict):
-                        for name in v.keys():
-                            kwargs[name] = v[name]
-                    elif isinstance(v, Iterable) and not isinstance(v, (str, bytes)):
-                        args.extend(v)
+            try:
+                func = env.get(expr.name, expr).value
+                if not callable(func):
+                    raise NovaError(expr, f"{expr.name} is not a function")
+                args = []
+                kwargs = {}
+                for arg in expr.arguments:
+                    if arg.type == "ExplodeExpr":
+                        v = self.evaluate_expr(arg.args, env)
+                        if isinstance(v, dict):
+                            for name in v.keys():
+                                kwargs[name] = v[name]
+                        elif isinstance(v, Iterable) and not isinstance(v, (str, bytes)):
+                            args.extend(v)
+                        else:
+                            args.append(v)
                     else:
+                        v = self.evaluate_expr(arg, env)
                         args.append(v)
-                else:
-                    v = self.evaluate_expr(arg, env)
-                    args.append(v)
-            return func(*args, **kwargs)
+                return func(*args, **kwargs)
+            except Exception as E:
+                print("Error while executing", expr.name)
+                raise E
 
         elif expr.type == "MethodCall":
             obj = self.evaluate_expr(expr.object, env)
@@ -3810,5 +3833,13 @@ class Interpreter:
             val = value(body)
             # print(f"{val = }")
             return val
+        elif expr.type == "EnumDef":
+            v = Environment()  # no sense copying env here
+            v.values = {}
+            for i in range(len(expr.values)):
+                v.define(expr.values[i], i)
+
+            v.lock()
+            return v
         else:
             raise NovaError(expr, f"Unknown expression type: {expr}")

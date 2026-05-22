@@ -18,6 +18,7 @@ Date:   Thu Feb 13 00:29:52 2025 -0300
 
 NovaScript is made for convenience and ease of writting.
 By consequence, you don't get conventional syntax out of it.
+(Basically `BASIC` mixed with a bunch of other languages' stuff, only using what's convinient)
 
 ---
 
@@ -43,17 +44,19 @@ sizes if you care about them
 ───────────────────────────────────────────────────────────────────────────────
 Language            Files       Lines    Blanks  Comments       Code Complexity
 ───────────────────────────────────────────────────────────────────────────────
-Python                  4       5,788       603       207      4,978        994
+Python                  4       5,891       604       204      5,083      1,000
 ───────────────────────────────────────────────────────────────────────────────
-novascript.py                   3,814       422       187      3,205        915
-parsel.py                       1,186         0         2      1,184          2
-nodes.py                          761       174        16        571         72
+novascript.py                   3,847       425       185      3,237        921
+parsel.py                       1,259         0         2      1,257          2
+nodes.py                          758       172        15        571         72
 nova.py                            27         7         2         18          5
 ───────────────────────────────────────────────────────────────────────────────
-Total                   4       5,788       603       207      4,978        994
+Total                   4       5,891       604       204      5,083      1,000
 ───────────────────────────────────────────────────────────────────────────────
+
 > cat examples/example.nova | wc -l
 766
+
 ```
 
 ---
@@ -70,11 +73,7 @@ Total                   4       5,788       603       207      4,978        994
 > cd ../sample
 [23:23:06] cross@endeavourOS /home/cross/Documents/projects/sample
 > ls *.par
-► data.par :
 data.par
-
-
-► main.par :
 main.par
 [23:23:09] cross@endeavourOS /home/cross/Documents/projects/sample
 > cat data.par

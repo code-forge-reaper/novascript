@@ -29,6 +29,11 @@ export class Vec2
   func __Str()
     return "Vec2({},{})" % [self.x,self.y]
   end
+
+  func clamp(min, max)
+    self.x = clamp(self.x, min.x, max.x)
+    self.y = clamp(self.y, min.y, max.y)
+  end
 end
 
 export func lerp(a, b, t) = a + (b - a) * t

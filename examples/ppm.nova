@@ -20,7 +20,7 @@ func report(x, y, w, h)
     sys.stdout.write("\033[2K\033[A\033[2K {}/{:.5}\n[" % [
         [processed, total],
         prog * 100
-    ] + boxBuilder.Bar(processed, total, 40) + "]\r")
+    ] + boxBuilder.Bar(processed, total, 40) + "]\r") // Bar is the only thing that doesn't interact with the rest of BoxBuilder
 end
 
 with Fs.open("output.ppm", {mode:"wb"}) as fd do

@@ -206,6 +206,7 @@ export func Indent(text, spaces = 2)
 
     return "\n".join(out)
 end
+
 export func Box(items, prepend = "")
     var inner = new BoxBuilder()
     for item in items do
@@ -236,13 +237,13 @@ end
 // instructions is visible(scopping stuff)
 // if your function just needs to do one thing, i recomend you do this
 export func BoxStr(items, prepend="") = instructions.append(Box(items, prepend))
-
 // same as
 /*
 func BoxStr(items, prepend="") return instructions.append(Box(items, prepend)) end
 
 but looks better
 */
+
 export func Table(props)
     // Step 1: collect column names and compute widths
     var col_names = []
