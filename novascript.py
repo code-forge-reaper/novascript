@@ -195,10 +195,11 @@ class NovaClass:
     def instantiate(self, args, instance_token):
         if self._python_root is not None:
             instance = self._python_root.__new__(self._python_root)
+            setattr(instance, "__defining_class__", self)
         else:
             instance = {}
+            instance["__defining_class__"] = self
 
-        instance["__defining_class__"] = self
 
         # Walk the NovaClass hierarchy from the root Python subclass down,
         # adding all Nova properties and methods.
