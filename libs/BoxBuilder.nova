@@ -48,7 +48,7 @@ export class BoxBuilder
     1. First pass: Simulate building lines to compute max_width.
     2. Second pass: Build actual rendered lines with padding/centering.
     */
-    var max_width = 0      // Computed in EndBox now
+    private var max_width = 0      // Computed in EndBox now
 
     func AddText(content)
         self.instructions.append({type: "text", content})
@@ -87,7 +87,7 @@ export class BoxBuilder
         return " " * left + text + " " * right
     end
 
-    func _compute_max_width()
+    private func _compute_max_width()
         var current_line = ""
         var local_max = 0
         for instr in self.instructions do
