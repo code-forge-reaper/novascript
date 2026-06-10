@@ -36,7 +36,9 @@ class Token:
 class ParselError(Exception):
     def __init__(self, token: Optional[Token], message: str):
         if token:
-            super().__init__(f"{token.file}:{token.line}:{token.column} {message}")
+            super().__init__(f"{token.file}:{token.line}:{token.column} {message}"+
+                "\n"+
+                token.__repr__())
         else:
             super().__init__(message)
         self.token = token
@@ -224,6 +226,10 @@ class Literal(Expr):
         self.value = value
         self.token = token
 
+class StringLiteral(Literal):
+    def __init__(self, value: Any, token: Token):
+        super().__init__(value, token)
+
 
 class Identifier(Expr):
     def __init__(self, name: str, token: Token):
@@ -368,10 +374,12 @@ class RngStmt(Stmt):
         weighted_entries: List[tuple[int, list[Stmt]]],
         uniform_entries: List[Stmt],
         token: Token,
+        maxW: int
     ):
         self.weighted_entries = weighted_entries
         self.uniform_entries = uniform_entries
         self.token = token
+        self.maxW = maxW
 
 
 class IfStmt(Stmt):
@@ -453,8 +461,7 @@ class ParselParser:
         if not tok:
             raise ParselError(None, f"Expected {typ} but got EOF")
         if tok.type != typ:
-            raise ParselError(tok, f"Expected token type {
-                              typ}, got {tok.type}")
+            raise ParselError(tok, f"Expected token type {typ}, got {tok.type}")
         if value is not None and tok.value != value:
             raise ParselError(tok, f"Expected '{value}', got {tok.value}")
         return self.consume()
@@ -524,6 +531,9 @@ class ParselParser:
     def parse_rng(self) -> RngStmt:
         tok = self.consume()  # rng
         if self.current():
+            maxW = 0
+            if self.current().type == "number":
+                maxW = int(self.expect("number").value)
             if self.current().value == "{":
                 self.consume()
                 act = []
@@ -535,7 +545,7 @@ class ParselParser:
                     self.expect("keyword", "end")
                     act.append((num, body))
                 self.expect("operator", "}")
-                return RngStmt(act, [], tok)
+                return RngStmt(act, [], tok, maxW)
             elif self.current().value == "[":
                 self.consume()
                 body = []
@@ -544,7 +554,16 @@ class ParselParser:
                     body.append(self.parse_block_until(["end"]))
                     self.expect("keyword", "end")
                 self.expect("operator", "]")
-                return RngStmt([], body, tok)
+                return RngStmt([], body, tok, 0)
+            else:
+                raise ParselError(
+                    tok, "Expected '[' or '{'"
+                )
+
+        else:
+            raise ParselError(
+                tok, "Expected NUMBER, '[' or '{'"
+            )
 
     def parse_scene(self) -> SceneDecl:
         tok = self.consume()  # 'scene'
@@ -795,7 +814,7 @@ class ParselParser:
             return Literal(tok.value, tok)
         if tok.type == "string":
             self.consume()
-            return Literal(tok.value, tok)
+            return StringLiteral(tok.value, tok)
         if tok.type == "boolean":
             self.consume()
             return Literal(tok.value, tok)
@@ -1002,7 +1021,8 @@ class ParselRuntime:
 
         elif isinstance(stmt, RngStmt):
             if stmt.weighted_entries:
-                roll = random.randint(1, 100)
+                max = stmt.maxW or 100
+                roll = random.randint(1, max)
                 for (
                     weight,
                     body,

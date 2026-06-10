@@ -89,7 +89,7 @@ contexts:
 
   keywords:
     # Declarations
-    - match: \b(var|const|new|assert|local|with|func|def|return|define|export|unpack|compact)\b
+    - match: \b(var|const|private|new|assert|local|with|func|def|return|define|export|unpack|compact)\b
       scope: keyword.declaration.nova
       # with <something> as <something else> do ... end
     - match: \bas\b\s+(\w+)
@@ -172,9 +172,7 @@ contexts:
 
   enum_definition:
     # enum <name> { <values> }
-    - match: \benum\b\s+(\w+)
-      captures:
-        1: entity.name.type.nova
+    - match: \benum\b
       scope: keyword.declaration.nova
 
   builtins:
@@ -188,7 +186,7 @@ contexts:
       scope: keyword.declaration.nova
 
   operators:
-    - match: ==|!=|<=|>=|\+=|-=|\*=|/=|&&|\|\||[=+\-*/<>!]
+    - match: ==|!=|<=|>=|\+=|between|-=|\*=|/=|&&|\|\||[=+\-*/<>!]
       scope: keyword.operator.nova
     - match: '[\(\)\[\]\{\}\.,:]'
       scope: punctuation.separator.nova

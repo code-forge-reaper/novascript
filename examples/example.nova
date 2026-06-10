@@ -147,6 +147,8 @@ var count = 10
 var isActive bool = true
 var price number = 99.99
 
+print("count between [10, 40]",count between [10, 40])
+
 print("Greeting:", greeting)
 print("Count:", count)
 print("Is Active:", isActive)

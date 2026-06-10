@@ -40,17 +40,18 @@ class FuncWrapp:
         return self.desc_repr()
 
 class Var:
-    def __init__(self, name, value, const=False, annotation=None):
+    def __init__(self, name, value, const=False, annotation=None, private =False, origin=None):
         self.name = name
         self.value = value
         self.const = const
         self.type_annotation = annotation
+        self.private =private
+        self.origin = origin
 
     def __repr__(self):
         const_flag = "const " if self.const else ""
         type_info = f" {self.type_annotation} " if self.type_annotation else ""
         return f"Var({const_flag}{self.name}{type_info}= {self.value!r})"
-
 
 # --- Environment for variable scoping ---
 class Environment:
@@ -943,6 +944,7 @@ class Interpreter:
         "failed",
         "defer",
         "matches",
+        "private",
         "strict",
         "default",
         "using",
@@ -1271,6 +1273,8 @@ class Interpreter:
                     col += 1
                 if id_str in self.keywords:
                     tokens.append(Token("keyword", id_str, file, line, start_col))
+                elif id_str == "between":
+                    tokens.append(Token("operator", "between", file, line, start_col))
                 else:
                     tokens.append(Token("identifier", id_str, file, line, start_col))
                 continue
@@ -2253,7 +2257,7 @@ class Interpreter:
         while (
             self.get_next_token()
             and self.get_next_token().type == "operator"
-            and self.get_next_token().value in ["<", "<=", ">", ">=", "<<", ">>", "|"]
+            and self.get_next_token().value in ["<", "<=", ">", ">=", "<<", ">>", "|", "between"]
         ):
             operator_token = self.consume_token()
             operator = operator_token.value
@@ -3526,6 +3530,10 @@ class Interpreter:
                 return left << right
             elif expr.operator == "<=":
                 return left <= right
+            elif expr.operator == "between":
+                if not isinstance(right, (list, tuple)) or len(right) != 2:
+                    raise NovaError(expr, "'between' requires a range [low, high]")
+                return left >= right[0] and left <= right[1]
             elif expr.operator == ">=":
                 return left >= right
             elif expr.operator == "->":
