@@ -2982,6 +2982,7 @@ class Interpreter:
                         member.type_annotation,
                         member.initializer,
                         False,
+                        False,
                         member.file,
                         member.line,
                         member.column,

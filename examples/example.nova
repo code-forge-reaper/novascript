@@ -349,10 +349,16 @@ print("Modified array:", numbers)
 // `record` is a singleton that makes a class, instantiates it,
 // and assigns that instance to the name given to it
 record instant
-    func hi(name string) print("hello,",name) end
+  var x = 0
+  var y = 0
+  func move(dt float)
+    self.x += 200 * dt
+    self.y += 200 * dt
+  end
+  func hi(name string) print("hello,",name) end
 end
-
 instant.hi("Cross")
+instant.move(0.5)
 
 // Object literals
 var person = {
