@@ -13,7 +13,6 @@ import re
 import array
 import datetime
 import time, json
-import codecs
 from urllib.parse import unquote, quote
 import struct, builtins
 from nodes import *
@@ -151,12 +150,34 @@ class NovaClass:
         self.interpreter = interpreter
         self.env = env
         self.static_members = {}
+        self._private_properties = set()
+        self._private_methods = set()
         self.instance_properties = {}  # PropertyDefinition AST nodes
         self.instance_methods = {}  # MethodDefinition AST nodes
         self.constructor_def = None
 
         # Determine the top-most Python root, if any
         self._python_root = self._find_python_root()
+    def get_public_instance_members(self, instance):
+        result = {}
+        # Properties
+        for name, prop_def in self.instance_properties.items():
+            if name not in self._private_properties:
+                value = instance[name] if isinstance(instance, dict) else getattr(instance, name)
+                result[name] = value
+        # Methods
+        for name, method_def in self.instance_methods.items():
+            if name not in self._private_methods:
+                value = instance[name] if isinstance(instance, dict) else getattr(instance, name)
+                result[name] = value
+        return result
+
+    def get_public_static_members(self):
+        result = {}
+        for name, value in self.static_members.items():
+            if name not in self._private_static_properties and name not in self._private_static_methods:
+                result[name] = value
+        return result
 
     def _find_python_root(self):
         """Return the most foundational Python superclass, or None."""
@@ -176,6 +197,8 @@ class NovaClass:
             instance = self._python_root.__new__(self._python_root)
         else:
             instance = {}
+
+        instance["__defining_class__"] = self
 
         # Walk the NovaClass hierarchy from the root Python subclass down,
         # adding all Nova properties and methods.
@@ -294,7 +317,9 @@ class NovaClass:
             if isinstance(result, ReturnFlow):
                 return result.value
             return None
-
+        bound_method.__defining_class__ = self   # store the class for access checks
+        if method_def.is_private:
+            bound_method.__is_private__ = True
         return bound_method
 
     # ------------------------------------------------------------------
@@ -435,18 +460,21 @@ def init_globals(interpreter, globals_env):
                 print(obj["__Str"](), end=end)
             else:
                 if isinstance(obj, dict):
-                    s = {}
-                    # print("dict")
-                    for k in obj:
-                        v = obj[k]
-                        # print(k, v)
-                        if not k.startswith("__"):
-                            s[k] = v
-                    print(s, end=end)
+                    # Check if it's a NovaScript instance
+                    if "__defining_class__" in obj:
+                        cls = obj["__defining_class__"]
+                        # Get only public instance members
+                        public_members = cls.get_public_instance_members(obj)
+                        print(public_members, end=end)
+                    else:
+                        s = {}
+                        for k, v in obj.items():
+                            if not k.startswith("__"):
+                                s[k] = v
+                        print(s, end=end)
                 else:
                     print(obj, end=end)
         print()
-
     def _slice(a, b, c=None):
         if c is not None:
             return a[b:c]
@@ -979,6 +1007,16 @@ class Interpreter:
         )
         self.globals.define("__SCRIPT_NAME__", file_path)
         self.globals.define("__IS_MAIN__", True)
+        self.current_class_stack = []
+    def _check_private_access(self, obj, name, expr):
+        """Raise NovaError if `name` is a private member of `obj` and access is not from inside its class."""
+        if not isinstance(obj, dict) or "__defining_class__" not in obj:
+            return   # not a NovaScript instance
+        cls = obj["__defining_class__"]
+        if name in cls._private_properties or name in cls._private_methods:
+            # allowed only if the current class (top of stack) is exactly this class
+            if not self.current_class_stack or self.current_class_stack[-1] is not cls:
+                raise NovaError(expr, f"Private member '{name}' cannot be accessed outside its class")
 
     # --- Tokenization ---
     def tokenize(self, source, file):
@@ -1422,7 +1460,8 @@ class Interpreter:
             ):
                 break
             stmt = self._parse_statement()
-            if stmt:  # CustomTypeDeclStmt returns None
+            # CustomTypeDeclStmt returns None
+            if stmt:
                 statements.append(stmt)
         return statements
 
@@ -1464,10 +1503,23 @@ class Interpreter:
         while self.get_next_token() and self.get_next_token().value != "end":
             member_token = self.get_next_token()
             is_static = False
+            is_private = False
             # print(member_token)
-            if member_token.type == "keyword" and member_token.value == "static":
-                self.consume_token()  # consume 'static'
-                is_static = True
+            while True:
+                member_token = self.get_next_token()
+
+                if member_token.type == "keyword" and member_token.value == "static":
+                    self.consume_token()  # consume 'static'
+                    is_static = True
+
+                elif member_token.type == "keyword" and member_token.value == "private":
+                    if is_static:
+                        raise NovaError(member_token, "Cannot have a private static method/variable")
+                    self.consume_token()  # consume 'private'
+                    is_private = True
+                else:
+                    break
+
 
             if (
                 self.get_next_token()
@@ -1505,6 +1557,7 @@ class Interpreter:
                         type_annotation,
                         initializer,
                         is_static,
+                        is_private,
                         prop_name_token.file,
                         prop_name_token.line,
                         prop_name_token.column,
@@ -1598,6 +1651,7 @@ class Interpreter:
                         body_statements,
                         is_static,
                         is_constructor,
+                        is_private,
                         method_name_token.file,
                         method_name_token.line,
                         method_name_token.column,
@@ -1736,16 +1790,15 @@ class Interpreter:
                     custom_type_name, properties, token.file, token.line, token.column
                 )
                 CUSTOM_TYPES[custom_type_stmt.name] = CustomType(
-                    custom_type_stmt.name,
-                    custom_type_stmt.definition,
-                    custom_type_stmt.file,
-                    custom_type_stmt.line,
-                    custom_type_stmt.column,
-                )
+                                    custom_type_stmt.name,
+                                    custom_type_stmt.definition,
+                                    custom_type_stmt.file,
+                                    custom_type_stmt.line,
+                                    custom_type_stmt.column,
+                                )
                 # print(CUSTOM_TYPES)
 
-                return None  # the statement is not handled at runtime, don't return it
-
+                return None
             elif token.value == "var":
                 self.consume_token()
                 var_name_token = self.expect_type("identifier")
@@ -2752,6 +2805,7 @@ class Interpreter:
             if stmt.type_annotation:
                 check_type(stmt.type_annotation, value, stmt)
             env.define(stmt.name, value, stmt.type == "ConstDecl", stmt.type_annotation)
+
         elif stmt.type == "ExportStmt":
             # Execute the inner statement first
             self.execute_stmt(stmt.expr, env)
@@ -2901,6 +2955,7 @@ class Interpreter:
                             member.body,
                             False,
                             True,
+                            False,
                             member.file,
                             member.line,
                             member.column,
@@ -2912,6 +2967,7 @@ class Interpreter:
                             member.name,
                             member.parameters,
                             member.body,
+                            False,
                             False,
                             False,
                             member.file,
@@ -3180,6 +3236,8 @@ class Interpreter:
             # Populate static members, instance properties/methods
             for member in class_def.body:
                 if member.type == "PropertyDefinition":
+                    if member.is_private:
+                        nova_class._private_properties.add(member.name)
                     if member.is_static:
                         prop_value = None
                         if member.initializer:
@@ -3188,6 +3246,8 @@ class Interpreter:
                     else:
                         nova_class.instance_properties[member.name] = member
                 elif member.type == "MethodDefinition":
+                    if member.is_private:
+                        nova_class._private_methods.add(member.name)
                     if member.is_constructor:
                         nova_class.constructor_def = member
                     elif member.is_static:
@@ -3232,15 +3292,25 @@ class Interpreter:
         elif stmt.type == "UsingStmt":
             # Helper to import members from a dict/Environment/module into env
             def import_members(value):
-                if isinstance(value, Environment):
+                if isinstance(value, NovaClass):
+                    # Import public static members only
+                    for key, val in value.get_public_static_members().items():
+                        env.define(key, val)
+                elif isinstance(value, dict) and "__defining_class__" in value:
+                    # NovaScript instance: import public instance members
+                    cls = value["__defining_class__"]
+                    for key, val in cls.get_public_instance_members(value).items():
+                        env.define(key, val)
+                elif isinstance(value, Environment):
                     for key, var_obj in value.values.items():
-                        env.define(
-                            key, var_obj.value, var_obj.const, var_obj.type_annotation
-                        )
+                        # Environment has no private concept; import everything
+                        env.define(key, var_obj.value, var_obj.const, var_obj.type_annotation)
                 elif isinstance(value, dict):
+                    # Plain dict – import all keys (no privacy)
                     for key, val in value.items():
                         env.define(key, val)
                 elif hasattr(value, "__dict__"):
+                    # Python object – skip names starting with '_' (by convention)
                     for key, val in value.__dict__.items():
                         if not key.startswith("_"):
                             env.define(key, val)
@@ -3248,9 +3318,8 @@ class Interpreter:
                     raise NovaError(
                         stmt,
                         f"Cannot 'use' value of type {type(value).__name__}. "
-                        "Expected a namespace, dict, or Python object with attributes.",
+                        "Expected a namespace, dict, class, instance, or Python object.",
                     )
-
             if isinstance(stmt.name, list):
                 # List of string paths: resolve each and import members
                 for path_str in stmt.name:
@@ -3607,7 +3676,7 @@ class Interpreter:
 
         elif expr.type == "MethodCall":
             obj = self.evaluate_expr(expr.object, env)
-
+            self._check_private_access(obj, expr.method, expr)
             if obj is None:
                 raise NovaError(expr, f"Cannot call method '{expr.method}' on None.")
 
@@ -3654,9 +3723,15 @@ class Interpreter:
                     expr, f"{expr.method} is not a function or method on this object"
                 )
 
-            # Call the method.
-            # If it's a Python method, it's already bound. If it's a NovaScript method, it's a closure.
-            return fn(*args, **kwargs)
+            # Push class context if the method has a defining clas attribute (NovaScript bound method)
+            try:
+                if hasattr(fn, "__defining_class__"):
+                    self.current_class_stack.append(fn.__defining_class__)
+                result = fn(*args, **kwargs)
+            finally:
+                if hasattr(fn, "__defining_class__"):
+                    self.current_class_stack.pop()
+            return result
 
         elif expr.type == "ArrayAccess":
             arr = self.evaluate_expr(expr.object, env)
@@ -3682,6 +3757,7 @@ class Interpreter:
 
         elif expr.type == "PropertyAccess":
             obj = self.evaluate_expr(expr.object, env)
+            self._check_private_access(obj, expr.property, expr)
 
             if obj is None:
                 raise NovaError(

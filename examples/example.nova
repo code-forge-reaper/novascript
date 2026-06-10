@@ -471,6 +471,24 @@ failed e
     e -> print
 end
 
+define Window = {
+    setPos: function
+}
+
+class Window
+    private var x: number = 300
+    private var y: number = 400
+    func setPos(x,y)
+        $x = x
+        $y = y
+    end
+    func getPos() return {x:$x,y:$y} end
+end
+
+var c = new Window()
+c.setPos(20,20)
+print(c.getPos(), c)
+
 /*
 -> is basically what "|" does in shells
 > echo "

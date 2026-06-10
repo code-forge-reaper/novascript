@@ -377,7 +377,7 @@ class CustomType:  # This is a runtime representation, not an AST node directly
 
 class CustomTypeDeclStmt(Statement):
     def __init__(self, name, definition, file, line, column):
-        super().__init__("CustomTypeDecl", file, line, column)
+        super().__init__("CustomTypeDeclStmt", file, line, column)
         self.name = name
         self.definition = definition  # List of CustomTypeProperty objects
 
@@ -442,7 +442,7 @@ class ObjectDecl(Statement):
 
 class MethodDefinition(Statement):
     def __init__(
-        self, name, parameters, body, is_static, is_constructor, file, line, column
+        self, name, parameters, body, is_static, is_constructor, is_private, file, line, column
     ):
         super().__init__("MethodDefinition", file, line, column)
         self.name = name
@@ -450,6 +450,7 @@ class MethodDefinition(Statement):
         self.body = body
         self.is_static = is_static
         self.is_constructor = is_constructor
+        self.is_private = is_private
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
@@ -457,27 +458,38 @@ class MethodDefinition(Statement):
                                for p in self.parameters)
         body_str = "\n".join(stmt.__str__(indent_level + 1)
                              for stmt in self.body)
-        static_prefix = "static " if self.is_static else ""
+        md = ""
+        if self.is_static:
+            md += "static "
+        if self.is_private:
+            md += "private "
         name = "init" if self.is_constructor else self.name
-        return f"{current_indent}{static_prefix}func {name}({params_str}) \n{body_str}\n{current_indent}end"
+        return f"{current_indent}{md}func {name}({params_str}) \n{body_str}\n{current_indent}end"
 
 
 class PropertyDefinition(Statement):
     def __init__(
-        self, name, type_annotation, initializer, is_static, file, line, column
+        self, name, type_annotation, initializer, is_static, is_private, file, line, column
+
     ):
         super().__init__("PropertyDefinition", file, line, column)
         self.name = name
         self.type_annotation = type_annotation
         self.initializer = initializer
         self.is_static = is_static
+        self.is_private = is_private
 
     def __str__(self, indent_level=0):
         current_indent = INDENT_STEP * indent_level
-        static_prefix = "static " if self.is_static else ""
-        prop_str = f"{current_indent}{static_prefix}var {self.name}"
+        md = ""
+        if self.is_static:
+            md += "static "
+        if self.is_private:
+            md += "private "
+        prop_str = f"{current_indent}{md}var {self.name}"
+
         if self.type_annotation:
-            prop_str += f": {self.type_annotation}"
+            prop_str += f" {self.type_annotation}"
         if self.initializer:
             prop_str += f" = {self.initializer.__str__(indent_level)}"
         return prop_str
