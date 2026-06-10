@@ -8,6 +8,13 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, LIBS_PATH)
 sys.path.insert(0, os.getcwd())
 
+def dprint(str:str, node: Token):
+    if os.environ.get("debugMode", "") == "Pretty":
+        print( " "*node.column, "- ", str, node)
+    elif os.environ.get("debugMode", "") == "Node":
+        print( " "*node.column, "- ", str, json.dumps(node.to_dict()))
+
+
 import math
 import re
 import array
@@ -1012,6 +1019,8 @@ class Interpreter:
         return self.current_env
 
     def execute_stmt(self, stmt, env):
+        dprint("stmt: ",stmt)
+
         if stmt.type in ["VarDecl", "ConstDecl"]:
             value = self.evaluate_expr(stmt.initializer, env)
             if stmt.type_annotation:
@@ -1635,6 +1644,9 @@ class Interpreter:
         return None
 
     def evaluate_expr(self, expr, env):
+        dprint("expr: ",expr)
+
+
         if expr.type == "Literal":
             return expr.value
         elif expr.type == "Identifier":
@@ -1738,6 +1750,7 @@ class Interpreter:
             return final_value_to_assign
 
         elif expr.type == "BinaryExpr":
+            dprint("BinOp", expr)
             if expr.operator == "&&":
                 f = self.evaluate_expr(expr.left, env)
                 if not f:

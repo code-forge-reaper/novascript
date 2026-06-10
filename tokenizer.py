@@ -50,7 +50,7 @@ class Tokenizer:
         i = 0
         line = 1
         self.current = 0
-        
+
         col = 1
         length = len(source)
 
@@ -1192,17 +1192,18 @@ class Tokenizer:
                     token.line,
                     token.column,
                 )
-
             elif token.value == "return":
                 self.consume_token()
                 return_expression = None
-                # Check if the next token is not a keyword (indicating end of statement or start of expression)
-                if self.get_next_token() and self.get_next_token().value:
-                    return_expression = self.parse_expression()
+                next_token = self.get_next_token()
+                if next_token is not None:
+                    # Only parse an expression if the next token can possibly start one.
+                    # It must either be a non-keyword, or be one of the keywords that can begin an expression.
+                    if not (next_token.type == "keyword" and next_token.value not in ("new", "def", "enum")):
+                        return_expression = self.parse_expression()
                 return ReturnStmt(
                     return_expression, token.file, token.line, token.column
                 )
-
             elif token.value == "class":
                 return self.parse_class_definition()
             elif token.value == "record":

@@ -1,44 +1,62 @@
+import json
+
 # --- Control Flow Classes ---
 class ControlFlow:
     """Base class for control flow signals"""
-    pass
-
+    def to_dict(self):
+        return {"type": self.__class__.__name__}
 
 class ReturnFlow(ControlFlow):
     def __init__(self, value):
         self.value = value
 
+    def to_dict(self):
+        return {
+            "type": "ReturnFlow",
+            "value": self._serialize_value(self.value)
+        }
+
+    @staticmethod
+    def _serialize_value(val):
+        if hasattr(val, 'to_dict'):
+            return val.to_dict()
+        return repr(val) if val is not None else None
 
 class BreakFlow(ControlFlow):
-    pass
-
+    def to_dict(self):
+        return {"type": "BreakFlow"}
 
 class ContinueFlow(ControlFlow):
-    pass
-
+    def to_dict(self):
+        return {"type": "ContinueFlow"}
 
 class NovaError(Exception):
     """Custom error class for NovaScript, including location information."""
-
     def __init__(self, token, user_message=None):
-        # Provide fallback values if token is None or lacks properties
-        file = getattr(
-            token, "file", "unknown_file") if token else "unknown_file"
+        file = getattr(token, "file", "unknown_file") if token else "unknown_file"
         line = getattr(token, "line", 0) if token else 0
         column = getattr(token, "column", 0) if token else 0
         token_value = getattr(token, "value", "N/A") if token else "N/A"
-
-        self.message = (f"{file}:{line}:{column}" +
-                        f": {user_message or 'unknown error at token: ' + str(token_value)}")
+        self.message = f"{file}:{line}:{column}: {user_message or 'unknown error at token: ' + str(token_value)}"
         super().__init__(self.message)
         self.line = line
         self.column = column
         self.file = file
+        self.user_message = user_message
+        self.token_value = token_value
 
+    def to_dict(self):
+        return {
+            "type": "NovaError",
+            "file": self.file,
+            "line": self.line,
+            "column": self.column,
+            "user_message": self.user_message,
+            "token_value": str(self.token_value)
+        }
 
 # Helper for indentation in __str__ methods
 INDENT_STEP = "  "
-
 
 # --- AST Node Base Classes ---
 class Token:
@@ -50,48 +68,38 @@ class Token:
         self.column = column
 
     def __str__(self, indent_level=0):
-        # Generic representation for debugging, concrete nodes will override for source reconstruction
         return f"Token(type='{self.type}', value={repr(self.value)}, file='{self.file}', line={self.line}, column={self.column})"
 
+    def to_dict(self):
+        """Base serialization – overridden in subclasses."""
+        return {
+            "type": self.type,
+            "value": repr(self.value),
+            "file": self.file,
+            "line": self.line,
+            "column": self.column
+        }
+
+    def to_json(self):
+        """Return a JSON string for debug."""
+        return json.dumps(self.to_dict(), indent=2)
 
 class Statement(Token):
     def __init__(self, type, file, line, column):
         super().__init__(type, None, file, line, column)
 
-    def __str__(self, indent_level=0):
-        # Generic statement, concrete statements will override
-        return f"{INDENT_STEP * indent_level}[{self.__class__.__name__} Statement]"
-
-
 class Expression(Token):
     def __init__(self, type, file, line, column):
         super().__init__(type, None, file, line, column)
 
-    def __str__(self, indent_level=0):
-        # Generic expression, concrete expressions will override
-        return f"[{self.__class__.__name__} Expression]"
+# Helper to serialize child nodes or lists of them
+def _serialize_node(node):
+    if hasattr(node, 'to_dict'):
+        return node.to_dict()
+    return repr(node)
 
-
-class ExplodeExpr(Expression):
-    def __init__(self, args, file, line, col):
-        super().__init__("ExplodeExpr", file, line, col)
-        self.args = args
-
-    def __str__(self, indent=0):
-        return f"*[{self.args}]"
-
-
-class DecoratorExpr(Expression):
-    def __init__(self, expr, body, file, line, column):
-        super().__init__("DecoratorExpr", file, line, column)
-        self.expr = expr
-        self.body = body
-
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = self.body.__str__(indent_level)
-        return f"{current_indent}@{self.expr.__str__(indent_level)} {body_str}"
-
+def _serialize_list(lst):
+    return [_serialize_node(item) for item in lst]
 
 # --- Specific AST Node Classes ---
 class Literal(Expression):
@@ -99,24 +107,20 @@ class Literal(Expression):
         super().__init__("Literal", file, line, column)
         self.value = value
 
-    def __str__(self, indent_level=0):
-        if isinstance(self.value, str):
-            return f'"{self.value}"'
-        if self.value is None:
-            return "null"  # Assuming 'null' for None in NovaScript
-        if isinstance(self.value, bool):
-            return "true" if self.value else "false"
-        return str(self.value)
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["literal_value"] = self.value
+        return base
 
 class Identifier(Expression):
     def __init__(self, name, file, line, column):
         super().__init__("Identifier", file, line, column)
         self.name = name
 
-    def __str__(self, indent_level=0):
-        return self.name
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["name"] = self.name
+        return base
 
 class BinaryExpr(Expression):
     def __init__(self, operator, left, right, file, line, column):
@@ -125,20 +129,20 @@ class BinaryExpr(Expression):
         self.left = left
         self.right = right
 
-    def __str__(self, indent_level=0):
-        # Add parentheses to ensure correct precedence during reconstruction
-        return f"({self.left.__str__(indent_level)} {self.operator} {self.right.__str__(indent_level)})"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["operator"] = self.operator
+        base["left"] = _serialize_node(self.left)
+        base["right"] = _serialize_node(self.right)
+        return base
 
 class PipeExpr(BinaryExpr):
     def __init__(self, left, right, file, line, column):
         super().__init__("->", left, right, file, line, column)
 
-
 class MapExpr(BinaryExpr):
     def __init__(self, left, right, file, line, column):
         super().__init__("=>", left, right, file, line, column)
-
 
 class UnaryExpr(Expression):
     def __init__(self, operator, right, file, line, column):
@@ -146,9 +150,11 @@ class UnaryExpr(Expression):
         self.operator = operator
         self.right = right
 
-    def __str__(self, indent_level=0):
-        return f"{self.operator}{self.right.__str__(indent_level)}"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["operator"] = self.operator
+        base["right"] = _serialize_node(self.right)
+        return base
 
 class FuncCall(Expression):
     def __init__(self, name, arguments, file, line, column):
@@ -156,11 +162,11 @@ class FuncCall(Expression):
         self.name = name
         self.arguments = arguments
 
-    def __str__(self, indent_level=0):
-        args_str = ", ".join(arg.__str__(indent_level)
-                             for arg in self.arguments)
-        return f"{self.name}({args_str})"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["function_name"] = str(self.name) if not isinstance(self.name, str) else self.name
+        base["arguments"] = _serialize_list(self.arguments)
+        return base
 
 class MethodCall(Expression):
     def __init__(self, object, method, arguments, file, line, column):
@@ -169,11 +175,12 @@ class MethodCall(Expression):
         self.method = method
         self.arguments = arguments
 
-    def __str__(self, indent_level=0):
-        args_str = ", ".join(arg.__str__(indent_level)
-                             for arg in self.arguments)
-        return f"{self.object.__str__(indent_level)}.{self.method}({args_str})"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["object"] = _serialize_node(self.object)
+        base["method"] = self.method
+        base["arguments"] = _serialize_list(self.arguments)
+        return base
 
 class PropertyAccess(Expression):
     def __init__(self, object, property, file, line, column):
@@ -181,9 +188,11 @@ class PropertyAccess(Expression):
         self.object = object
         self.property = property
 
-    def __str__(self, indent_level=0):
-        return f"{self.object.__str__(indent_level)}.{self.property}"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["object"] = _serialize_node(self.object)
+        base["property"] = self.property
+        return base
 
 class ArrayAccess(Expression):
     def __init__(self, object, index, file, line, column):
@@ -191,48 +200,37 @@ class ArrayAccess(Expression):
         self.object = object
         self.index = index
 
-    def __str__(self, indent_level=0):
-        return (
-            f"{self.object.__str__(indent_level)}[{
-                self.index.__str__(indent_level)}]"
-        )
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["object"] = _serialize_node(self.object)
+        base["index"] = _serialize_node(self.index)
+        return base
 
 class ArrayLiteral(Expression):
     def __init__(self, elements, file, line, column):
         super().__init__("ArrayLiteral", file, line, column)
         self.elements = elements
 
-    def __str__(self, indent_level=0):
-        elements_str = ", ".join(elem.__str__(indent_level)
-                                 for elem in self.elements)
-        return f"[{elements_str}]"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["elements"] = _serialize_list(self.elements)
+        return base
 
 class ObjectLiteral(Expression):
     def __init__(self, properties, file, line, column):
         super().__init__("ObjectLiteral", file, line, column)
-        self.properties = properties
+        self.properties = properties  # list of dicts with 'key' and 'value'
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        next_indent = INDENT_STEP * (indent_level + 1)
-
-        if not self.properties:
-            return "{}"
-
-        props_list = []
-        for prop in self.properties:
-            props_list.append(
-                f"{next_indent}{prop['key']}: {
-                    prop['value'].__str__(indent_level + 1)}"
-            )
-
-        # build the joined string OUTSIDE the f-string expression
-        joined = ",\n".join(props_list)
-
-        return f"{{\n{joined}\n{current_indent}}}"
-
+    def to_dict(self):
+        base = super().to_dict()
+        props = []
+        for p in self.properties:
+            props.append({
+                "key": p["key"] if isinstance(p["key"], str) else _serialize_node(p["key"]),
+                "value": _serialize_node(p["value"])
+            })
+        base["properties"] = props
+        return base
 
 class AssignmentExpr(Expression):
     def __init__(self, target, value, operator, file, line, column):
@@ -241,22 +239,46 @@ class AssignmentExpr(Expression):
         self.value = value
         self.operator = operator
 
-    def __str__(self, indent_level=0):
-        return f"{self.target.__str__(indent_level)} {self.operator} {self.value.__str__(indent_level)}"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["target"] = _serialize_node(self.target)
+        base["value"] = _serialize_node(self.value)
+        base["operator"] = self.operator
+        return base
 
 class NewInstance(Expression):
-    # Changed class_target_expr back to class_name to hold a string path
     def __init__(self, class_name, arguments, file, line, column):
         super().__init__("NewInstance", file, line, column)
         self.class_name = class_name
         self.arguments = arguments
 
-    def __str__(self, indent_level=0):
-        args_str = ", ".join(arg.__str__(indent_level)
-                             for arg in self.arguments)
-        return f"new {self.class_name}({args_str})"
+    def to_dict(self):
+        base = super().to_dict()
+        base["class_name"] = self.class_name
+        base["arguments"] = _serialize_list(self.arguments)
+        return base
 
+class ExplodeExpr(Expression):
+    def __init__(self, args, file, line, col):
+        super().__init__("ExplodeExpr", file, line, col)
+        self.args = args
+
+    def to_dict(self):
+        base = super().to_dict()
+        base["args"] = _serialize_list(self.args)
+        return base
+
+class DecoratorExpr(Expression):
+    def __init__(self, expr, body, file, line, column):
+        super().__init__("DecoratorExpr", file, line, column)
+        self.expr = expr
+        self.body = body
+
+    def to_dict(self):
+        base = super().to_dict()
+        base["expr"] = _serialize_node(self.expr)
+        base["body"] = _serialize_node(self.body)
+        return base
 
 class Parameter(Token):
     def __init__(self, name, annotation_type, default, is_compact, file, line, column, type, value):
@@ -266,54 +288,45 @@ class Parameter(Token):
         self.default = default
         self.is_compact = is_compact
 
-    def __str__(self, indent_level=0):
-        param_str = self.name
-        if self.is_compact:
-            param_str += "compact "
-        if self.annotation_type:
-            param_str += f": {self.annotation_type}"
-        if self.default:
-            param_str += f" = {self.default.__str__(indent_level)}"
-        return param_str
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["name"] = self.name
+        base["annotation_type"] = self.annotation_type
+        base["default"] = _serialize_node(self.default) if self.default else None
+        base["is_compact"] = self.is_compact
+        return base
 
 class Case:
     def __init__(self, case_expr, body):
         self.case_expr = case_expr
         self.body = body
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1)
-                             for stmt in self.body)
-        if self.case_expr:
-            return f"{current_indent}case {self.case_expr.__str__(indent_level)} do\n{body_str}\n{current_indent}end"
-        else:  # Default case
-            return f"{current_indent}default do\n{body_str}\n{current_indent}end"
-
+    def to_dict(self):
+        return {
+            "type": "Case",
+            "case_expr": _serialize_node(self.case_expr) if self.case_expr else "default",
+            "body": _serialize_list(self.body)
+        }
 
 class ExportStmt(Statement):
     def __init__(self, expr, file, line, column):
         super().__init__("ExportStmt", file, line, column)
         self.expr = expr
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        expr = self.expr.__str__(indent_level + 1)
-        return f"{current_indent}export {expr}"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["expression"] = _serialize_node(self.expr)
+        return base
 
 class DeferStmt(Statement):
     def __init__(self, body, file, line, column):
         super().__init__("DeferStmt", file, line, column)
         self.body = body
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1)
-                             for stmt in self.body)
-        return f"{current_indent}defer do\n{body_str}\n{current_indent}end"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["body"] = _serialize_list(self.body)
+        return base
 
 class VarDeclStmt(Statement):
     def __init__(self, name, type_annotation, initializer, file, line, column):
@@ -322,14 +335,12 @@ class VarDeclStmt(Statement):
         self.type_annotation = type_annotation
         self.initializer = initializer
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        var_str = f"var {self.name}"
-        if self.type_annotation:
-            var_str += f": {self.type_annotation}"
-        var_str += f" = {self.initializer.__str__(indent_level)}"
-        return f"{current_indent}{var_str}"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["name"] = self.name
+        base["type_annotation"] = self.type_annotation
+        base["initializer"] = _serialize_node(self.initializer)
+        return base
 
 class ConstDeclStmt(Statement):
     def __init__(self, name, type_annotation, initializer, file, line, column):
@@ -338,25 +349,22 @@ class ConstDeclStmt(Statement):
         self.type_annotation = type_annotation
         self.initializer = initializer
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        var_str = f"const {self.name}"
-        if self.type_annotation:
-            var_str += f": {self.type_annotation}"
-        var_str += f" = {self.initializer.__str__(indent_level)}"
-        return f"{current_indent}{var_str}"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["name"] = self.name
+        base["type_annotation"] = self.type_annotation
+        base["initializer"] = _serialize_node(self.initializer)
+        return base
 
 class CustomTypeProperty:
     def __init__(self, name, type):
         self.name = name
         self.type = type
 
-    def __str__(self, indent_level=0):
-        return f"{INDENT_STEP * indent_level}{self.name}: {self.type}"
+    def to_dict(self):
+        return {"name": self.name, "type": self.type}
 
-
-class CustomType:  # This is a runtime representation, not an AST node directly
+class CustomType:
     def __init__(self, name, properties, file, line, column):
         self.name = name
         self.properties = properties
@@ -364,33 +372,27 @@ class CustomType:  # This is a runtime representation, not an AST node directly
         self.line = line
         self.column = column
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        props_str = ",\n".join(
-            prop.__str__(indent_level + 1) for prop in self.properties
-        )
-        return (
-            f"{current_indent}define {
-                self.name} = {{\n{props_str}\n{current_indent}}}"
-        )
-
+    def to_dict(self):
+        return {
+            "type": "CustomType",
+            "name": self.name,
+            "properties": [p.to_dict() for p in self.properties],
+            "file": self.file,
+            "line": self.line,
+            "column": self.column
+        }
 
 class CustomTypeDeclStmt(Statement):
     def __init__(self, name, definition, file, line, column):
         super().__init__("CustomTypeDeclStmt", file, line, column)
         self.name = name
-        self.definition = definition  # List of CustomTypeProperty objects
+        self.definition = definition  # list of CustomTypeProperty
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        props_str = ",\n".join(
-            prop.__str__(indent_level + 1) for prop in self.definition
-        )
-        return (
-            f"{current_indent}define {
-                self.name} = {{\n{props_str}\n{current_indent}}}"
-        )
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["name"] = self.name
+        base["properties"] = [p.to_dict() for p in self.definition]
+        return base
 
 class AssertStmt(Statement):
     def __init__(self, expression, message, file, line, column):
@@ -398,14 +400,11 @@ class AssertStmt(Statement):
         self.expression = expression
         self.message = message
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        msg_str = f' "{self.message}"' if self.message else ""
-        return (
-            f"{current_indent}assert {self.expression.__str__(indent_level)}{
-                msg_str}"
-        )
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["expression"] = _serialize_node(self.expression)
+        base["message"] = self.message
+        return base
 
 class ClassDefinition(Statement):
     def __init__(self, name, superclass_name, body, file, line, column):
@@ -414,17 +413,12 @@ class ClassDefinition(Statement):
         self.superclass_name = superclass_name
         self.body = body
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        next_indent = INDENT_STEP * (indent_level + 1)
-        class_str = f"{current_indent}class {self.name}"
-        if self.superclass_name:
-            class_str += f" inherits {self.superclass_name}"
-        class_str += " do\n"
-        for member in self.body:
-            class_str += member.__str__(indent_level + 1) + "\n"
-        class_str += f"{current_indent}end"
-        return class_str
+    def to_dict(self):
+        base = super().to_dict()
+        base["class_name"] = self.name
+        base["superclass"] = self.superclass_name
+        base["body"] = _serialize_list(self.body)
+        return base
 
 class ObjectDecl(Statement):
     def __init__(self, name, body, file, line, column):
@@ -432,18 +426,14 @@ class ObjectDecl(Statement):
         self.name = name
         self.body = body
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-
-        body_str = "\n".join(stmt.__str__(indent_level + 1)
-                             for stmt in self.body)
-        return f"{current_indent}object {self.name}\n{body_str}\n{current_indent}end"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["name"] = self.name
+        base["body"] = _serialize_list(self.body)
+        return base
 
 class MethodDefinition(Statement):
-    def __init__(
-        self, name, parameters, body, is_static, is_constructor, is_private, file, line, column
-    ):
+    def __init__(self, name, parameters, body, is_static, is_constructor, is_private, file, line, column):
         super().__init__("MethodDefinition", file, line, column)
         self.name = name
         self.parameters = parameters
@@ -452,26 +442,18 @@ class MethodDefinition(Statement):
         self.is_constructor = is_constructor
         self.is_private = is_private
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        params_str = ", ".join(p.__str__(indent_level)
-                               for p in self.parameters)
-        body_str = "\n".join(stmt.__str__(indent_level + 1)
-                             for stmt in self.body)
-        md = ""
-        if self.is_static:
-            md += "static "
-        if self.is_private:
-            md += "private "
-        name = "init" if self.is_constructor else self.name
-        return f"{current_indent}{md}func {name}({params_str}) \n{body_str}\n{current_indent}end"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["name"] = "init" if self.is_constructor else self.name
+        base["parameters"] = _serialize_list(self.parameters)
+        base["body"] = _serialize_list(self.body)
+        base["is_static"] = self.is_static
+        base["is_constructor"] = self.is_constructor
+        base["is_private"] = self.is_private
+        return base
 
 class PropertyDefinition(Statement):
-    def __init__(
-        self, name, type_annotation, initializer, is_static, is_private, file, line, column
-
-    ):
+    def __init__(self, name, type_annotation, initializer, is_static, is_private, file, line, column):
         super().__init__("PropertyDefinition", file, line, column)
         self.name = name
         self.type_annotation = type_annotation
@@ -479,47 +461,32 @@ class PropertyDefinition(Statement):
         self.is_static = is_static
         self.is_private = is_private
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        md = ""
-        if self.is_static:
-            md += "static "
-        if self.is_private:
-            md += "private "
-        prop_str = f"{current_indent}{md}var {self.name}"
-
-        if self.type_annotation:
-            prop_str += f" {self.type_annotation}"
-        if self.initializer:
-            prop_str += f" = {self.initializer.__str__(indent_level)}"
-        return prop_str
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["name"] = self.name
+        base["type_annotation"] = self.type_annotation
+        base["initializer"] = _serialize_node(self.initializer) if self.initializer else None
+        base["is_static"] = self.is_static
+        base["is_private"] = self.is_private
+        return base
 
 class ExpressionStmt(Statement):
     def __init__(self, expression, file, line, column):
         super().__init__("ExpressionStmt", file, line, column)
         self.expression = expression
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        return f"{current_indent}{self.expression.__str__(indent_level)}"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["expression"] = _serialize_node(self.expression)
+        return base
 
 class BreakStmt(Statement):
     def __init__(self, file, line, column):
         super().__init__("BreakStmt", file, line, column)
 
-    def __str__(self, indent_level=0):
-        return f"{INDENT_STEP * indent_level}break"
-
-
 class ContinueStmt(Statement):
     def __init__(self, file, line, column):
         super().__init__("ContinueStmt", file, line, column)
-
-    def __str__(self, indent_level=0):
-        return f"{INDENT_STEP * indent_level}continue"
-
 
 class TryStmt(Statement):
     def __init__(self, try_block, error_var, catch_block, file, line, column):
@@ -528,22 +495,12 @@ class TryStmt(Statement):
         self.error_var = error_var
         self.catch_block = catch_block
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        try_body_str = "\n".join(
-            stmt.__str__(indent_level + 1) for stmt in self.try_block
-        )
-        catch_body_str = "\n".join(
-            stmt.__str__(indent_level + 1) for stmt in self.catch_block
-        )
-        return (
-            f"{current_indent}test do\n"
-            f"{try_body_str}\n"
-            f"{current_indent}failed {self.error_var} do\n"
-            f"{catch_body_str}\n"
-            f"{current_indent}end"
-        )
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["try_block"] = _serialize_list(self.try_block)
+        base["error_var"] = self.error_var
+        base["catch_block"] = _serialize_list(self.catch_block)
+        return base
 
 class IfStmt(Statement):
     def __init__(self, condition, then_block, else_block, else_if, file, line, column):
@@ -551,30 +508,18 @@ class IfStmt(Statement):
         self.condition = condition
         self.then_block = then_block
         self.else_block = else_block
-        self.else_if = else_if
+        self.else_if = else_if  # list of {"condition": ..., "body": ...}
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        s = f"{current_indent}if {self.condition.__str__(indent_level)}\n"
-        s += "\n".join(stmt.__str__(indent_level + 1)
-                       for stmt in self.then_block)
-
-        if self.else_if:
-            for elseif_block in self.else_if:
-                s += f"\n{current_indent}elseif {
-                    elseif_block['condition'].__str__(indent_level)}\n"
-                s += "\n".join(
-                    stmt.__str__(indent_level + 1) for stmt in elseif_block["body"]
-                )
-
-        if self.else_block:
-            s += f"\n{current_indent}else\n"
-            s += "\n".join(stmt.__str__(indent_level + 1)
-                           for stmt in self.else_block)
-
-        s += f"\n{current_indent}end"
-        return s
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["condition"] = _serialize_node(self.condition)
+        base["then_block"] = _serialize_list(self.then_block)
+        base["else_if"] = [
+            {"condition": _serialize_node(b["condition"]), "body": _serialize_list(b["body"])}
+            for b in self.else_if
+        ]
+        base["else_block"] = _serialize_list(self.else_block) if self.else_block else None
+        return base
 
 class WhileStmt(Statement):
     def __init__(self, condition, body, file, line, column):
@@ -582,12 +527,11 @@ class WhileStmt(Statement):
         self.condition = condition
         self.body = body
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1)
-                             for stmt in self.body)
-        return f"{current_indent}while {self.condition.__str__(indent_level)}\n{body_str}\n{current_indent}end"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["condition"] = _serialize_node(self.condition)
+        base["body"] = _serialize_list(self.body)
+        return base
 
 class UntilStmt(Statement):
     def __init__(self, condition, body, file, line, column):
@@ -595,12 +539,11 @@ class UntilStmt(Statement):
         self.condition = condition
         self.body = body
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1)
-                             for stmt in self.body)
-        return f"{current_indent}until {self.condition.__str__(indent_level)}\n{body_str}\n{current_indent}end"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["condition"] = _serialize_node(self.condition)
+        base["body"] = _serialize_list(self.body)
+        return base
 
 class ForEachStmt(Statement):
     def __init__(self, variable, list, body, file, line, column):
@@ -609,15 +552,12 @@ class ForEachStmt(Statement):
         self.list = list
         self.body = body
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1)
-                             for stmt in self.body)
-        return f"{current_indent}for {self.variable} in {self.list.__str__(indent_level)} do\n{body_str}\n{current_indent}end"
-
-
-# wraps "@thing\ndef _():..."
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["variable"] = self.variable
+        base["list"] = _serialize_node(self.list)
+        base["body"] = _serialize_list(self.body)
+        return base
 
 class ForStmt(Statement):
     def __init__(self, variable, start, end, step, body, file, line, column):
@@ -628,32 +568,24 @@ class ForStmt(Statement):
         self.step = step
         self.body = body
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        step_str = f", {self.step.__str__(indent_level)}" if self.step else ""
-        body_str = "\n".join(stmt.__str__(indent_level + 1)
-                             for stmt in self.body)
-        return (
-            f"{current_indent}for {self.variable} = {
-                self.start.__str__(indent_level)}, "
-            f"{self.end.__str__(indent_level)}{step_str} do\n"
-            f"{body_str}\n"
-            f"{current_indent}end"
-        )
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["variable"] = self.variable
+        base["start"] = _serialize_node(self.start)
+        base["end"] = _serialize_node(self.end)
+        base["step"] = _serialize_node(self.step) if self.step else None
+        base["body"] = _serialize_list(self.body)
+        return base
 
 class EnumDef(Expression):
     def __init__(self, values, file, line, column):
         super().__init__("EnumDef", file, line, column)
         self.values = values
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        next_indent = INDENT_STEP * (indent_level + 1)
-        values_str = ",\n".join(
-            f"{next_indent}{value}" for value in self.values)
-        return f"{current_indent}enum  {{\n{values_str}\n{current_indent}}}"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["values"] = self.values
+        return base
 
 class ScopeStmt(Statement):
     def __init__(self, name, body, file, line, column):
@@ -661,52 +593,45 @@ class ScopeStmt(Statement):
         self.name = name
         self.body = body
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1)
-                             for stmt in self.body)
-        return f"{current_indent}scope {self.name}\n{body_str}\n{current_indent}end"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["name"] = self.name
+        base["body"] = _serialize_list(self.body)
+        return base
 
 class SwitchStmt(Statement):
-    def __init__(self, expression, cases, strict: bool, file, line, column):
+    def __init__(self, expression, cases, strict, file, line, column):
         super().__init__("SwitchStmt", file, line, column)
         self.expression = expression
         self.cases = cases
         self.strict = strict
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        cases_str = "\n".join(case.__str__(indent_level + 1)
-                              for case in self.cases)
-        if self.strict:
-            return f"{current_indent}switch strict {self.expression.__str__(indent_level)}\n{cases_str}\n{current_indent}end"
-        return f"{current_indent}switch {self.expression.__str__(indent_level)}\n{cases_str}\n{current_indent}end"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["expression"] = _serialize_node(self.expression)
+        base["cases"] = [c.to_dict() for c in self.cases]
+        base["strict"] = self.strict
+        return base
 
 class ReturnStmt(Statement):
     def __init__(self, expression, file, line, column):
         super().__init__("ReturnStmt", file, line, column)
         self.expression = expression
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        expr_str = (
-            f" {self.expression.__str__(
-                indent_level)}" if self.expression else ""
-        )
-        return f"{current_indent}return{expr_str}"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["expression"] = _serialize_node(self.expression) if self.expression else None
+        return base
 
 class LocalFuncDecl(Statement):
     def __init__(self, fn, file, line, column):
         super().__init__("LocalFuncDecl", file, line, column)
         self.fn = fn
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        return f"{current_indent}local {self.fn.__str__(indent_level)}"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["function"] = _serialize_node(self.fn)
+        return base
 
 class FuncDecl(Statement):
     def __init__(self, name, parameters, body, file, line, column):
@@ -715,14 +640,12 @@ class FuncDecl(Statement):
         self.parameters = parameters
         self.body = body
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        params_str = ", ".join(p.__str__(indent_level)
-                               for p in self.parameters)
-        body_str = "\n".join(stmt.__str__(indent_level + 1)
-                             for stmt in self.body)
-        return f"{current_indent}func {self.name}({params_str}) \n{body_str}\n{current_indent}end"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["name"] = self.name
+        base["parameters"] = _serialize_list(self.parameters)
+        base["body"] = _serialize_list(self.body)
+        return base
 
 class WithStmt(Statement):
     def __init__(self, expr, alias, body, file, line, column):
@@ -731,39 +654,34 @@ class WithStmt(Statement):
         self.alias = alias
         self.body = body
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
-        body_str = "\n".join(stmt.__str__(indent_level + 1)
-                             for stmt in self.body)
-        return f"{current_indent}with {self.expr.__str__(indent_level)} as {self.alias} do\n{body_str}\n{current_indent}end"
+    def to_dict(self):
+        base = super().to_dict()
+        base["expression"] = _serialize_node(self.expr)
+        base["alias"] = self.alias
+        base["body"] = _serialize_list(self.body)
+        return base
 
-
-class LambdaDecl(
-    Expression
-):  # LambdaDecl is an expression that evaluates to a function
+class LambdaDecl(Expression):
     def __init__(self, parameters, body, file, line, column):
         super().__init__("LambdaDecl", file, line, column)
         self.parameters = parameters
         self.body = body
 
-    def __str__(self, indent_level=0):
-        params_str = ", ".join(p.__str__(indent_level)
-                               for p in self.parameters)
-        body_str = "\n".join(stmt.__str__(indent_level + 1)
-                             for stmt in self.body)
-        # Lambda is an expression, so it doesn't get the outer indent, but its body does.
-        return f"def ({params_str})\n{body_str}\n{INDENT_STEP * indent_level}end"
-
+    def to_dict(self):
+        base = super().to_dict()
+        base["parameters"] = _serialize_list(self.parameters)
+        base["body"] = _serialize_list(self.body)
+        return base
 
 class UsingStmt(Statement):
     def __init__(self, name, file, line, column):
         super().__init__("UsingStmt", file, line, column)
         self.name = name
 
-    def __str__(self, indent_level=0):
-        current_indent = INDENT_STEP * indent_level
+    def to_dict(self):
+        base = super().to_dict()
         if isinstance(self.name, list):
-            names_str = ", ".join(self.name)
-            return f"{current_indent}using [{names_str}]"
+            base["names"] = self.name
         else:
-            return f"{current_indent}using {self.name}"
+            base["name"] = self.name
+        return base
