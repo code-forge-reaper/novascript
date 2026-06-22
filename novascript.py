@@ -1207,7 +1207,7 @@ class Tokenizer:
                         Token("number", int(int_part, 10), file, line, start_col)
                     )
                 continue
-            if char in ['"', "'"]:
+            if char in ['"', "'", "`"]:
                 quote = char
                 i += 1
                 value = []
@@ -1251,17 +1251,17 @@ class Tokenizer:
                             '"': '"',
                             "'": "'",
                         }
-
-                        if esc not in escapes:
-                            raise NovaError(
-                                Token(
-                                    "error", "Invalid escape sequence", file, line, col
-                                ),
-                                f"Invalid escape sequence \\{esc}",
-                            )
-
-                        value.append(escapes[esc])
-
+                        if quote != "`":
+                            if esc not in escapes:
+                                raise NovaError(
+                                    Token(
+                                        "error", "Invalid escape sequence", file, line, col
+                                    ),
+                                    f"Invalid escape sequence \\{esc}",
+                                )
+                            value.append(escapes[esc])
+                        else:
+                            value.append("\\"+esc)
                     else:
                         value.append(c)
 
@@ -1281,8 +1281,10 @@ class Tokenizer:
 
                 i += 1
                 col += 1
-
-                tokens.append(Token("string", "".join(value), file, line, start_col))
+                if quote == "`":
+                    tokens.append(Token("string", "".join(value), file, line, start_col))
+                else:
+                    tokens.append(Token("string", r"".join(value), file, line, start_col))
                 continue
 
             # Identifiers, keywords, booleans.
@@ -3030,7 +3032,6 @@ class Interpreter:
                     return result
                 elif isinstance(result, ContinueFlow):
                     continue
-
         elif stmt.type == "ForEachStmt":
             list_val = self.evaluate_expr(stmt.list, env)
             if not isinstance(list_val, (list, dict)) and not hasattr(
@@ -3091,7 +3092,6 @@ class Interpreter:
                         return result
                     elif isinstance(result, ContinueFlow):
                         continue
-
         elif stmt.type == "ScopeStmt":
             n_env = Environment(env)
             n_env.localsOnly = True

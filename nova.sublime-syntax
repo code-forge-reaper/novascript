@@ -14,6 +14,12 @@ contexts:
         1: punctuation.definition.comment.shebang
         2: comment.line.shebang.path
         3: constant.language.interpreter.nova
+    # Captures: 1=#!, 2=path/env, 3=interpreter
+    - match: '^(#!)((?:.*/)?(?:env\s+)?)([a-zA-Z][a-zA-Z_]+)'
+      captures:
+        1: punctuation.definition.comment.shebang
+        2: comment.line.shebang.path
+        3: constant.language.interpreter.nova
 
     - include: comments
     - include: strings
@@ -57,6 +63,9 @@ contexts:
     - match: "'"
       scope: punctuation.definition.string.begin.nova
       push: single_quoted_string
+    - match: "`"
+      scope: punctuation.definition.string.begin.nova
+      push: single_quoted_string
 
   double_quoted_string:
     - meta_scope: string.quoted.double.nova
@@ -74,6 +83,9 @@ contexts:
       scope: punctuation.definition.string.end.nova
       pop: true
 
+    - match: "`"
+      scope: punctuation.definition.string.end.nova
+      pop: true
   numbers:
     # hex numbers: 0xFF, 0xDEAD_BEEF
     - match: \b0[xX][0-9a-fA-F_]+\b
