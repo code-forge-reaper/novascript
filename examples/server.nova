@@ -4,8 +4,9 @@
 const sock = load("socket")
 
 const server ={
-host: "localhost",
-port:5173}
+  host: "localhost",
+  port:5173
+}
 
 define StatusType = {
   status: string,

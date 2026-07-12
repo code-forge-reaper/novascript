@@ -34,6 +34,8 @@ for i in range(20):
 </ul>
 
 """
+
+
 @dataclass
 class Ctx:
     source: str
@@ -41,20 +43,22 @@ class Ctx:
     doc = {
         "header": {"name": "", "title": ""},
         "content": "",
-        "state":{}# where eval can just dump stuff into
+        "state": {},  # where eval can just dump stuff into
     }
+
     def write(self, s):
         self.doc["content"] += s
+
     def __post_init__(self):
-        self.doc = {
-            "header": {"name": "", "title": ""},
-            "content": "",
-            "state": {}
-        }
+        self.doc = {"header": {"name": "", "title": ""}, "content": "", "state": {}}
         self.doc["state"]["write"] = self.write
+
+        self.doc["state"]["load"] = load
+        self.doc["state"]["genHtml"] = genHtml
+
     def moveIndex(self, offset: int):
         self.index += offset
-    
+
     def consumeNextChar(self):
         char = self.source[self.index]
         if char == "\\":
@@ -66,7 +70,7 @@ class Ctx:
             return char
 
     def nextChar(self, i=0):
-        return self.source[self.index+i]
+        return self.source[self.index + i]
 
     def skipSpace(self):
         while self.isWhiteSpace():
@@ -100,6 +104,7 @@ class Ctx:
 
         return output
 
+
 # @doc: sample.html
 def handle_at(context: Ctx):
     context.moveIndex(1)
@@ -125,13 +130,14 @@ def handle_text(context: Ctx):
     while (
         not context.isEnd()
         and not context.isChar("\n")
-        and not (context.isChar("!") and context.nextChar(1)=="{")
-        and not (context.isChar("$") and context.nextChar(1)=="{")
+        and not (context.isChar("!") and context.nextChar(1) == "{")
+        and not (context.isChar("$") and context.nextChar(1) == "{")
     ):
         e = context.consumeNextChar()
         output += e
 
     context.write(output)
+
 
 def handle_embedded_stmt(context: Ctx):
     "${...}"
@@ -146,12 +152,13 @@ def handle_embedded_stmt(context: Ctx):
         if braceCount > 0:
             string += context.source[context.index]
         context.moveIndex(1)
-    
+
     exec(string, context.doc["state"])
+
 
 def handle_embedded_expr(context: Ctx):
     "!{...}"
-    braceCount = 1 # Why? because this allows this: "!{c = {'age': 42}}"
+    braceCount = 1  # Why? because this allows this: "!{c = {'age': 42}}"
     context.moveIndex(2)
     string = ""
     while braceCount > 0:
@@ -162,10 +169,11 @@ def handle_embedded_expr(context: Ctx):
         if braceCount > 0:
             string += context.source[context.index]
         context.moveIndex(1)
-    
+
     c = eval(string, context.doc["state"])
     if c is not None:
         context.write(str(c))
+
 
 # you can use this for like, profiles
 # you don't need the whole "@doc" "@title" thing
@@ -177,14 +185,19 @@ def handle_embedded_expr(context: Ctx):
 </div>
 """
 
-def load(content, state={}):
+
+def load(content, state=None):
+    if state == None:
+        state = {}
     context = Ctx(re.sub(r"<\?(.*?)\?>", "", content, flags=re.DOTALL), 0)
     context.doc["state"].update(state)
-    #print(context)
+    # print(context)
     while not context.isEnd():
-        #print("current: ", repr(context.nextChar()))
+        # print("current: ", repr(context.nextChar()))
         if context.isChar("\n"):
-            if not context.doc["content"].endswith("\n"): # try to avoid spamming newlines
+            if not context.doc["content"].endswith(
+                "\n"
+            ):  # try to avoid spamming newlines
                 context.doc["content"] += "\n"
             context.moveIndex(1)
         elif context.isWhiteSpace():
@@ -200,6 +213,7 @@ def load(content, state={}):
             handle_text(context)
     return context.doc
 
+
 def genHtml(doc):
     content = "<!DOCTYPE html>\n"
     content += "<html>\n"
@@ -212,14 +226,17 @@ def genHtml(doc):
     content += "</html>\n"
     return content
 
+
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) != 2:
         print("Usage: python main.py <file>")
         sys.exit(1)
     with open(sys.argv[1], "r") as f:
         content = f.read()
-        if not content.endswith("\n"): content += "\n"
+        if not content.endswith("\n"):
+            content += "\n"
         doc = load(content)
 
     with open(doc["header"]["doc"], "w") as f:

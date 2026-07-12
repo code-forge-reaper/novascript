@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-
-from novascript import Interpreter, NovaError
+from nodes import NovaError
+from novascript import Interpreter, init_globals
 import sys
 import os
 
@@ -19,6 +19,8 @@ def main():
             source = f.read()
 
     interpreter = Interpreter(source, script_file)
+    init_globals(interpreter, interpreter.globals)
+
     interpreter.interpret()
 
 
