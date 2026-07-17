@@ -435,7 +435,7 @@ end
 var animal = new Animal("Lion", "Roar")
 class Cat inherits Animal
     func init()
-        super("Cat", "Meow")
+        Base("Cat", "Meow")
     end
 end
 var cat = new Cat()

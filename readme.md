@@ -182,7 +182,7 @@ using load("PyQt6.QtWebEngineCore")
 using load("PyQt6.QtWebEngineWidgets")
 
 class Win inherits QMainWindow
-  func init(app) super()
+  func init(app) Base()
     $app = app
     $setWindowTitle("Sample engine")
     
@@ -266,7 +266,7 @@ class Win inherits QMainWindow
     if event.key() == Qt.Key.Key_F12
       $_toggleDevTools()
     else
-      super.keyPressEvent(event)   // forward other keys
+      Base.keyPressEvent(event)   // forward other keys
     end
   end
 

@@ -801,7 +801,7 @@ class NovaClass:
                                         )
 
                                 super_obj[attr_name] = python_super_call
-                method_env.define("super", super_obj)
+                method_env.define("Base", super_obj)
 
             # Bind method parameters
             for i, param in enumerate(method_def.parameters):
@@ -852,7 +852,7 @@ class NovaClass:
                             parent.constructor_def, super_args, instance, instance_token
                         )
 
-                constructor_env.define("super", super_constructor_call)
+                constructor_env.define("Base", super_constructor_call)
             elif isinstance(self.super_class, type):
                 parent_type = self.super_class
 
@@ -865,7 +865,7 @@ class NovaClass:
                             f"Error calling superclass Python constructor: {e}",
                         )
 
-                constructor_env.define("super", super_constructor_call)
+                constructor_env.define("Base", super_constructor_call)
             else:
                 raise NovaError(
                     instance_token,

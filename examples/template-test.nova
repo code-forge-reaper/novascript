@@ -1,0 +1,21 @@
+const template = load("template")
+"
+@doc: sample.html
+@title: sample format testing
+
+<?this is like Latex, basically?>
+${import numpy as np}
+
+${mat = np.array([[52,12],
+                 [24,41]])
+}
+
+This is a simple test
+
+<ul>
+${
+for i in range(20):
+    write(f\"<li key='{i}'>{mat * i}</li>\")    
+}
+</ul>
+" -> template.load -> template.genHtml -> print

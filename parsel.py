@@ -395,7 +395,7 @@ class IfStmt(Stmt):
 
 
 class GotoStmt(Stmt):
-    def __init__(self, scene: str, token: Token):
+    def __init__(self, scene: Expr, token: Token):
         self.scene = scene
         self.token = token
 
@@ -612,7 +612,7 @@ class ParselParser:
 
     def parse_goto(self) -> GotoStmt:
         tok = self.consume()  # 'goto'
-        scene = self.expect("string").value
+        scene = self.parse_expr()
         return GotoStmt(scene, tok)
     def parse_if(self) -> IfStmt:
         tok = self.consume()  # 'if'
@@ -1081,10 +1081,12 @@ class ParselRuntime:
                 for sub in stmt.else_body:
                     self.execute_stmt(sub, env)
         elif isinstance(stmt, GotoStmt):
-            if stmt.scene not in self.scenes:
-                raise ParselError(stmt.token, f"Scene '{
-                                  stmt.scene}' not defined")
-            raise GotoSignal(stmt.scene)
+            scene = self.evaluate_expr(stmt.scene, env)
+            scene = self.interpolate(scene, env)
+            if scene not in self.scenes:
+                raise ParselError(stmt.token,
+                    f"Scene '{scene}' not defined")
+            raise GotoSignal(scene)
         elif isinstance(stmt, PauseStmt):
             import time
 
@@ -1228,8 +1230,8 @@ class ParselRuntime:
             for key, val_expr in expr.props:
                 obj[key] = self.evaluate_expr(val_expr, env)
             return obj
-        raise ParselError(getattr(expr, "token", None), f"Unknown expression: {
-                type(expr).__name__}")
+        raise ParselError(getattr(expr, "token", None),
+            f"Unknown expression: {type(expr).__name__}")
 
     def interpolate(self, text: str, env: Environment) -> str:
         def repl(match):

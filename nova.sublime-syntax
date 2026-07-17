@@ -42,7 +42,7 @@ contexts:
 
 
   class:
-    - match: \b(class|record|inherits|static|super)\b
+    - match: \b(class|record|inherits|static|Base)\b
       scope: keyword.declaration.nova
 
   comments:
