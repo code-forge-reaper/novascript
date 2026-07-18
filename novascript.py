@@ -1,5 +1,6 @@
 import os
 import sys
+import pathlib
 
 ROOT = os.path.dirname(os.path.realpath(__file__))
 LIBS_PATH = os.path.join(ROOT, "libs")
@@ -8,12 +9,47 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, LIBS_PATH)
 sys.path.insert(0, os.getcwd())
 
+# Around line 13, replace the Proxy class with this improved version
+class Proxy:
+    def __init__(self, set_func, get_func, instance, interpreter, cls):
+        self._set = set_func
+        self._get = get_func
+        self.defining = instance
+        self.interpreter = interpreter  # Need reference for stack
+        self.cls = cls  # The defining class for private access
+
+    def get(self):
+        if not self._get:
+            raise NovaError(None, "Property has no getter.")
+        try:
+            if self.cls and self.interpreter:
+                self.interpreter.current_class_stack.append(self.cls)
+            return self._get()
+        finally:
+            if self.cls and self.interpreter and self.interpreter.current_class_stack:
+                self.interpreter.current_class_stack.pop()
+
+    def set(self, value):
+        if not self._set:
+            raise NovaError(None, "Property has no setter.")
+        try:
+            if self.cls and self.interpreter:
+                self.interpreter.current_class_stack.append(self.cls)
+            return self._set(value)
+        finally:
+            if self.cls and self.interpreter and self.interpreter.current_class_stack:
+                self.interpreter.current_class_stack.pop()
+
+import pprint
+
 
 def dprint(str: str, node: Token):
     if os.environ.get("debugMode", "") == "Pretty":
-        print(" " * node.column, "- ", str, node)
+        pprint.pprint(" " * node.column + f"- {str} {node.to_dict()}")
     elif os.environ.get("debugMode", "") == "Node":
-        print(" " * node.column, "- ", str, json.dumps(node.to_dict()))
+        pprint.pprint(" " * node.column + f"- {str} {node.to_json()}")
+    elif os.environ.get("debugMode", "") == "Simple":
+        print(" " * node.column +node.__str__())
 
 
 from nodes import *
@@ -53,7 +89,7 @@ def init_globals(interpreter, globals_env):
                     else:
                         s = {}
                         for k, v in obj.items():
-                            if not k.startswith("__"):
+                            if not (isinstance(k, str) and k.startswith("__")):
                                 s[k] = v
                         print(s, end=end)
                 else:
@@ -255,6 +291,7 @@ def init_globals(interpreter, globals_env):
         possible_locations = [
             nova_path,
             os.path.join(os.path.dirname(interpreter.file), nova_path),
+            os.path.join(os.getcwd(), nova_path),
             os.path.join(LIBS_PATH, nova_path),
         ]
 
@@ -723,7 +760,20 @@ class NovaClass:
         # Add properties
         for prop_name, prop_def in self.instance_properties.items():
             value = None
-            if prop_def.initializer:
+            # Around line 740
+            if isinstance(prop_def, PropertyHandler):
+                _env = Environment(self.env)
+                _env.define("self", instance)
+                _env.define("__defining_class__", instance)
+                self.interpreter.execute_stmt(prop_def.setter, _env)
+                self.interpreter.execute_stmt(prop_def.getter, _env)
+                set_func = _env.get("set").value
+                get_func = _env.get("get").value
+                dprint("PropertyHandler:", prop_def)
+                value = Proxy(
+                    set_func, get_func, instance, self.interpreter, self
+                )
+            elif prop_def.initializer:
                 value = self.interpreter.evaluate_expr(prop_def.initializer, self.env)
             self._set_instance_attr(instance, prop_name, value)
 
@@ -914,6 +964,17 @@ CUSTOM_TYPES = {}  # Dictionary for custom types
 def check_type(expected, value, token):
     if expected in ["any", None]:
         return
+    # Handle array types: int[], string[][], list[], etc.
+    if isinstance(expected, str) and expected.endswith("[]"):
+        base_type = expected[:-2]
+        if not isinstance(value, list):
+            raise NovaError(
+                token,
+                f"Type mismatch: expected array type '{expected}', got {type(value).__name__}",
+            )
+        for elem in value:
+            check_type(base_type, elem, token)
+        return
     custom_type_definition = BUILTIN_VAR_TYPES.get(expected, None)
     if not custom_type_definition:
         custom_type_definition = CUSTOM_TYPES.get(expected)
@@ -1025,6 +1086,7 @@ class Tokenizer:
         "with",
         "unpack",
         "compact",
+        "property",
     ]
 
     # --- Tokenization ---
@@ -1377,6 +1439,23 @@ class Tokenizer:
             raise NovaError(token, f"Expected token '{value}', got {token.value}")
         return token
 
+    def _consume_array_brackets(self, base_type: str) -> str:
+        """After consuming a type identifier, eat any trailing [] pairs.
+
+        Examples: int -> int[]  |  string -> string[][]
+        """
+        result = base_type
+        while (
+            self.current < len(self.tokens)
+            and self.tokens[self.current].value == "["
+            and self.current + 1 < len(self.tokens)
+            and self.tokens[self.current + 1].value == "]"
+        ):
+            self.consume_token()  # [
+            self.consume_token()  # ]
+            result += "[]"
+        return result
+
     def build_fn(self, token):
         self.consume_token()
         func_name_token = self.expect_type("identifier")
@@ -1407,6 +1486,7 @@ class Tokenizer:
                     ):
                         annotation_type = type_token.value
                         self.consume_token()
+                        annotation_type = self._consume_array_brackets(annotation_type)
 
                 default_expr = None
                 if self.get_next_token() and self.get_next_token().value == "=":
@@ -1566,8 +1646,8 @@ class Tokenizer:
                 ):
                     self.consume_token()  # consume ':'
                     type_token = self.expect_type("identifier")
-                    type_annotation = type_token.value
                     self.consume_token()
+                    type_annotation = self._consume_array_brackets(type_token.value)
 
                 initializer = None
                 if (
@@ -1587,6 +1667,37 @@ class Tokenizer:
                         prop_name_token.file,
                         prop_name_token.line,
                         prop_name_token.column,
+                    )
+                )
+            elif (
+                self.get_next_token()
+                and self.get_next_token().type == "keyword"
+                and self.get_next_token().value == "property"
+            ):
+                if is_private:
+                    raise NovaError(self.get_next_token(), "property cannot be private")
+                self.consume_token()
+                _name = self.consume_expected("identifier")
+                setter = None
+                getter = None
+                p = [self._parse_statement(), self._parse_statement()]
+                for node in p:
+                    if node.type != "FuncDecl":
+                        raise NovaError(
+                            node, "only functions are allowed in this context"
+                        )
+                    if node.name == "set":
+                        setter = node
+                    elif node.name == "get":
+                        getter = node
+                    else:
+                        raise NovaError(node, "only 'set' and 'get' are allowed")
+                
+                if not setter or not getter:
+                    raise NovaError(node, "Expected a getter and setter")
+                body.append(
+                    PropertyHandler(
+                        _name.value, getter, setter, _name.file, _name.line, _name.column
                     )
                 )
             elif (
@@ -1634,6 +1745,9 @@ class Tokenizer:
                             ):
                                 annotation_type = type_token.value
                                 self.consume_token()
+                                annotation_type = self._consume_array_brackets(
+                                    annotation_type
+                                )
                             else:
                                 raise NovaError(
                                     type_token,
@@ -1839,6 +1953,9 @@ class Tokenizer:
                     ):  # Parentheses for clarity
                         var_annotation_type = self.get_next_token().value
                         self.consume_token()
+                        var_annotation_type = self._consume_array_brackets(
+                            var_annotation_type
+                        )
                     else:
                         raise NovaError(
                             self.get_next_token(),
@@ -1871,6 +1988,9 @@ class Tokenizer:
                     ):  # Parentheses for clarity
                         var_annotation_type = self.get_next_token().value
                         self.consume_token()
+                        var_annotation_type = self._consume_array_brackets(
+                            var_annotation_type
+                        )
                     else:
                         raise NovaError(
                             self.get_next_token(),
@@ -2544,6 +2664,7 @@ class Tokenizer:
                     ):
                         annotation_type = type_token.value
                         self.consume_token()
+                        annotation_type = self._consume_array_brackets(annotation_type)
 
                 default_expr = None
                 if self.get_next_token() and self.get_next_token().value == "=":
@@ -2808,7 +2929,9 @@ class Tokenizer:
 class Interpreter:
     def __init__(self, source, file_path):
         self.source = source
-        self.file = os.path.abspath(file_path)
+        c = pathlib.Path(file_path)
+        self.file = c.expanduser().resolve()
+        # self.file = os.path.abspath(file_path)
         self.tk = Tokenizer(source, file_path)
         self.globals = Environment()
 
@@ -2849,7 +2972,9 @@ class Interpreter:
             if isinstance(err, NovaError):
                 print(f"{err.message}", file=sys.stderr)
             else:
-                print(f"{repr(err)}")  # trying to print the name and what caused it
+                print(
+                    f"{err.__class__.__name__}:{err}"
+                )  # trying to print the name and what caused it
             exit(1)
 
     def execute_block(self, statements, env):
@@ -3315,6 +3440,9 @@ class Interpreter:
                         nova_class.static_members[member.name] = prop_value
                     else:
                         nova_class.instance_properties[member.name] = member
+                elif member.type == "PropertyHandler":
+                    nova_class.instance_properties[member.name]= member
+
                 elif member.type == "MethodDefinition":
                     if member.is_private:
                         nova_class._private_methods.add(member.name)
@@ -3353,6 +3481,8 @@ class Interpreter:
                         nova_class.static_members[member.name] = static_method_wrapper
                     else:
                         nova_class.instance_methods[member.name] = member
+                else:
+                    raise NovaError(member, f"not supported: {member}")
 
             env.define(class_def.name, nova_class)
         elif stmt.type == "AssertStmt":
@@ -3518,6 +3648,10 @@ class Interpreter:
                     current_value = base.get(final_key, target).value
                 elif isinstance(base, dict):
                     current_value = base.get(final_key)
+                    if isinstance(current_value, Proxy):
+                        if not current_value.get:
+                            raise NovaError(target, f"Property '{final_key}' has no getter.")
+                        current_value = current_value.get()
                 else:
                     current_value = getattr(base, final_key, None)
 
@@ -3577,10 +3711,24 @@ class Interpreter:
 
                 elif isinstance(base, dict):
                     # Resolve expected type for (possibly nested) property using root variable's type
-                    expected_type = self.get_target_type(target, env)
-                    if expected_type:
-                        check_type(expected_type, final_value_to_assign, target)
-                    base[final_key] = final_value_to_assign
+                    if final_key in base and isinstance(base[final_key], Proxy):
+                        proxy = base[final_key]
+                        if not proxy.set:
+                            raise NovaError(target, f"Property '{final_key}' has no setter.")
+                        cls = base.get("__defining_class__")
+                        if cls:
+                            try:
+                                self.current_class_stack.append(cls)
+                                proxy.set(final_value_to_assign)
+                            finally:
+                                self.current_class_stack.pop()
+                        else:
+                            proxy.set(final_value_to_assign)
+                    else:
+                        expected_type = self.get_target_type(target, env)
+                        if expected_type:
+                            check_type(expected_type, final_value_to_assign, target)
+                        base[final_key] = final_value_to_assign
 
                 else:
                     # Python object
@@ -3857,10 +4005,24 @@ class Interpreter:
                     expr,
                     f"Static property '{expr.property}' not found on class '{obj.name}'.",
                 )
-
-            # If obj is a NovaScript instance (represented as a Python dictionary)
             if isinstance(obj, dict) and expr.property in obj:
-                return obj[expr.property]
+                val = obj[expr.property]
+                if isinstance(val, Proxy):
+                    if not val.get:
+                        raise NovaError(expr, f"Property '{expr.property}' has no getter.")
+                    cls = obj.get("__defining_class__")
+                    if cls:
+                        try:
+                            self.current_class_stack.append(cls)
+                            return val.get()
+                        finally:
+                            self.current_class_stack.pop()
+                    else:
+                        return val.get()
+                return val
+            # If obj is a NovaScript instance (represented as a Python dictionary)
+            #if isinstance(obj, dict) and expr.property in obj:
+            #    return obj[expr.property]
             # If obj is an Environment (e.g., 'self' within a NovaScript method)
             elif isinstance(obj, Environment):
                 # FIX: Get value from var
