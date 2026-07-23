@@ -788,5 +788,20 @@ local func sample()
 end
 sample()
 
+class SampleSound
+    private var age = 24
+    property Age
+        func set(v) = $age = v
+        func get() = $age
+end
+
+var v = new SampleSound()
+// welp, just found out that proxies are more or less like pointers now
+using v
+
+print(v.Age+=24)
+print(Age)
+
+
 print("---" * 24)
 print("done")

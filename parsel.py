@@ -2,6 +2,10 @@
 """
 Parsel - a Ren'Py-like game engine for text adventures.
 Reuses NovaScript's lexer and adds a complete parser/runtime.
+Improved scene/goto system: scenes can have parameters, goto can pass arguments,
+and scenes can return values. The runtime maintains a call stack for scenes.
+Now with automatic scene visit tracking and built-in seen() function that correctly
+distinguishes first visit from subsequent visits.
 """
 
 import sys
@@ -329,8 +333,9 @@ class CharDecl(Stmt):
 
 
 class SceneDecl(Stmt):
-    def __init__(self, name: str, body: List[Stmt], token: Token):
+    def __init__(self, name: str, params: List[str], body: List[Stmt], token: Token):
         self.name = name
+        self.params = params
         self.body = body
         self.token = token
 
@@ -395,8 +400,9 @@ class IfStmt(Stmt):
 
 
 class GotoStmt(Stmt):
-    def __init__(self, scene: Expr, token: Token):
+    def __init__(self, scene: Expr, args: List[Expr], token: Token):
         self.scene = scene
+        self.args = args          # arguments to pass to the scene
         self.token = token
 
 
@@ -499,7 +505,6 @@ class ParselParser:
             if kw == "pause":
                 pause_token = self.consume()
                 duration_expr = None
-                # Check if the next token is a number or an expression
                 if self.current() and self.current().type in (
                     "number",
                     "identifier",
@@ -568,9 +573,22 @@ class ParselParser:
     def parse_scene(self) -> SceneDecl:
         tok = self.consume()  # 'scene'
         name = self.expect("string").value
+        params = []
+        # optional parameter list: (param1, param2, ...)
+        if self.current() and self.current().value == "(":
+            self.consume()  # '('
+            if self.current() and self.current().value != ")":
+                while True:
+                    param_tok = self.expect("identifier")
+                    params.append(param_tok.value)
+                    if self.current() and self.current().value == ",":
+                        self.consume()
+                    else:
+                        break
+            self.expect("operator", ")")
         body = self.parse_block_until("end")
         self.expect("keyword", "end")
-        return SceneDecl(name, body, tok)
+        return SceneDecl(name, params, body, tok)
 
     def parse_say(self) -> SayStmt:
         tok = self.consume()  # 'say'
@@ -612,8 +630,20 @@ class ParselParser:
 
     def parse_goto(self) -> GotoStmt:
         tok = self.consume()  # 'goto'
-        scene = self.parse_expr()
-        return GotoStmt(scene, tok)
+        scene_expr = self.parse_expr()
+        args = []
+        if self.current() and self.current().value == "(":
+            self.consume()  # '('
+            if self.current() and self.current().value != ")":
+                while True:
+                    args.append(self.parse_expr())
+                    if self.current() and self.current().value == ",":
+                        self.consume()
+                    else:
+                        break
+            self.expect("operator", ")")
+        return GotoStmt(scene_expr, args, tok)
+
     def parse_if(self) -> IfStmt:
         tok = self.consume()  # 'if'
         branches = []
@@ -873,8 +903,9 @@ class ReturnSignal(Exception):
 
 
 class GotoSignal(Exception):
-    def __init__(self, scene: str):
+    def __init__(self, scene: str, env: "Environment"):
         self.scene = scene
+        self.env = env
 
 
 class ExitSignal(Exception):
@@ -908,18 +939,22 @@ class Environment:
 class ParselRuntime:
     def __init__(self, ast: List[Stmt], filename: str = "<main>"):
         self.globals = Environment()
-        self.scenes: Dict[str, List[Stmt]] = {}
+        self.scenes: Dict[str, SceneDecl] = {}   # map name -> SceneDecl
         self.current_scene: Optional[str] = None
-        self.scene_stack: List[str] = []
+        self.current_env: Optional[Environment] = None
+        self.current_index: int = 0
+        self.scene_stack: List[Tuple[str, Environment, int]] = []  # (scene_name, env, index)
         self.ast = ast
         self.filename = filename
+        self.visited_scenes: set = set()          # scenes that have been entered at least once
+        self._was_seen_before: Dict[str, bool] = {} # for each scene, whether it was already visited before current entry
 
         # collect scenes
         for stmt in ast:
             if isinstance(stmt, SceneDecl):
                 if stmt.name in self.scenes:
-                    raise ParselError(stmt, "This scene has already been declared")
-                self.scenes[stmt.name] = stmt.body
+                    raise ParselError(stmt.token, f"Scene '{stmt.name}' already declared")
+                self.scenes[stmt.name] = stmt
 
         # built‑ins
         self.globals.define("print", print)
@@ -939,42 +974,103 @@ class ParselRuntime:
 
         self.globals.define("import", os_import_handler)
 
+        # --- Built‑ins for scene visit tracking ---
+        def seen(scene_name: str) -> bool:
+            """
+            Return True if the scene has been visited before the current visit.
+            If the scene is currently being executed, it returns whether it was seen
+            on a previous occasion (i.e., not the first time).
+            """
+            if not isinstance(scene_name, str):
+                raise ParselError(None, f"seen() expects a string, got {type(scene_name).__name__}")
+            # If we are currently inside the scene we are checking,
+            # use the pre‑entry flag to know if it was seen before.
+            if scene_name == self.current_scene:
+                return self._was_seen_before.get(scene_name, False)
+            else:
+                return scene_name in self.visited_scenes
+
+        def reset_seen():
+            """Clear the visited scenes tracking."""
+            self.visited_scenes.clear()
+            self._was_seen_before.clear()
+
+        self.globals.define("seen", seen)
+        self.globals.define("reset_seen", reset_seen)
+        # -------------------------------------------------
+
     def run(self):
         # execute top‑level statements (non‑scene)
         for stmt in self.ast:
             if not isinstance(stmt, SceneDecl):
-                self.execute_stmt(stmt, self.globals)
+                self.execute_stmt(stmt, self.globals, 0)  # index 0 dummy
+
         # start game
-        self.current_scene = "start"
-        if self.current_scene not in self.scenes:
+        if "start" not in self.scenes:
             raise ParselError(None, "No scene named 'start' found")
+        self.current_scene = "start"
+        self.current_env = Environment(self.globals)
+        self.current_index = 0
         self._game_loop()
 
     def _game_loop(self):
         while True:
             try:
-                self._run_scene(self.current_scene)
-            except GotoSignal as g:
-                self.scene_stack.append(self.current_scene)
-                self.current_scene = g.scene
-            except ReturnSignal:
+                # run current scene from current index
+                self._run_scene(self.current_scene, self.current_env, self.current_index)
+                # If _run_scene finishes normally (no signal), it means the scene ended.
+                # Treat as a return with None.
                 if self.scene_stack:
-                    self.current_scene = self.scene_stack.pop()
+                    caller_scene, caller_env, caller_idx = self.scene_stack.pop()
+                    # store return value in caller's environment
+                    caller_env.define("_return", None)
+                    self.current_scene = caller_scene
+                    self.current_env = caller_env
+                    self.current_index = caller_idx
+                    # continue loop to resume caller
                 else:
+                    # no caller, game ends
+                    break
+            except GotoSignal as g:
+                # jump to new scene with its environment
+                self.current_scene = g.scene
+                self.current_env = g.env
+                self.current_index = 0
+                # continue loop to run the new scene
+            except ReturnSignal as r:
+                if self.scene_stack:
+                    caller_scene, caller_env, caller_idx = self.scene_stack.pop()
+                    # store the return value in the caller's environment
+                    caller_env.define("_return", r.value)
+                    self.current_scene = caller_scene
+                    self.current_env = caller_env
+                    self.current_index = caller_idx
+                    # continue loop to resume caller
+                else:
+                    # return from top-level scene: exit game
                     break
             except ExitSignal:
                 break
 
-    def _run_scene(self, name: str):
-        # overwrite this part of the engine, if you want to add a gui
-        env = Environment(self.globals)
-        i = 0
-        while i < len(self.scenes[name]):
-            stmt = self.scenes[name][i]
-            self.execute_stmt(stmt, env)
+    def _run_scene(self, name: str, env: Environment, start_index: int):
+        # Determine if this scene was already visited before this entry.
+        was_seen = name in self.visited_scenes
+        self._was_seen_before[name] = was_seen
+        # Mark it as visited now (so future entries will see it as seen).
+        self.visited_scenes.add(name)
+
+        scene_decl = self.scenes.get(name)
+        if not scene_decl:
+            raise ParselError(None, f"Scene '{name}' not defined")
+        body = scene_decl.body
+        i = start_index
+        while i < len(body):
+            stmt = body[i]
+            # pass the current index to execute_stmt so it can push the correct resume point
+            self.execute_stmt(stmt, env, i)
             i += 1
 
-    def execute_stmt(self, stmt: Stmt, env: Environment):
+    def execute_stmt(self, stmt: Stmt, env: Environment, idx: int):
         if isinstance(stmt, VarDecl):
             val = self.evaluate_expr(stmt.init, env)
             env.define(stmt.name, val)
@@ -993,7 +1089,7 @@ class ParselRuntime:
                     func_env.define(param, arg_val)
                 try:
                     for s in stmt.body:
-                        self.execute_stmt(s, func_env)
+                        self.execute_stmt(s, func_env, 0)  # index not used inside function
                 except ReturnSignal as ret:
                     return ret.value
                 return None
@@ -1026,19 +1122,17 @@ class ParselRuntime:
                 for (
                     weight,
                     body,
-                ) in stmt.weighted_entries:  # assuming tuple (weight, body)
+                ) in stmt.weighted_entries:
                     if roll <= weight:
                         for sub_stmt in body:
-                            self.execute_stmt(sub_stmt, env)
-                        break  # stop after first match
-                # if no match, do nothing (move on)
+                            self.execute_stmt(sub_stmt, env, idx)
+                        break
             else:
-                # uniform entries
                 chosen_body = random.choice(
                     stmt.uniform_entries
-                )  # each is a list of statements
+                )
                 for sub_stmt in chosen_body:
-                    self.execute_stmt(sub_stmt, env)
+                    self.execute_stmt(sub_stmt, env, idx)
 
         elif isinstance(stmt, OptionsBlock):
             available = []
@@ -1056,11 +1150,11 @@ class ParselRuntime:
             while True:
                 try:
                     raw = input("Choice: ")
-                    idx = int(raw) - 1
-                    if 0 <= idx < len(available):
-                        _, body = available[idx]
+                    idx_choice = int(raw) - 1
+                    if 0 <= idx_choice < len(available):
+                        _, body = available[idx_choice]
                         for sub in body:
-                            self.execute_stmt(sub, env)
+                            self.execute_stmt(sub, env, idx)
                         break
                     else:
                         print(f"Invalid choice: {raw}")
@@ -1074,38 +1168,58 @@ class ParselRuntime:
             for cond, body in stmt.branches:
                 if self.evaluate_expr(cond, env):
                     for sub in body:
-                        self.execute_stmt(sub, env)
+                        self.execute_stmt(sub, env, idx)
                     executed = True
                     break
             if not executed and stmt.else_body:
                 for sub in stmt.else_body:
-                    self.execute_stmt(sub, env)
+                    self.execute_stmt(sub, env, idx)
+
         elif isinstance(stmt, GotoStmt):
-            scene = self.evaluate_expr(stmt.scene, env)
-            scene = self.interpolate(scene, env)
-            if scene not in self.scenes:
+            # evaluate scene name and arguments
+            scene_name = self.evaluate_expr(stmt.scene, env)
+            if not isinstance(scene_name, str):
+                raise ParselError(stmt.token, f"Scene name must be a string, got {type(scene_name).__name__}")
+            arg_values = [self.evaluate_expr(arg, env) for arg in stmt.args]
+
+            # get scene declaration to check parameters
+            scene_decl = self.scenes.get(scene_name)
+            if not scene_decl:
+                raise ParselError(stmt.token, f"Scene '{scene_name}' not defined")
+
+            if len(arg_values) != len(scene_decl.params):
                 raise ParselError(stmt.token,
-                    f"Scene '{scene}' not defined")
-            raise GotoSignal(scene)
+                    f"Scene '{scene_name}' expects {len(scene_decl.params)} arguments, got {len(arg_values)}")
+
+            # create new environment for the target scene
+            new_env = Environment(self.globals)
+            for param, val in zip(scene_decl.params, arg_values):
+                new_env.define(param, val)
+
+            # push current frame (resume after this goto)
+            self.scene_stack.append((self.current_scene, env, idx + 1))
+
+            # raise signal to jump
+            raise GotoSignal(scene_name, new_env)
+
         elif isinstance(stmt, PauseStmt):
             import time
-
             if stmt.duration is None:
-                time.sleep(2)  # default 2 seconds
+                time.sleep(2)
             else:
                 dur = self.evaluate_expr(stmt.duration, env)
                 if not isinstance(dur, (int, float)):
                     raise ParselError(
-                        stmt.token, f"Pause duration must be a number, got {
-                                      type(dur).__name__}"
+                        stmt.token, f"Pause duration must be a number, got {type(dur).__name__}"
                     )
                 if dur < 0:
                     raise ParselError(stmt.token, "Pause duration cannot be negative")
                 time.sleep(dur)
+
         elif isinstance(stmt, ExitStmt):
             raise ExitSignal()
+
         elif isinstance(stmt, UsingStmt):
-            # bring a namespace's members into current env
             namespace = env.get(stmt.name, stmt.token)
             if isinstance(namespace, dict):
                 for k, v in namespace.items():
@@ -1114,11 +1228,11 @@ class ParselRuntime:
                 for name, var in namespace.vars.items():
                     env.define(name, var)
             else:
-                raise ParselError(stmt.token, f"Cannot 'use' non-namespace value: {
-                        stmt.name}")
+                raise ParselError(stmt.token, f"Cannot 'use' non-namespace value: {stmt.name}")
 
         elif isinstance(stmt, ExpressionStmt):
             self.evaluate_expr(stmt.expr, env)
+
         else:
             raise ParselError(
                 getattr(stmt, "token", None),
@@ -1192,8 +1306,7 @@ class ParselRuntime:
                 idx = self.evaluate_expr(target.index, env)
                 obj[idx] = val
             else:
-                raise ParselError(expr.token, f"Invalid assignment target: {
-                        type(target).__name__}")
+                raise ParselError(expr.token, f"Invalid assignment target: {type(target).__name__}")
             return val
         if isinstance(expr, FuncCall):
             func = env.get(expr.name, expr.token)
@@ -1207,16 +1320,14 @@ class ParselRuntime:
             if method is None and isinstance(obj, dict):
                 method = obj.get(expr.method)
             if not callable(method):
-                raise ParselError(expr.token, f"Method '{
-                        expr.method}' not found or not callable")
+                raise ParselError(expr.token, f"Method '{expr.method}' not found or not callable")
             args = [self.evaluate_expr(a, env) for a in expr.args]
             return method(*args)
         if isinstance(expr, PropertyAccess):
             obj = self.evaluate_expr(expr.obj, env)
             if isinstance(obj, dict):
                 if expr.prop not in obj:
-                    raise ParselError(expr.token, f"Property '{
-                                      expr.prop}' not found")
+                    raise ParselError(expr.token, f"Property '{expr.prop}' not found")
                 return obj[expr.prop]
             return getattr(obj, expr.prop)
         if isinstance(expr, ArrayAccess):

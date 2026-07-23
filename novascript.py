@@ -9,6 +9,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, LIBS_PATH)
 sys.path.insert(0, os.getcwd())
 
+
 # Around line 13, replace the Proxy class with this improved version
 class Proxy:
     def __init__(self, set_func, get_func, instance, interpreter, cls):
@@ -17,6 +18,12 @@ class Proxy:
         self.defining = instance
         self.interpreter = interpreter  # Need reference for stack
         self.cls = cls  # The defining class for private access
+
+    def __str__(self):
+        return str(self.get())
+
+    def __repr__(self):
+        return str(self.get())
 
     def get(self):
         if not self._get:
@@ -40,6 +47,7 @@ class Proxy:
             if self.cls and self.interpreter and self.interpreter.current_class_stack:
                 self.interpreter.current_class_stack.pop()
 
+
 import pprint
 
 
@@ -49,7 +57,7 @@ def dprint(str: str, node: Token):
     elif os.environ.get("debugMode", "") == "Node":
         pprint.pprint(" " * node.column + f"- {str} {node.to_json()}")
     elif os.environ.get("debugMode", "") == "Simple":
-        print(" " * node.column +node.__str__())
+        print(" " * node.column + node.__str__())
 
 
 from nodes import *
@@ -770,9 +778,7 @@ class NovaClass:
                 set_func = _env.get("set").value
                 get_func = _env.get("get").value
                 dprint("PropertyHandler:", prop_def)
-                value = Proxy(
-                    set_func, get_func, instance, self.interpreter, self
-                )
+                value = Proxy(set_func, get_func, instance, self.interpreter, self)
             elif prop_def.initializer:
                 value = self.interpreter.evaluate_expr(prop_def.initializer, self.env)
             self._set_instance_attr(instance, prop_name, value)
@@ -1692,12 +1698,17 @@ class Tokenizer:
                         getter = node
                     else:
                         raise NovaError(node, "only 'set' and 'get' are allowed")
-                
+
                 if not setter or not getter:
                     raise NovaError(node, "Expected a getter and setter")
                 body.append(
                     PropertyHandler(
-                        _name.value, getter, setter, _name.file, _name.line, _name.column
+                        _name.value,
+                        getter,
+                        setter,
+                        _name.file,
+                        _name.line,
+                        _name.column,
                     )
                 )
             elif (
@@ -3184,6 +3195,26 @@ class Interpreter:
                         member.column,
                     )
                     temp_class.instance_properties[member.name] = prop_def
+
+                elif member.type == "PropertyDefinition":
+                    # Use member directly or create a new one with forced flags
+                    prop_def = PropertyDefinition(
+                        member.name,
+                        member.type_annotation,
+                        member.initializer,
+                        False,  # non‑static
+                        False,  # non‑private
+                        member.file,
+                        member.line,
+                        member.column,
+                    )
+                    temp_class.instance_properties[member.name] = prop_def
+
+                elif member.type == "PropertyHandler":
+                    # Add getter and setter as methods
+                    temp_class.instance_methods[member.getter.name] = member.getter
+                    temp_class.instance_methods[member.setter.name] = member.setter
+
                 else:
                     raise NovaError(member, "not supported")
 
@@ -3441,7 +3472,7 @@ class Interpreter:
                     else:
                         nova_class.instance_properties[member.name] = member
                 elif member.type == "PropertyHandler":
-                    nova_class.instance_properties[member.name]= member
+                    nova_class.instance_properties[member.name] = member
 
                 elif member.type == "MethodDefinition":
                     if member.is_private:
@@ -3648,12 +3679,14 @@ class Interpreter:
                     current_value = base.get(final_key, target).value
                 elif isinstance(base, dict):
                     current_value = base.get(final_key)
-                    if isinstance(current_value, Proxy):
-                        if not current_value.get:
-                            raise NovaError(target, f"Property '{final_key}' has no getter.")
-                        current_value = current_value.get()
                 else:
                     current_value = getattr(base, final_key, None)
+                if isinstance(current_value, Proxy):
+                    if not current_value.get:
+                        raise NovaError(
+                            target, f"Property '{final_key}' has no getter."
+                        )
+                    current_value = current_value.get()
 
                 if op == "+=":
                     final_value_to_assign = current_value + assigned_value
@@ -3714,7 +3747,9 @@ class Interpreter:
                     if final_key in base and isinstance(base[final_key], Proxy):
                         proxy = base[final_key]
                         if not proxy.set:
-                            raise NovaError(target, f"Property '{final_key}' has no setter.")
+                            raise NovaError(
+                                target, f"Property '{final_key}' has no setter."
+                            )
                         cls = base.get("__defining_class__")
                         if cls:
                             try:
@@ -4009,7 +4044,9 @@ class Interpreter:
                 val = obj[expr.property]
                 if isinstance(val, Proxy):
                     if not val.get:
-                        raise NovaError(expr, f"Property '{expr.property}' has no getter.")
+                        raise NovaError(
+                            expr, f"Property '{expr.property}' has no getter."
+                        )
                     cls = obj.get("__defining_class__")
                     if cls:
                         try:
@@ -4021,7 +4058,7 @@ class Interpreter:
                         return val.get()
                 return val
             # If obj is a NovaScript instance (represented as a Python dictionary)
-            #if isinstance(obj, dict) and expr.property in obj:
+            # if isinstance(obj, dict) and expr.property in obj:
             #    return obj[expr.property]
             # If obj is an Environment (e.g., 'self' within a NovaScript method)
             elif isinstance(obj, Environment):
