@@ -3936,7 +3936,10 @@ class Interpreter:
                 return func(*args, **kwargs)
             except Exception as E:
                 self.errorStack.append(
-                    " " * len(self.callStack) + "- Error while executing: " + expr.name
+                    " " * len(self.callStack)
+                    + f"- {expr.file}:{expr.line}:{expr.column}: "
+                    + "Error while executing: "
+                    + expr.name
                 )
                 raise E
             finally:

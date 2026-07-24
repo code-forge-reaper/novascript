@@ -65,7 +65,7 @@ contexts:
       push: single_quoted_string
     - match: "`"
       scope: punctuation.definition.string.begin.nova
-      push: single_quoted_string
+      push: template_string
 
   double_quoted_string:
     - meta_scope: string.quoted.double.nova
@@ -82,7 +82,7 @@ contexts:
     - match: "'"
       scope: punctuation.definition.string.end.nova
       pop: true
-
+  template_string:
     - match: "`"
       scope: punctuation.definition.string.end.nova
       pop: true

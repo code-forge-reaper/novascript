@@ -654,6 +654,7 @@ class ProxyDef(Statement):
     def __str__(self):
         return f"ProxyDef({self.name})"
 
+
 class MethodDefinition(Statement):
     def __init__(
         self,
@@ -810,13 +811,17 @@ class IfStmt(Statement):
         base = super().to_dict()
         base["condition"] = _serialize_node(self.condition)
         base["then_block"] = _serialize_list(self.then_block)
-        base["else_if"] = [
-            {
-                "condition": _serialize_node(b["condition"]),
-                "body": _serialize_list(b["body"]),
-            }
-            for b in self.else_if
-        ]
+        base["else_if"] = (
+            [
+                {
+                    "condition": _serialize_node(b["condition"]),
+                    "body": _serialize_list(b["body"]),
+                }
+                for b in self.else_if
+            ]
+            if self.else_if
+            else []
+        )
         base["else_block"] = (
             _serialize_list(self.else_block) if self.else_block else None
         )
