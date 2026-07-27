@@ -354,7 +354,10 @@ def init_globals(interpreter, globals_env):
     class Runtime:
         @staticmethod
         def dumpGlobals():
-            print("global stuff = ", interpreter.globals)
+            from pprint import pprint
+
+            print("global stuff = ")
+            pprint(interpreter.globals)
 
         @staticmethod
         def exit(code=0):
@@ -2032,7 +2035,8 @@ class Tokenizer:
                     strict = True
                 switch_expr = self.parse_expression()
                 cases = []
-
+                self.expect_token("do")
+                self.consume_token()
                 while (
                     self.get_next_token()
                     # and not self.get_next_token().type == "keyword"

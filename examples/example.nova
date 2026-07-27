@@ -255,18 +255,44 @@ for m = 0, 5 do
 end
 
 // matches-Case-Default
-var day = "Wednesday"
-matches day
-    "Monday":
+var day = 1
+matches day do
+    "Monday", 1:
         print("Start of the week.")
     end
-    "Wednesday":
+    "Wednesday", 3:
         print("Mid-week.")
     end
     default
         print("Another day.")
     end
 end
+
+const Moves = enum {
+    Rock
+    Paper
+    Scisors
+}
+using Moves
+const move = [Scisors,Scisors]
+
+// the "do" is here so nova doesn't try to parse a lookup
+matches move do
+    [Rock, Scisors ],
+    [Paper, Rock   ],
+    [Scisors, Paper]:
+        print("player 1")
+    end
+    [Scisors, Rock],
+    [Rock, Paper],
+    [Paper, Scisors]:
+        print("player 2")
+    end
+    default
+        print("draw")
+    end
+end
+
 
 // Test-Failed (Try-Catch)
 print("Test-Failed example:")
@@ -464,7 +490,7 @@ test
     var v = 24
     for i=0, 10 do
         v += i
-        matches strict v
+        matches strict v do
             24:
                 print("  v is 24")
             end
@@ -516,7 +542,7 @@ test
     v = 10
     for i=0, 10 do
         v += i
-        matches v
+        matches v do
             24:
                 print("  v is 24")
             end
