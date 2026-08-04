@@ -78,31 +78,39 @@ import time, json
 from urllib.parse import unquote, quote
 import struct, builtins
 
+from collections.abc import Iterable
+
+
+def _format(obj):
+    # Custom string overload
+    if isinstance(obj, dict) and "__Str" in obj:
+        return obj["__Str"]()
+
+    # NovaScript object instance
+    if isinstance(obj, dict):
+        if "__DefiningClass" in obj:
+            cls = obj["__DefiningClass"]
+            public = cls.get_public_instance_members(obj)
+            return _format(public)
+
+        # Regular dict (hide internal members)
+        return {
+            k: _format(v)
+            for k, v in obj.items()
+            if not (isinstance(k, str) and k.startswith("__"))
+        }
+
+    # Lists, tuples, sets, etc.
+    if isinstance(obj, Iterable) and not isinstance(obj, (str, bytes)):
+        return [_format(x) for x in obj]
+
+    return obj
+
 
 # --- Global Initialization ---
 def init_globals(interpreter, globals_env):
     def pprint(*stuff):
-        for id, obj in enumerate(stuff):
-            end = "" if id == len(stuff) - 1 else " "
-            if isinstance(obj, dict) and "__Str" in obj:
-                print(obj["__Str"](), end=end)
-            else:
-                if isinstance(obj, dict):
-                    # Check if it's a NovaScript instance
-                    if "__defining_class__" in obj:
-                        cls = obj["__defining_class__"]
-                        # Get only public instance members
-                        public_members = cls.get_public_instance_members(obj)
-                        print(public_members, end=end)
-                    else:
-                        s = {}
-                        for k, v in obj.items():
-                            if not (isinstance(k, str) and k.startswith("__")):
-                                s[k] = v
-                        print(s, end=end)
-                else:
-                    print(obj, end=end)
-        print()
+        print(*(_format(x) for x in stuff))
 
     def _slice(ofWho, start, end=None):
         if end is not None:
@@ -689,7 +697,7 @@ class NovaClass:
         self.super_class = super_class  # NovaClass or Python type
         self.interpreter = interpreter
         self.env = env
-        self.static_members = {}
+        self.static_members = {"name": name}
         self._private_properties = set()
         self._private_methods = set()
         self.instance_properties = {}  # PropertyDefinition AST nodes
@@ -724,11 +732,7 @@ class NovaClass:
     def get_public_static_members(self):
         result = {}
         for name, value in self.static_members.items():
-            if (
-                name not in self._private_static_properties
-                and name not in self._private_static_methods
-            ):
-                result[name] = value
+            result[name] = value
         return result
 
     def _find_python_root(self):
@@ -747,10 +751,10 @@ class NovaClass:
     def instantiate(self, args, instance_token):
         if self._python_root is not None:
             instance = self._python_root.__new__(self._python_root)
-            setattr(instance, "__defining_class__", self)
+            setattr(instance, "__DefiningClass", self)
         else:
             instance = {}
-            instance["__defining_class__"] = self
+            instance["__DefiningClass"] = self
 
         # Walk the NovaClass hierarchy from the root Python subclass down,
         # adding all Nova properties and methods.
@@ -775,7 +779,7 @@ class NovaClass:
             if isinstance(prop_def, PropertyHandler):
                 _env = Environment(self.env)
                 _env.define("self", instance)
-                _env.define("__defining_class__", instance)
+                _env.define("__DefiningClass", instance)
                 self.interpreter.execute_stmt(prop_def.setter, _env)
                 self.interpreter.execute_stmt(prop_def.getter, _env)
                 set_func = _env.get("set").value
@@ -881,7 +885,7 @@ class NovaClass:
                 return result.value
             return None
 
-        bound_method.__defining_class__ = self  # store the class for access checks
+        bound_method.__DefiningClass = self  # store the class for access checks
         if method_def.is_private:
             bound_method.__is_private__ = True
         return bound_method
@@ -1284,6 +1288,11 @@ class Tokenizer:
 
                 # decimal / float (with underscores, no trailing dot)
                 int_part = collect_digits("0123456789")  # integer part mandatory
+                if source[i].isalpha():
+                    raise NovaError(
+                        Token("error", "Invalid integer", file, line, col),
+                        "This is not a valid integer",
+                    )
 
                 if i < length and source[i] == ".":
                     i += 1
@@ -1297,6 +1306,12 @@ class Tokenizer:
                             Token("error", "Invalid numeric literal", file, line, col),
                             "Trailing dot in numeric literal",
                         )
+                    if source[i].isalpha():
+                        raise NovaError(
+                            Token("error", "Invalid float", file, line, col),
+                            "This is not a valid float",
+                        )
+
                     num_str = f"{int_part}.{frac_part}"
                     tokens.append(
                         Token("number", float(num_str), file, line, start_col)
@@ -2964,9 +2979,9 @@ class Interpreter:
 
     def _check_private_access(self, obj, name, expr):
         """Raise NovaError if `name` is a private member of `obj` and access is not from inside its class."""
-        if not isinstance(obj, dict) or "__defining_class__" not in obj:
+        if not isinstance(obj, dict) or "__DefiningClass" not in obj:
             return  # not a NovaScript instance
-        cls = obj["__defining_class__"]
+        cls = obj["__DefiningClass"]
         if name in cls._private_properties or name in cls._private_methods:
             # allowed only if the current class (top of stack) is exactly this class
             if not self.current_class_stack or self.current_class_stack[-1] is not cls:
@@ -3531,9 +3546,9 @@ class Interpreter:
                     # Import public static members only
                     for key, val in value.get_public_static_members().items():
                         env.define(key, val)
-                elif isinstance(value, dict) and "__defining_class__" in value:
+                elif isinstance(value, dict) and "__DefiningClass" in value:
                     # NovaScript instance: import public instance members
-                    cls = value["__defining_class__"]
+                    cls = value["__DefiningClass"]
                     for key, val in cls.get_public_instance_members(value).items():
                         env.define(key, val)
                 elif isinstance(value, Environment):
@@ -3754,7 +3769,7 @@ class Interpreter:
                             raise NovaError(
                                 target, f"Property '{final_key}' has no setter."
                             )
-                        cls = base.get("__defining_class__")
+                        cls = base.get("__DefiningClass")
                         if cls:
                             try:
                                 self.current_class_stack.append(cls)
@@ -3999,14 +4014,22 @@ class Interpreter:
                 )
 
             # Push class context if the method has a defining clas attribute (NovaScript bound method)
-            try:
-                if hasattr(fn, "__defining_class__"):
-                    self.current_class_stack.append(fn.__defining_class__)
-                result = fn(*args, **kwargs)
-            finally:
-                if hasattr(fn, "__defining_class__"):
+            if isinstance(obj, dict) and "__DefiningClass" in obj:
+                # Push the defining class before calling the method
+                self.current_class_stack.append(obj["__DefiningClass"])
+                try:
+                    result = fn(*args, **kwargs)
+                finally:
                     self.current_class_stack.pop()
-            return result
+            else:
+                try:
+                    if hasattr(fn, "__DefiningClass"):
+                        self.current_class_stack.append(fn.__DefiningClass)
+                    result = fn(*args, **kwargs)
+                finally:
+                    if hasattr(fn, "__DefiningClass"):
+                        self.current_class_stack.pop()
+                return result
 
         elif expr.type == "ArrayAccess":
             arr = self.evaluate_expr(expr.object, env)
@@ -4054,7 +4077,7 @@ class Interpreter:
                         raise NovaError(
                             expr, f"Property '{expr.property}' has no getter."
                         )
-                    cls = obj.get("__defining_class__")
+                    cls = obj.get("__DefiningClass")
                     if cls:
                         try:
                             self.current_class_stack.append(cls)

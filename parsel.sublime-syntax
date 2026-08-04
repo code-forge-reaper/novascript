@@ -55,11 +55,11 @@ contexts:
 
   keywords:
     # Declarations: var, func, def, return, import, char, scene
-    - match: \b(var|rng|func|def|return|import|char|scene)\b
+    - match: \b(var|state|rng|func|def|return|import|char|scene)\b
       scope: keyword.declaration.parsel
 
     # Control flow and structural keywords: end, if, else, elseif, goto, pause, exit, begin
-    - match: \b(end|if|else|elseif|goto|pause|exit|begin)\b
+    - match: \b(end|if|else|elseif|goto|pause|exit|begin|enter|leave|stop|do|section|repeat)\b
       scope: keyword.control.flow.parsel
 
     # Ren'Py specific statement keywords: say, think, options

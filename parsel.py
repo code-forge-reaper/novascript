@@ -73,7 +73,14 @@ def tokenize(source: str, file: str) -> List[Token]:
         "true",
         "false",
         "rng",
-        "between"
+        "between",
+        "section",
+        "enter",
+        "leave",
+        "stop",
+        "state",
+        "repeat",
+        "do",
     }
     tokens = []
     i = 0
@@ -429,6 +436,48 @@ class ExpressionStmt(Stmt):
         self.token = token
 
 
+class SectionDecl(Stmt):
+    def __init__(self, name: str, body: List[Stmt], token: Token):
+        self.name = name
+        self.body = body
+        self.token = token
+        # scenes that belong to this section (filled at runtime collection)
+        self.scenes: List[SceneDecl] = []
+
+
+class EnterStmt(Stmt):
+    def __init__(self, section: Expr, token: Token):
+        self.section = section  # expression evaluating to section name (string)
+        self.token = token
+
+
+class LeaveStmt(Stmt):
+    """Pop the current section and continue execution after this statement."""
+    def __init__(self, token: Token):
+        self.token = token
+
+
+class StopStmt(Stmt):
+    """Pop the current section and return from the current scene (like a bare return)."""
+    def __init__(self, token: Token):
+        self.token = token
+
+
+class PersistDecl(Stmt):
+    """Section-scoped persistent variable. Survives leave/enter of the section."""
+    def __init__(self, name: str, init: Expr, token: Token):
+        self.name = name
+        self.init = init
+        self.token = token
+
+
+class RepeatStmt(Stmt):
+    def __init__(self, count: Expr, body: List[Stmt], token: Token):
+        self.count = count
+        self.body = body
+        self.token = token
+
+
 # ----------------------------------------------------------------------
 # Parser (recursive descent)
 # ----------------------------------------------------------------------
@@ -523,6 +572,20 @@ class ParselParser:
                 return self.parse_return()
             if kw == "using":
                 return self.parse_using()
+            if kw == "section":
+                return self.parse_section()
+            if kw == "enter":
+                return self.parse_enter()
+            if kw == "leave":
+                leave_tok = self.consume()
+                return LeaveStmt(leave_tok)
+            if kw == "stop":
+                stop_tok = self.consume()
+                return StopStmt(stop_tok)
+            if kw == "state":
+                return self.parse_persist()
+            if kw == "repeat":
+                return self.parse_repeat()
         # expression statement
         expr = self.parse_expr()
         return ExpressionStmt(expr, self.current() or tok)
@@ -704,6 +767,42 @@ class ParselParser:
         tok = self.consume()  # 'using'
         name = self.expect("identifier").value
         return UsingStmt(name, tok)
+
+    def parse_section(self) -> SectionDecl:
+        tok = self.consume()  # 'section'
+        name = self.expect("string").value
+        body = self.parse_block_until("end")
+        self.expect("keyword", "end")
+        return SectionDecl(name, body, tok)
+
+    def parse_enter(self) -> EnterStmt:
+        tok = self.consume()  # 'enter'
+        section_expr = self.parse_expr()
+        return EnterStmt(section_expr, tok)
+
+    def parse_persist(self) -> PersistDecl:
+        tok = self.consume()  # 'persist'
+        name = self.expect("identifier").value
+        # allow either "persist name, init" or "persist name = init"
+        if self.current() and self.current().value == ",":
+            self.consume()
+        elif self.current() and self.current().value == "=":
+            self.consume()
+        else:
+            raise ParselError(
+                self.current() or tok,
+                "Expected ',' or '=' after persist variable name",
+            )
+        init = self.parse_expr()
+        return PersistDecl(name, init, tok)
+
+    def parse_repeat(self) -> RepeatStmt:
+        tok = self.consume()  # 'repeat'
+        count = self.parse_expr()
+        self.expect("keyword", "do")
+        body = self.parse_block_until("end")
+        self.expect("keyword", "end")
+        return RepeatStmt(count, body, tok)
 
     def parse_block_until(self, terminators: Union[str, List[str]]) -> List[Stmt]:
         if isinstance(terminators, str):
@@ -912,6 +1011,20 @@ class ExitSignal(Exception):
     pass
 
 
+class PersistBox:
+    """Mutable box used for section-persistent variables.
+    Reads auto-unbox; assignments write through to .value so the
+    value survives leave/enter of the section.
+    """
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any):
+        self.value = value
+
+    def __repr__(self):
+        return f"PersistBox({self.value!r})"
+
+
 class Environment:
     def __init__(self, parent: Optional["Environment"] = None):
         self.vars: Dict[str, Any] = {}
@@ -928,8 +1041,13 @@ class Environment:
         raise ParselError(token, f"Undefined variable '{name}'")
 
     def set(self, name: str, value: Any, token: Token):
+        # Write-through for persistent boxes so the value survives leave/enter.
         if name in self.vars:
-            self.vars[name] = value
+            existing = self.vars[name]
+            if isinstance(existing, PersistBox):
+                existing.value = value
+            else:
+                self.vars[name] = value
         elif self.parent:
             self.parent.set(name, value, token)
         else:
@@ -939,22 +1057,52 @@ class Environment:
 class ParselRuntime:
     def __init__(self, ast: List[Stmt], filename: str = "<main>"):
         self.globals = Environment()
-        self.scenes: Dict[str, SceneDecl] = {}   # map name -> SceneDecl
+        # Permanent definitions of every scene (top-level + those belonging to sections).
+        # Needed so that stacked / already-running instances can still resume after a leave
+        # unregisters the scene from the active set.
+        self.scene_defs: Dict[str, SceneDecl] = {}
+        # Currently active/visible scenes that new goto statements may jump to.
+        self.scenes: Dict[str, SceneDecl] = {}
+        self.sections: Dict[str, SectionDecl] = {}  # map name -> SectionDecl
         self.current_scene: Optional[str] = None
         self.current_env: Optional[Environment] = None
         self.current_index: int = 0
         self.scene_stack: List[Tuple[str, Environment, int]] = []  # (scene_name, env, index)
+        # section stack: (section_name, section_env, list_of_scene_names_added)
+        self.section_stack: List[Tuple[str, Environment, List[str]]] = []
+        # Persistent storage: section_name -> { var_name: PersistBox }
+        # Values survive leave / re-enter of the section.
+        self.persistent: Dict[str, Dict[str, PersistBox]] = {}
         self.ast = ast
         self.filename = filename
         self.visited_scenes: set = set()          # scenes that have been entered at least once
         self._was_seen_before: Dict[str, bool] = {} # for each scene, whether it was already visited before current entry
 
-        # collect scenes
+        # collect top-level scenes and sections
         for stmt in ast:
             if isinstance(stmt, SceneDecl):
-                if stmt.name in self.scenes:
+                if stmt.name in self.scene_defs:
                     raise ParselError(stmt.token, f"Scene '{stmt.name}' already declared")
-                self.scenes[stmt.name] = stmt
+                self.scene_defs[stmt.name] = stmt
+                self.scenes[stmt.name] = stmt          # top-level scenes start active
+            elif isinstance(stmt, SectionDecl):
+                if stmt.name in self.sections:
+                    raise ParselError(stmt.token, f"Section '{stmt.name}' already declared")
+                # extract SceneDecls that live inside this section
+                section_scenes: List[SceneDecl] = []
+                other_body: List[Stmt] = []
+                for s in stmt.body:
+                    if isinstance(s, SceneDecl):
+                        if s.name in self.scene_defs:
+                            raise ParselError(s.token, f"Scene '{s.name}' already declared")
+                        self.scene_defs[s.name] = s    # permanently known
+                        section_scenes.append(s)
+                    else:
+                        other_body.append(s)
+                stmt.scenes = section_scenes
+                # keep only non-scene statements in body for later execution on enter
+                stmt.body = other_body
+                self.sections[stmt.name] = stmt
 
         # built‑ins
         self.globals.define("print", print)
@@ -1000,9 +1148,9 @@ class ParselRuntime:
         # -------------------------------------------------
 
     def run(self):
-        # execute top‑level statements (non‑scene)
+        # execute top-level statements (skip scenes and sections; they are handled specially)
         for stmt in self.ast:
-            if not isinstance(stmt, SceneDecl):
+            if not isinstance(stmt, (SceneDecl, SectionDecl)):
                 self.execute_stmt(stmt, self.globals, 0)  # index 0 dummy
 
         # start game
@@ -1059,7 +1207,9 @@ class ParselRuntime:
         # Mark it as visited now (so future entries will see it as seen).
         self.visited_scenes.add(name)
 
-        scene_decl = self.scenes.get(name)
+        # Always look up the permanent definition so that stacked frames can
+        # still resume after a "leave" has removed the scene from the active set.
+        scene_decl = self.scene_defs.get(name)
         if not scene_decl:
             raise ParselError(None, f"Scene '{name}' not defined")
         body = scene_decl.body
@@ -1191,8 +1341,10 @@ class ParselRuntime:
                 raise ParselError(stmt.token,
                     f"Scene '{scene_name}' expects {len(scene_decl.params)} arguments, got {len(arg_values)}")
 
-            # create new environment for the target scene
-            new_env = Environment(self.globals)
+            # create new environment for the target scene.
+            # Prefer the topmost section environment so section-local vars are visible.
+            parent_env = self.section_stack[-1][1] if self.section_stack else self.globals
+            new_env = Environment(parent_env)
             for param, val in zip(scene_decl.params, arg_values):
                 new_env.define(param, val)
 
@@ -1201,6 +1353,95 @@ class ParselRuntime:
 
             # raise signal to jump
             raise GotoSignal(scene_name, new_env)
+
+        elif isinstance(stmt, EnterStmt):
+            section_name = self.evaluate_expr(stmt.section, env)
+            if not isinstance(section_name, str):
+                raise ParselError(
+                    stmt.token,
+                    f"Section name must be a string, got {type(section_name).__name__}",
+                )
+            section = self.sections.get(section_name)
+            if not section:
+                raise ParselError(stmt.token, f"Section '{section_name}' not defined")
+
+            # Create a fresh environment for the section (child of current env so
+            # outer variables remain visible, while section locals are isolated).
+            section_env = Environment(env)
+
+            # Make the section name available while we execute its body so that
+            # PersistDecl can bind into the correct persistent store.
+            self._entering_section = section_name
+            try:
+                # Execute the non-scene body statements (vars, funcs, chars, persist, ...)
+                for s in section.body:
+                    self.execute_stmt(s, section_env, 0)
+            finally:
+                self._entering_section = None
+
+            # Register the section's scenes so they become visible to goto
+            added_scene_names: List[str] = []
+            for sc in section.scenes:
+                if sc.name in self.scenes:
+                    # Allow re-registration only if it belongs to a previously left section;
+                    # otherwise report a conflict.
+                    raise ParselError(
+                        sc.token,
+                        f"Scene '{sc.name}' already declared (conflict while entering section '{section_name}')",
+                    )
+                self.scenes[sc.name] = sc
+                added_scene_names.append(sc.name)
+
+            # Push onto the section stack
+            self.section_stack.append((section_name, section_env, added_scene_names))
+
+        elif isinstance(stmt, LeaveStmt):
+            # Mild: just pop the section and continue after this statement.
+            if not self.section_stack:
+                raise ParselError(stmt.token, "leave used outside of any section")
+            section_name, section_env, added_scene_names = self.section_stack.pop()
+            for name in added_scene_names:
+                self.scenes.pop(name, None)
+
+        elif isinstance(stmt, StopStmt):
+            # Strong: pop the section AND return from the current scene.
+            if not self.section_stack:
+                raise ParselError(stmt.token, "stop used outside of any section")
+            section_name, section_env, added_scene_names = self.section_stack.pop()
+            for name in added_scene_names:
+                self.scenes.pop(name, None)
+            raise ReturnSignal(None)
+
+        elif isinstance(stmt, PersistDecl):
+            # Must be executing inside a section body (via enter).
+            section_name = getattr(self, "_entering_section", None)
+            if not section_name:
+                raise ParselError(
+                    stmt.token,
+                    "persist may only appear inside a section",
+                )
+            store = self.persistent.setdefault(section_name, {})
+            if stmt.name not in store:
+                # First time this section is entered: evaluate the initializer.
+                init_val = self.evaluate_expr(stmt.init, env)
+                store[stmt.name] = PersistBox(init_val)
+            # Bind the (possibly already existing) box into the section environment
+            # so reads/writes go through the same mutable box.
+            env.define(stmt.name, store[stmt.name])
+
+        elif isinstance(stmt, RepeatStmt):
+            count_val = self.evaluate_expr(stmt.count, env)
+            if not isinstance(count_val, (int, float)) or int(count_val) != count_val:
+                raise ParselError(
+                    stmt.token,
+                    f"repeat count must be an integer, got {type(count_val).__name__}",
+                )
+            times = int(count_val)
+            if times < 0:
+                raise ParselError(stmt.token, "repeat count cannot be negative")
+            for _ in range(times):
+                for sub in stmt.body:
+                    self.execute_stmt(sub, env, idx)
 
         elif isinstance(stmt, PauseStmt):
             import time
@@ -1243,7 +1484,11 @@ class ParselRuntime:
         if isinstance(expr, Literal):
             return expr.value
         if isinstance(expr, Identifier):
-            return env.get(expr.name, expr.token)
+            val = env.get(expr.name, expr.token)
+            # Auto-unbox persistent variables on read
+            if isinstance(val, PersistBox):
+                return val.value
+            return val
         if isinstance(expr, BinaryExpr):
             op = expr.op
             if op == "&&":

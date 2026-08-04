@@ -820,6 +820,15 @@ class SampleSound
         func set(v) = $age = v
         func get() = $age
 end
+//proxies/property are good for when you need a specific value to be read-only
+// without me having to add another keyword
+class ROnlyApi
+	property VERSION
+		func get()=24
+		func set()=raise(ValueError("cannot assign to VERSION"))
+end
+
+const ROnlyApi = new ROnlyApi()
 
 var v = new SampleSound()
 // welp, just found out that proxies are more or less like pointers now
