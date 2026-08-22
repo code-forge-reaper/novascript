@@ -9,7 +9,8 @@
  */
 
 
-const mmath = load("mathlib") // this just adds things the global "math" doesn't have
+const hhelper = load("helperlib")
+
 /*
 Example error message if the lib isn't found:
 [20:19:46] cross@endeavourOS /home/cross/Documents/projects/novascript
@@ -138,7 +139,7 @@ Optional dependencies for python-pillow
 >
 
 */
-print("mmath.grid2D(20,20): ", mmath.grid2D(20,20))
+print("hhelper.grid2D(20,20): ", hhelper.grid2D(20,20))
 Logger.info("Starting NovaScript Example!")
 
 // Variable declarations with and without type annotations
@@ -558,17 +559,17 @@ failed e
     e -> Logger.error
 end
 class Temp1
-	var max = 30
-	var min = 10
-	var current = 15
+    var max = 30
+    var min = 10
+    var current = 15
 end
 
 class Temp2
-	func init(max number, min number, current number)
-		$max = max
-		$min = min
-		$current = current
-	end
+    func init(max number, min number, current number)
+        $max = max
+        $min = min
+        $current = current
+    end
 end
 print(new Temp2(100,10,24))
 
@@ -823,9 +824,9 @@ end
 //proxies/property are good for when you need a specific value to be read-only
 // without me having to add another keyword
 class ROnlyApi
-	property VERSION
-		func get()=24
-		func set()=raise(ValueError("cannot assign to VERSION"))
+    property VERSION
+        func get()=24
+        func set()=raise(ValueError("cannot assign to VERSION"))
 end
 
 const ROnlyApi = new ROnlyApi()

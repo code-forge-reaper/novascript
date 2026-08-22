@@ -3,7 +3,7 @@
 
 // what i operate under: make it simple, and make it easy
 
-const mlib = load("mathlib") // mlib is simple math utils that python doesn't add to the math module
+const mlib = load("helperlib") // mlib is simple math utils that python doesn't add to the math module
 const sys = load("py:sys")
 /*
 my entire reason for making this, is for a stupid bit in a web story i was writting,

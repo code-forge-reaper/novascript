@@ -17,17 +17,20 @@ example:
 @doc: sample.html
 @title: sample format testing
 
-<?this is like Latex, basically?>
-${import numpy as np}
+<?
+this is like Latex, basically
+also, this is a comment, hello :)
+?>
+!{import numpy as np}
 
-${mat = np.array([[52,12],
+!{mat = np.array([[52,12],
                  [24,41]])
 }
 
 This is a simple test
 
 <ul>
-${
+!{
 for i in range(20):
     write(f"<li key='{i}'>{mat * i}</li>")    
 }
@@ -131,7 +134,7 @@ def handle_text(context: Ctx):
         not context.isEnd()
         and not context.isChar("\n")
         and not (context.isChar("!") and context.nextChar(1) == "{")
-        and not (context.isChar("$") and context.nextChar(1) == "{")
+        and not (context.isChar("{"))
     ):
         e = context.consumeNextChar()
         output += e
@@ -140,9 +143,9 @@ def handle_text(context: Ctx):
 
 
 def handle_embedded_stmt(context: Ctx):
-    "${...}"
+    "{...}"
     braceCount = 1
-    context.moveIndex(2)
+    context.moveIndex(1)
     string = ""
     while braceCount > 0:
         if context.isChar("{"):
@@ -153,7 +156,9 @@ def handle_embedded_stmt(context: Ctx):
             string += context.source[context.index]
         context.moveIndex(1)
 
-    exec(string, context.doc["state"])
+    c = eval(string, context.doc["state"])
+    if c is not None:
+        context.write(str(c))
 
 
 def handle_embedded_expr(context: Ctx):
@@ -170,9 +175,7 @@ def handle_embedded_expr(context: Ctx):
             string += context.source[context.index]
         context.moveIndex(1)
 
-    c = eval(string, context.doc["state"])
-    if c is not None:
-        context.write(str(c))
+    exec(string, context.doc["state"])
 
 
 # you can use this for like, profiles
@@ -180,8 +183,8 @@ def handle_embedded_expr(context: Ctx):
 # if you just need one specific template to be rendered
 """
 <div>
-    <h1>name: !{name}</h1>
-    <h2>age: !{age}</h2>
+    <h1>name: {name}</h1>
+    <h2>age: {age}</h2>
 </div>
 """
 
@@ -189,7 +192,8 @@ def handle_embedded_expr(context: Ctx):
 def load(content, state=None):
     if state == None:
         state = {}
-    context = Ctx(re.sub(r"<\?(.*?)\?>", "", content, flags=re.DOTALL), 0)
+    context = Ctx(re.sub(r"<\?(.*?)\?>", "", content, flags=re.DOTALL).strip(), 0)
+
     context.doc["state"].update(state)
     # print(context)
     while not context.isEnd():
@@ -207,7 +211,7 @@ def load(content, state=None):
             handle_at(context)
         elif context.isChar("!") and context.nextChar(1) == "{":
             handle_embedded_expr(context)
-        elif context.isChar("$") and context.nextChar(1) == "{":
+        elif context.isChar("{"):
             handle_embedded_stmt(context)
         else:
             handle_text(context)

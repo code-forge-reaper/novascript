@@ -73,6 +73,9 @@ class Token:
         self.line = line
         self.column = column
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"Token(type='{self.type}', value={repr(self.value)}, file='{self.file}', line={self.line}, column={self.column})"
 
@@ -118,6 +121,9 @@ class Literal(Expression):
         super().__init__("Literal", file, line, column)
         self.value = value
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"Literal(value={repr(self.value)})"
 
@@ -131,6 +137,9 @@ class Identifier(Expression):
     def __init__(self, name, file, line, column):
         super().__init__("Identifier", file, line, column)
         self.name = name
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         return f"Identifier(name='{self.name}')"
@@ -148,6 +157,9 @@ class BinaryExpr(Expression):
         self.left = left
         self.right = right
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"BinaryExpr(operator='{self.operator}', left={self.left}, right={self.right})"
 
@@ -163,6 +175,9 @@ class PipeExpr(BinaryExpr):
     def __init__(self, left, right, file, line, column):
         super().__init__("->", left, right, file, line, column)
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"PipeExpr(left={self.left}, right={self.right})"
 
@@ -170,6 +185,9 @@ class PipeExpr(BinaryExpr):
 class MapExpr(BinaryExpr):
     def __init__(self, left, right, file, line, column):
         super().__init__("=>", left, right, file, line, column)
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         return f"MapExpr(left={self.left}, right={self.right})"
@@ -180,6 +198,9 @@ class UnaryExpr(Expression):
         super().__init__("UnaryExpr", file, line, column)
         self.operator = operator
         self.right = right
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         return f"UnaryExpr(operator='{self.operator}', right={self.right})"
@@ -196,6 +217,9 @@ class FuncCall(Expression):
         super().__init__("FuncCall", file, line, column)
         self.name = name
         self.arguments = arguments
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         return f"FuncCall(name={self.name}, arguments={self._str_args()})"
@@ -219,6 +243,9 @@ class MethodCall(Expression):
         self.method = method
         self.arguments = arguments
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"MethodCall(object={self.object}, method='{self.method}', arguments={self._str_args()})"
 
@@ -239,6 +266,9 @@ class PropertyAccess(Expression):
         self.object = object
         self.property = property
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"PropertyAccess(object={self.object}, property='{self.property}')"
 
@@ -255,6 +285,9 @@ class ArrayAccess(Expression):
         self.object = object
         self.index = index
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"ArrayAccess(object={self.object}, index={self.index})"
 
@@ -269,6 +302,9 @@ class ArrayLiteral(Expression):
     def __init__(self, elements, file, line, column):
         super().__init__("ArrayLiteral", file, line, column)
         self.elements = elements
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         return f"ArrayLiteral(elements={self._str_elements()})"
@@ -286,6 +322,9 @@ class ObjectLiteral(Expression):
     def __init__(self, properties, file, line, column):
         super().__init__("ObjectLiteral", file, line, column)
         self.properties = properties  # list of dicts with 'key' and 'value'
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         props = []
@@ -317,6 +356,9 @@ class AssignmentExpr(Expression):
         self.value = value
         self.operator = operator
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"AssignmentExpr(target={self.target}, value={self.value}, operator='{self.operator}')"
 
@@ -333,6 +375,9 @@ class NewInstance(Expression):
         super().__init__("NewInstance", file, line, column)
         self.class_name = class_name
         self.arguments = arguments
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         return (
@@ -354,6 +399,9 @@ class ExplodeExpr(Expression):
         super().__init__("ExplodeExpr", file, line, col)
         self.args = args
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"ExplodeExpr(args={self._str_args()})"
 
@@ -366,11 +414,35 @@ class ExplodeExpr(Expression):
         return base
 
 
+class NamedArg(Expression):
+    """Represents a named / keyword argument at a call site: name: value"""
+
+    def __init__(self, name, value, file, line, column):
+        super().__init__("NamedArg", file, line, column)
+        self.name = name
+        self.value = value
+
+    def __repr__(self):
+        return self.__str__()
+
+    def __str__(self):
+        return f"NamedArg(name='{self.name}', value={self.value})"
+
+    def to_dict(self):
+        base = super().to_dict()
+        base["name"] = self.name
+        base["value"] = _serialize_node(self.value)
+        return base
+
+
 class DecoratorExpr(Expression):
     def __init__(self, expr, body, file, line, column):
         super().__init__("DecoratorExpr", file, line, column)
         self.expr = expr
         self.body = body
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         return f"DecoratorExpr(expr={self.expr}, body={self.body})"
@@ -401,6 +473,9 @@ class Parameter(Token):
         self.default = default
         self.is_compact = is_compact
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         default_str = f", default={self.default}" if self.default is not None else ""
         return f"Parameter(name='{self.name}', annotation_type={self.annotation_type}{default_str}, is_compact={self.is_compact})"
@@ -418,6 +493,9 @@ class Case:
     def __init__(self, case_expr, body):
         self.case_expr = case_expr
         self.body = body
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         return f"Case(case_expr={self.case_expr if self.case_expr else 'default'}, body={self._str_body()})"
@@ -442,6 +520,9 @@ class PropertyHandler(Statement):
         self.getter = getter
         self.setter = setter
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"PropertyHandler(name={self.name}, getter={self.getter}, setter={self.setter})"
 
@@ -458,6 +539,9 @@ class ExportStmt(Statement):
         super().__init__("ExportStmt", file, line, column)
         self.expr = expr
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"ExportStmt(expr={self.expr})"
 
@@ -471,6 +555,9 @@ class DeferStmt(Statement):
     def __init__(self, body, file, line, column):
         super().__init__("DeferStmt", file, line, column)
         self.body = body
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         return f"DeferStmt(body={self._str_body()})"
@@ -490,6 +577,9 @@ class VarDeclStmt(Statement):
         self.name = name
         self.type_annotation = type_annotation
         self.initializer = initializer
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         type_str = (
@@ -513,6 +603,9 @@ class ConstDeclStmt(Statement):
         self.type_annotation = type_annotation
         self.initializer = initializer
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         type_str = (
             f", type_annotation={self.type_annotation}" if self.type_annotation else ""
@@ -533,6 +626,9 @@ class CustomTypeProperty:
         self.name = name
         self.type = type
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"CustomTypeProperty(name='{self.name}', type='{self.type}')"
 
@@ -547,6 +643,9 @@ class CustomType:
         self.file = file
         self.line = line
         self.column = column
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         props = ", ".join(str(p) for p in self.properties)
@@ -569,6 +668,9 @@ class CustomTypeDeclStmt(Statement):
         self.name = name
         self.definition = definition  # list of CustomTypeProperty
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         props = ", ".join(str(p) for p in self.definition)
         return f"CustomTypeDeclStmt(name='{self.name}', properties=[{props}])"
@@ -585,6 +687,9 @@ class AssertStmt(Statement):
         super().__init__("AssertStmt", file, line, column)
         self.expression = expression
         self.message = message
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         msg_str = f", message='{self.message}'" if self.message else ""
@@ -603,6 +708,9 @@ class ClassDefinition(Statement):
         self.name = name
         self.superclass_name = superclass_name
         self.body = body
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         super_str = (
@@ -624,6 +732,9 @@ class ObjectDecl(Statement):
         super().__init__("ObjectDecl", file, line, column)
         self.name = name
         self.body = body
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         body_str = "[" + ", ".join(str(s) for s in self.body) + "]"
@@ -651,6 +762,9 @@ class ProxyDef(Statement):
         self.setter = setter
         self.getter = getter
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"ProxyDef({self.name})"
 
@@ -676,6 +790,9 @@ class MethodDefinition(Statement):
         self.is_constructor = is_constructor
         self.is_private = is_private
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         params = "[" + ", ".join(str(p) for p in self.parameters) + "]"
         body_str = "[" + ", ".join(str(s) for s in self.body) + "]"
@@ -700,6 +817,7 @@ class PropertyDefinition(Statement):
         initializer,
         is_static,
         is_private,
+        is_const,
         file,
         line,
         column,
@@ -710,13 +828,18 @@ class PropertyDefinition(Statement):
         self.initializer = initializer
         self.is_static = is_static
         self.is_private = is_private
+        self.is_const = is_const
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         type_str = (
             f", type_annotation={self.type_annotation}" if self.type_annotation else ""
         )
         init_str = f", initializer={self.initializer}" if self.initializer else ""
-        return f"PropertyDefinition(name='{self.name}'{type_str}{init_str}, is_static={self.is_static}, is_private={self.is_private})"
+        flags = f", is_static={self.is_static}, is_private={self.is_private}, is_const={self.is_const}"
+        return f"PropertyDefinition(name='{self.name}'{type_str}{init_str}{flags})"
 
     def to_dict(self):
         base = super().to_dict()
@@ -727,6 +850,7 @@ class PropertyDefinition(Statement):
         )
         base["is_static"] = self.is_static
         base["is_private"] = self.is_private
+        base["is_const"] = self.is_const
         return base
 
 
@@ -734,6 +858,9 @@ class ExpressionStmt(Statement):
     def __init__(self, expression, file, line, column):
         super().__init__("ExpressionStmt", file, line, column)
         self.expression = expression
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         return f"ExpressionStmt(expression={self.expression})"
@@ -748,6 +875,9 @@ class BreakStmt(Statement):
     def __init__(self, file, line, column):
         super().__init__("BreakStmt", file, line, column)
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return "BreakStmt()"
 
@@ -755,6 +885,9 @@ class BreakStmt(Statement):
 class ContinueStmt(Statement):
     def __init__(self, file, line, column):
         super().__init__("ContinueStmt", file, line, column)
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         return "ContinueStmt()"
@@ -766,6 +899,9 @@ class TryStmt(Statement):
         self.try_block = try_block
         self.error_var = error_var
         self.catch_block = catch_block
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         try_str = "[" + ", ".join(str(s) for s in self.try_block) + "]"
@@ -787,6 +923,9 @@ class IfStmt(Statement):
         self.then_block = then_block
         self.else_block = else_block
         self.else_if = else_if  # list of {"condition": ..., "body": ...}
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         then_str = "[" + ", ".join(str(s) for s in self.then_block) + "]"
@@ -834,6 +973,9 @@ class WhileStmt(Statement):
         self.condition = condition
         self.body = body
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         body_str = "[" + ", ".join(str(s) for s in self.body) + "]"
         return f"WhileStmt(condition={self.condition}, body={body_str})"
@@ -850,6 +992,9 @@ class UntilStmt(Statement):
         super().__init__("UntilStmt", file, line, column)
         self.condition = condition
         self.body = body
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         body_str = "[" + ", ".join(str(s) for s in self.body) + "]"
@@ -868,6 +1013,9 @@ class ForEachStmt(Statement):
         self.variable = variable
         self.list = list
         self.body = body
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         body_str = "[" + ", ".join(str(s) for s in self.body) + "]"
@@ -890,6 +1038,9 @@ class ForStmt(Statement):
         self.step = step
         self.body = body
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         step_str = f", step={self.step}" if self.step else ""
         body_str = "[" + ", ".join(str(s) for s in self.body) + "]"
@@ -910,6 +1061,9 @@ class EnumDef(Expression):
         super().__init__("EnumDef", file, line, column)
         self.values = values
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"EnumDef(values={self.values})"
 
@@ -924,6 +1078,9 @@ class ScopeStmt(Statement):
         super().__init__("ScopeStmt", file, line, column)
         self.name = name
         self.body = body
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         body_str = "[" + ", ".join(str(s) for s in self.body) + "]"
@@ -943,6 +1100,9 @@ class SwitchStmt(Statement):
         self.cases = cases
         self.strict = strict
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         cases_str = "[" + ", ".join(str(c) for c in self.cases) + "]"
         return f"SwitchStmt(expression={self.expression}, cases={cases_str}, strict={self.strict})"
@@ -959,6 +1119,9 @@ class ReturnStmt(Statement):
     def __init__(self, expression, file, line, column):
         super().__init__("ReturnStmt", file, line, column)
         self.expression = expression
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         expr_str = f", expression={self.expression}" if self.expression else ""
@@ -977,6 +1140,9 @@ class LocalFuncDecl(Statement):
         super().__init__("LocalFuncDecl", file, line, column)
         self.fn = fn
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         return f"LocalFuncDecl(fn={self.fn})"
 
@@ -992,6 +1158,9 @@ class FuncDecl(Statement):
         self.name = name
         self.parameters = parameters
         self.body = body
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         params = "[" + ", ".join(str(p) for p in self.parameters) + "]"
@@ -1013,6 +1182,9 @@ class WithStmt(Statement):
         self.alias = alias
         self.body = body
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         alias_str = f", alias='{self.alias}'" if self.alias else ""
         body_str = "[" + ", ".join(str(s) for s in self.body) + "]"
@@ -1032,6 +1204,9 @@ class LambdaDecl(Expression):
         self.parameters = parameters
         self.body = body
 
+    def __repr__(self):
+        return self.__str__()
+
     def __str__(self):
         params = "[" + ", ".join(str(p) for p in self.parameters) + "]"
         body_str = "[" + ", ".join(str(s) for s in self.body) + "]"
@@ -1048,6 +1223,9 @@ class UsingStmt(Statement):
     def __init__(self, name, file, line, column):
         super().__init__("UsingStmt", file, line, column)
         self.name = name
+
+    def __repr__(self):
+        return self.__str__()
 
     def __str__(self):
         if isinstance(self.name, list):

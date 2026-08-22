@@ -1,29 +1,59 @@
 #!/usr/bin/env python
+
+import argparse
+import sys
+
 from nodes import NovaError
 from novascript import Interpreter, init_globals
-import sys
-import os
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python nova_interpreter.py <nova_script_file.nova>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        prog="nova",
+        description="Nova programming language interpreter",
+    )
 
-    script_file = sys.argv[1]
-    if script_file == "-":
+    parser.add_argument(
+        "script",
+        nargs="?",
+        help="Nova source file (or '-' for stdin)",
+    )
+    parser.add_argument(
+        "-d",
+        "--dump",
+        default=False,
+        help="dump ast?",
+        required=False,
+        action="store_true",
+    )
+
+    args = parser.parse_args()
+
+    if args.script is None:
+        parser.print_help()
+        return 0
+
+    if args.script == "-":
         source = sys.stdin.read()
-        script_file = "<stdin>"
+        filename = "<stdin>"
     else:
-        with open(script_file, "r", encoding="utf8") as f:
+        with open(args.script, "r", encoding="utf8") as f:
             source = f.read()
+        filename = args.script
 
-    interpreter = Interpreter(source, script_file)
-    init_globals(interpreter, interpreter.globals)
+    interp = Interpreter(source, filename)
+    init_globals(interp, interp.globals)
+    if args.dump:
+        from pprint import pprint
 
-    interpreter.interpret()
+        bb = interp.tk.parse_block()
+        for b in bb:
+            pprint(b.to_dict())
+    else:
+        interp.interpret()
+
+    return 0
 
 
-# Example usage (if this were a script):
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

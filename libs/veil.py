@@ -25,6 +25,7 @@ from typing import List, Tuple, Optional, Dict
 
 try:
     import black
+
     HAS_BLACK = True
 except ImportError:
     HAS_BLACK = False
@@ -65,18 +66,20 @@ def parse_variable_file(path: str) -> Dict[str, str]:
     Lines starting with '#' or empty are ignored.
     """
     vars_dict = {}
-    with open(path, encoding='utf-8') as f:
+    with open(path, encoding="utf-8") as f:
         for line_num, raw_line in enumerate(f, 1):
             line = raw_line.strip()
-            if not line or line.startswith('#'):
+            if not line or line.startswith("#"):
                 continue
-            m = re.match(r'^([a-zA-Z_]\w*)\s*[:=]\s*(.+)$', line)
+            m = re.match(r"^([a-zA-Z_]\w*)\s*[:=]\s*(.+)$", line)
             if m:
                 name = m.group(1)
                 value = m.group(2).strip()
                 vars_dict[name] = value
             else:
-                raise RulesError(f"Invalid variable definition at line {line_num}: {raw_line!r}")
+                raise RulesError(
+                    f"Invalid variable definition at line {line_num}: {raw_line!r}"
+                )
     return vars_dict
 
 
@@ -85,20 +88,19 @@ def substitute_vars(pattern: str, variables: Dict[str, str]) -> str:
     Replace $NAME or ${NAME} with the value from variables.
     A backslash before the dollar (\\$) prevents substitution.
     """
+
     def repl(match):
         name = match.group(1) or match.group(2)
         if name not in variables:
             raise RulesError(f"Undefined variable: ${name}")
         return variables[name]
 
-    return re.sub(
-        r'(?<!\\)\$(\w+)|(?<!\\)\$\{(\w+)\}',
-        repl,
-        pattern
-    )
+    return re.sub(r"(?<!\\)\$(\w+)|(?<!\\)\$\{(\w+)\}", repl, pattern)
 
 
-def parse_rules(source: str, base_dir: Optional[str] = None) -> Tuple[List[Tuple[re.Pattern, str]], List[str]]:
+def parse_rules(
+    source: str, base_dir: Optional[str] = None
+) -> Tuple[List[Tuple[re.Pattern, str]], List[str]]:
     """
     Parse rules from a string (content of a .reg file).
     Returns: (rules, python_includes)
@@ -164,7 +166,9 @@ def parse_rules(source: str, base_dir: Optional[str] = None) -> Tuple[List[Tuple
                     resolved = os.path.normpath(os.path.join(base_dir or ".", path))
                     if resolved not in seen_includes:
                         if not os.path.exists(resolved):
-                            raise RulesError(f"Python include not found: {resolved} (line {line_num})")
+                            raise RulesError(
+                                f"Python include not found: {resolved} (line {line_num})"
+                            )
                         with open(resolved, encoding="utf-8") as f:
                             py_src = f.read()
                         seen_includes.add(resolved)
@@ -176,9 +180,13 @@ def parse_rules(source: str, base_dir: Optional[str] = None) -> Tuple[List[Tuple
                     resolved = os.path.normpath(os.path.join(base_dir or ".", path))
                     if resolved not in loaded_vars:
                         if not os.path.exists(resolved):
-                            raise RulesError(f"Variable file not found: {resolved} (line {line_num})")
+                            raise RulesError(
+                                f"Variable file not found: {resolved} (line {line_num})"
+                            )
                         new_vars = parse_variable_file(resolved)
-                        variables.update(new_vars)   # later definitions override earlier ones
+                        variables.update(
+                            new_vars
+                        )  # later definitions override earlier ones
                         loaded_vars.add(resolved)
                 else:
                     raise RulesError(f"Unknown preprocessing directive: {stripped}")
@@ -213,6 +221,7 @@ def load_rules(path: str) -> Tuple[List[Tuple[re.Pattern, str]], List[str]]:
         source = f.read()
     base_dir = os.path.dirname(os.path.abspath(path)) or "."
     return parse_rules(source, base_dir)
+
 
 # ---------------------------------------------------------------------------
 # Transformation, formatting, execution (unchanged)
@@ -283,7 +292,9 @@ def setup_cli() -> argparse.Namespace:
         "--dry-run", action="store_true", help="Show transformations without executing"
     )
     parser.add_argument(
-        "--print-code", action="store_true", help="Print generated code without executing"
+        "--print-code",
+        action="store_true",
+        help="Print generated code without executing",
     )
     return parser.parse_args()
 
@@ -294,7 +305,7 @@ def veil(input_text, env=None, rules="lang.reg"):
     full = "\n".join(includes) + "\n" + code
     formatted = format_code(full)
 
-    return execute_code(formatted, env)        # runs, prints directly
+    return execute_code(formatted, env)  # runs, prints directly
 
 
 def main() -> None:

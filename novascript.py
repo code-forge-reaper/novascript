@@ -1,6 +1,48 @@
+"""
+NovaScript Interpreter – redesigned for cleaner class system, const support,
+and reduced duplication.
+
+Architecture overview
+---------------------
+* Tokenizer (class Tokenizer) – lexical analysis + recursive-descent parser.
+  All AST construction lives here.  New syntax → extend the parse_* methods.
+* Interpreter – evaluation / execution.
+  - Environment / Var          → lexical scoping & constants (Var.const)
+  - NovaClass / Proxy / bind_parameters → OOP with inheritance, private,
+    const properties, and shared parameter binding
+  - execute_stmt / evaluate_expr → the two main dispatch points
+
+Class system redesign (from scratch improvements)
+-------------------------------------------------
+* `const` modifier now accepted on class properties (static or instance).
+* Const properties are tracked on the instance (`__const__` set) and
+  re-assignment raises NovaError.
+* Private members still protected via current_class_stack + _private_* sets.
+* Shared `bind_parameters()` helper eliminates repeated positional/keyword/
+  default/compact binding logic across functions, methods, constructors,
+  static methods and super calls.
+* Method and constructor creation is cleaner and more consistent.
+* Scope encapsulation remains lexical via Environment parent chains;
+  instance data lives on the instance dict (or Python object) with
+  __DefiningClass for identity and access checks.
+
+How to add a new language feature
+---------------------------------
+1. Add the AST node class in nodes.py (inherit from Statement or Expression).
+2. Extend the parser (Tokenizer.parse_statement / parse_* methods) to produce the node.
+3. Prefer registering a handler:
+
+       self._stmt_handlers["MyNewStmt"] = self._stmt_MyNewStmt
+
+   (or _expr_handlers).  Falling through the if/elif chains still works.
+4. Dynamic method binding continues to work via the __nova_ast__ marker on
+   callable wrappers (see AssignmentExpr / LambdaDecl).
+"""
+
 import os
 import sys
 import pathlib
+from nodes import *
 
 ROOT = os.path.dirname(os.path.realpath(__file__))
 LIBS_PATH = os.path.join(ROOT, "libs")
@@ -10,7 +52,6 @@ sys.path.insert(0, LIBS_PATH)
 sys.path.insert(0, os.getcwd())
 
 
-# Around line 13, replace the Proxy class with this improved version
 class Proxy:
     def __init__(self, set_func, get_func, instance, interpreter, cls):
         self._set = set_func
@@ -389,6 +430,14 @@ def init_globals(interpreter, globals_env):
                 reason = reason.format(*rest)  # Pythonic way to format
             raise Exception(reason)
 
+        # When True, printing a function/lambda dumps its full AST node.
+        # When False (default), functions print as <function name> / <lambda>.
+        # Toggle from Nova with:  Runtime.showFunctionAst = true
+        showFunctionAst = False
+
+    global _RUNTIME_REF
+    _RUNTIME_REF = Runtime
+
     class Fs:
         @staticmethod
         def read(path, opts=None):
@@ -513,6 +562,10 @@ def init_globals(interpreter, globals_env):
         def attrs(obj):
             return dir(obj)
 
+        @staticmethod
+        def type(obj):
+            return type(obj)
+
     builtin_values = {
         name: obj
         for name, obj in vars(builtins).items()
@@ -548,9 +601,9 @@ def init_globals(interpreter, globals_env):
     globals_env.define("Uri", Uri)
     globals_env.define("iter", iter)
 
-    def nx(iter: Iterator):
+    def nx(it):
         try:
-            return next(iter)
+            return next(it)
         except StopIteration:
             return None
 
@@ -567,20 +620,50 @@ def init_globals(interpreter, globals_env):
     globals_env.define("raise", r)
 
 
+# Holds the Runtime class after init_globals so FuncWrapp can read
+# Runtime.showFunctionAst without a circular import / hard dependency.
+_RUNTIME_REF = None
+
+
 class FuncWrapp:
-    def __init__(self, func, desc_repr, desc_str):
+    def __init__(self, func, desc_repr, desc_str, node, name=None):
         self.func = func
         self.desc_repr = desc_repr
         self.desc_str = desc_str
+        self._name = name
+        self._node = node
 
     def __call__(self, *args, **kw):
         return self.func(*args, **kw)
 
+    def _short_name(self):
+        if self._name:
+            return self._name
+        if self._node is not None and getattr(self._node, "name", None):
+            return self._node.name
+        return "lambda"
+
+    def _want_ast(self):
+        rt = _RUNTIME_REF
+        if rt is None:
+            return False
+        return bool(getattr(rt, "showFunctionAst", False))
+
     def __str__(self):
-        return self.desc_str()
+        if self._want_ast() and self.desc_str is not None:
+            try:
+                return self.desc_str()
+            except Exception:
+                pass
+        return f"<function {self._short_name()}>"
 
     def __repr__(self):
-        return self.desc_repr()
+        if self._want_ast() and self.desc_repr is not None:
+            try:
+                return self.desc_repr()
+            except Exception:
+                pass
+        return f"<function {self._short_name()}>"
 
 
 class Var:
@@ -604,6 +687,7 @@ class Var:
 class Environment:
     def __init__(self, parent=None):
         self.values: dict[str, Var] = {
+            # name, value, const
             "true": Var("true", True, True),
             "false": Var("false", False, True),
         }
@@ -691,17 +775,95 @@ class Environment:
         return str(v)
 
 
+def bind_parameters(
+    parameters, args, kwargs, interpreter, env, context_name="function", token=None
+):
+    """
+    Common helper to bind positional + keyword + default + compact parameters.
+    Returns a dict of {param_name: value} after type checks.
+    Raises NovaError on missing args, duplicates, unexpected kwargs, type errors.
+    """
+    compact_param = None
+    normal_params = []
+    for p in parameters:
+        if getattr(p, "is_compact", False):
+            compact_param = p
+            break
+        normal_params.append(p)
+
+    num_normal = len(normal_params)
+    values = {}
+
+    # 1. Positional → normal params
+    for i, param in enumerate(normal_params):
+        if i < len(args):
+            values[param.name] = args[i]
+
+    # 2. Remaining positional → compact
+    if compact_param:
+        if len(args) > num_normal:
+            values[compact_param.name] = list(args[num_normal:])
+        else:
+            values[compact_param.name] = []
+
+    # 3. Keyword arguments
+    param_names = {p.name for p in parameters}
+    for kw_name, kw_val in kwargs.items():
+        if kw_name not in param_names:
+            raise NovaError(
+                token or None,
+                f"Unexpected keyword argument '{kw_name}' in {context_name}",
+            )
+        if kw_name in values:
+            raise NovaError(
+                token or None,
+                f"Parameter '{kw_name}' given both positionally and by keyword in {context_name}",
+            )
+        values[kw_name] = kw_val
+
+    # 4. Defaults + type checks
+    result = {}
+    for param in parameters:
+        if param.name in values:
+            arg_val = values[param.name]
+        elif getattr(param, "is_compact", False):
+            continue  # already set to []
+        else:
+            if param.default is not None:
+                arg_val = interpreter.evaluate_expr(param.default, env)
+            else:
+                raise NovaError(
+                    param,
+                    f"Missing argument for parameter '{param.name}' in {context_name}",
+                )
+        if param.annotation_type:
+            check_type(param.annotation_type, arg_val, param)
+        result[param.name] = arg_val
+
+    return result
+
+
 class NovaClass:
+    """
+    Redesigned class system with:
+    - Support for `const` properties (instance and static)
+    - Proper encapsulation via private tracking + current_class_stack
+    - Cleaner method/constructor binding using shared bind_parameters helper
+    - Scope-aware environments for methods
+    """
+
     def __init__(self, name, super_class, interpreter, env):
         self.name = name
         self.super_class = super_class  # NovaClass or Python type
         self.interpreter = interpreter
-        self.env = env
-        self.static_members = {"name": name}
+        self.env = env  # definition environment (lexical parent)
+        self.static_members = {"name": name}  # runtime static values
+        self._static_const = set()  # names of const static members
         self._private_properties = set()
         self._private_methods = set()
-        self.instance_properties = {}  # PropertyDefinition AST nodes
-        self.instance_methods = {}  # MethodDefinition AST nodes
+        self._const_properties = set()  # instance const property names
+        self.instance_properties = {}  # name -> PropertyDefinition AST
+        self.instance_methods = {}  # name -> MethodDefinition AST
         self.constructor_def = None
 
         # Determine the top-most Python root, if any
@@ -709,31 +871,29 @@ class NovaClass:
 
     def get_public_instance_members(self, instance):
         result = {}
-        # Properties
+        # Properties (skip private)
         for name, prop_def in self.instance_properties.items():
             if name not in self._private_properties:
                 value = (
                     instance[name]
                     if isinstance(instance, dict)
-                    else getattr(instance, name)
+                    else getattr(instance, name, None)
                 )
                 result[name] = value
-        # Methods
+        # Methods (skip private)
         for name, method_def in self.instance_methods.items():
             if name not in self._private_methods:
                 value = (
                     instance[name]
                     if isinstance(instance, dict)
-                    else getattr(instance, name)
+                    else getattr(instance, name, None)
                 )
                 result[name] = value
         return result
 
     def get_public_static_members(self):
-        result = {}
-        for name, value in self.static_members.items():
-            result[name] = value
-        return result
+        # Return a shallow copy; callers should not mutate const ones
+        return dict(self.static_members)
 
     def _find_python_root(self):
         """Return the most foundational Python superclass, or None."""
@@ -745,10 +905,13 @@ class NovaClass:
             cls = cls.super_class if isinstance(cls.super_class, NovaClass) else None
         return root
 
+    def __call__(self, *args):
+        return self.instantiate(args)
+
     # ------------------------------------------------------------------
     #  Unified instance creation
     # ------------------------------------------------------------------
-    def instantiate(self, args, instance_token):
+    def instantiate(self, args):
         if self._python_root is not None:
             instance = self._python_root.__new__(self._python_root)
             setattr(instance, "__DefiningClass", self)
@@ -761,25 +924,31 @@ class NovaClass:
         self._build_instance_layout(instance)
 
         # Run constructor chain (most derived first, super calls move up)
-        self._run_constructor_chain(args, instance, instance_token)
+        self._run_constructor_chain(args, instance)
         return instance
 
     # ------------------------------------------------------------------
     #  Build layout: properties + methods in order (top-down)
     # ------------------------------------------------------------------
     def _build_instance_layout(self, instance):
-        # Recursively build from superclass first
+        # Recursively build from superclass first (proper inheritance chain)
         if isinstance(self.super_class, NovaClass):
             self.super_class._build_instance_layout(instance)
+
+        # Track const/private on the instance for runtime checks (dict instances)
+        if isinstance(instance, dict):
+            if "__const__" not in instance:
+                instance["__const__"] = set()
+            if "__private__" not in instance:
+                instance["__private__"] = set()
 
         # Add properties
         for prop_name, prop_def in self.instance_properties.items():
             value = None
-            # Around line 740
             if isinstance(prop_def, PropertyHandler):
                 _env = Environment(self.env)
                 _env.define("self", instance)
-                _env.define("__DefiningClass", instance)
+                _env.define("__DefiningClass", self)
                 self.interpreter.execute_stmt(prop_def.setter, _env)
                 self.interpreter.execute_stmt(prop_def.getter, _env)
                 set_func = _env.get("set").value
@@ -788,12 +957,24 @@ class NovaClass:
                 value = Proxy(set_func, get_func, instance, self.interpreter, self)
             elif prop_def.initializer:
                 value = self.interpreter.evaluate_expr(prop_def.initializer, self.env)
+
             self._set_instance_attr(instance, prop_name, value)
+
+            # Mark const / private for later assignment checks
+            # PropertyHandler has neither is_const nor is_private; use getattr
+            if isinstance(instance, dict):
+                if getattr(prop_def, "is_const", False):
+                    instance["__const__"].add(prop_name)
+                    self._const_properties.add(prop_name)
+                if getattr(prop_def, "is_private", False):
+                    instance["__private__"].add(prop_name)
 
         # Add methods
         for method_name, method_def in self.instance_methods.items():
             bound = self._create_method(method_def, instance)
             self._set_instance_attr(instance, method_name, bound)
+            if isinstance(instance, dict) and method_def.is_private:
+                instance["__private__"].add(method_name)
 
     @staticmethod
     def _set_instance_attr(instance, name, value):
@@ -809,81 +990,93 @@ class NovaClass:
         interpreter = self.interpreter
         env = self.env
         super_class = self.super_class
+        defining_cls = self  # capture for nested lambdas / private checks
 
-        def bound_method(*method_args):
-            method_env = Environment(env)
-            method_env.define("self", instance)
+        def bound_method(*method_args, **method_kwargs):
+            # Push onto the *defining* interpreter's stack so that:
+            # 1. private access checks inside the method body succeed, and
+            # 2. any lambda created inside the method captures this class
+            #    (critical when the method is invoked from a different Interpreter,
+            #     e.g. after load()).
+            interpreter.current_class_stack.append(defining_cls)
+            try:
+                method_env = Environment(env)
+                method_env.define("self", instance)
 
-            # Build 'super' object for method calls
-            if super_class:
-                super_obj = {}
-                if isinstance(super_class, NovaClass):
-                    for sm_name, sm_def in super_class.instance_methods.items():
+                # Build 'super' object for method calls
+                if super_class:
+                    super_obj = {}
+                    if isinstance(super_class, NovaClass):
+                        for sm_name, sm_def in super_class.instance_methods.items():
 
-                        def make_super_method(mdef=sm_def, sname=sm_name):
-                            def super_call(*super_args):
-                                super_env = Environment(super_class.env)
-                                super_env.define("self", instance)
-                                for i, param in enumerate(mdef.parameters):
-                                    val = super_args[i] if i < len(super_args) else None
-                                    if val is None and param.default is not None:
-                                        val = interpreter.evaluate_expr(
-                                            param.default, super_class.env
-                                        )
-                                    elif val is None and param.default is None:
-                                        raise NovaError(
-                                            param,
-                                            f"Missing argument for '{param.name}' in super method '{sname}'",
-                                        )
-                                    if param.annotation_type:
-                                        check_type(param.annotation_type, val, param)
-                                    super_env.define(param.name, val)
-                                result = interpreter.execute_block(mdef.body, super_env)
-                                if isinstance(result, ReturnFlow):
-                                    return result.value
-                                return None
+                            def make_super_method(mdef=sm_def, sname=sm_name):
+                                def super_call(*super_args, **super_kwargs):
+                                    super_env = Environment(super_class.env)
+                                    super_env.define("self", instance)
+                                    # Shared binding helper
+                                    bound = bind_parameters(
+                                        mdef.parameters,
+                                        super_args,
+                                        super_kwargs,
+                                        interpreter,
+                                        super_class.env,
+                                        context_name=f"super method '{sname}'",
+                                        token=mdef,
+                                    )
+                                    for pname, pval in bound.items():
+                                        super_env.define(pname, pval)
+                                    result = interpreter.execute_block(
+                                        mdef.body, super_env
+                                    )
+                                    if isinstance(result, ReturnFlow):
+                                        return result.value
+                                    return None
 
-                            return super_call
+                                return super_call
 
-                        super_obj[sm_name] = make_super_method()
-                elif isinstance(super_class, type):
-                    # Expose Python superclass methods
-                    for attr_name in dir(super_class):
-                        if not attr_name.startswith("_"):
-                            attr = getattr(super_class, attr_name, None)
-                            if callable(attr):
+                            super_obj[sm_name] = make_super_method()
+                    elif isinstance(super_class, type):
+                        # Expose Python superclass methods
+                        for attr_name in dir(super_class):
+                            if not attr_name.startswith("_"):
+                                attr = getattr(super_class, attr_name, None)
+                                if callable(attr):
 
-                                def python_super_call(*args, aname=attr_name):
-                                    method = getattr(super_class, aname)
-                                    try:
-                                        return method(instance, *args)
-                                    except Exception as e:
-                                        raise NovaError(
-                                            None,
-                                            f"Error calling super Python method '{aname}': {e}",
-                                        )
+                                    def python_super_call(
+                                        *args, aname=attr_name, **kwargs
+                                    ):
+                                        method = getattr(super_class, aname)
+                                        try:
+                                            return method(instance, *args, **kwargs)
+                                        except Exception as e:
+                                            raise NovaError(
+                                                None,
+                                                f"Error calling super Python method '{aname}': {e}",
+                                            )
 
-                                super_obj[attr_name] = python_super_call
-                method_env.define("Base", super_obj)
+                                    super_obj[attr_name] = python_super_call
+                    method_env.define("Base", super_obj)
 
-            # Bind method parameters
-            for i, param in enumerate(method_def.parameters):
-                val = method_args[i] if i < len(method_args) else None
-                if val is None and param.default is not None:
-                    val = interpreter.evaluate_expr(param.default, env)
-                elif val is None and param.default is None:
-                    raise NovaError(
-                        param,
-                        f"Missing argument for parameter '{param.name}' in method '{method_def.name}'",
-                    )
-                if param.annotation_type:
-                    check_type(param.annotation_type, val, param)
-                method_env.define(param.name, val)
+                # Bind method parameters using shared helper
+                bound_values = bind_parameters(
+                    method_def.parameters,
+                    method_args,
+                    method_kwargs,
+                    interpreter,
+                    env,
+                    context_name=f"method '{method_def.name}'",
+                    token=method_def,
+                )
+                for pname, pval in bound_values.items():
+                    method_env.define(pname, pval)
 
-            result = interpreter.execute_block(method_def.body, method_env)
-            if isinstance(result, ReturnFlow):
-                return result.value
-            return None
+                result = interpreter.execute_block(method_def.body, method_env)
+                if isinstance(result, ReturnFlow):
+                    return result.value
+                return None
+            finally:
+                if interpreter.current_class_stack:
+                    interpreter.current_class_stack.pop()
 
         bound_method.__DefiningClass = self  # store the class for access checks
         if method_def.is_private:
@@ -893,14 +1086,12 @@ class NovaClass:
     # ------------------------------------------------------------------
     #  Constructor chain
     # ------------------------------------------------------------------
-    def _run_constructor_chain(self, args, instance, instance_token):
+    def _run_constructor_chain(self, args, instance):
         """Start the chain from the most derived class."""
         if self.constructor_def:
-            self._execute_constructor(
-                self.constructor_def, args, instance, instance_token
-            )
+            self._execute_constructor(self.constructor_def, args, instance)
 
-    def _execute_constructor(self, constructor_def, args, instance, instance_token):
+    def _execute_constructor(self, constructor_def, args, instance):
         constructor_env = Environment(self.env)
         constructor_env.define("self", instance)
 
@@ -912,7 +1103,7 @@ class NovaClass:
                 def super_constructor_call(*super_args):
                     if parent.constructor_def:
                         parent._execute_constructor(
-                            parent.constructor_def, super_args, instance, instance_token
+                            parent.constructor_def, super_args, instance
                         )
 
                 constructor_env.define("Base", super_constructor_call)
@@ -923,36 +1114,33 @@ class NovaClass:
                     try:
                         parent_type.__init__(instance, *super_args)
                     except Exception as e:
-                        raise NovaError(
-                            instance_token,
+                        raise ValueError(
                             f"Error calling superclass Python constructor: {e}",
                         )
 
                 constructor_env.define("Base", super_constructor_call)
             else:
-                raise NovaError(
-                    instance_token,
+                raise ValueError(
                     f"Invalid superclass type: {type(self.super_class).__name__}",
                 )
 
-        # Bind constructor parameters
-        for i, param in enumerate(constructor_def.parameters):
-            val = args[i] if i < len(args) else None
-            if val is None and param.default is not None:
-                val = self.interpreter.evaluate_expr(param.default, self.env)
-            elif val is None and param.default is None:
-                raise NovaError(
-                    param,
-                    f"Missing argument for '{param.name}' in constructor of '{self.name}'",
-                )
-            if param.annotation_type:
-                check_type(param.annotation_type, val, param)
-            constructor_env.define(param.name, val)
+        # Bind constructor parameters via shared helper
+        bound = bind_parameters(
+            constructor_def.parameters,
+            args,
+            {},  # constructors currently positional-only from call site
+            self.interpreter,
+            self.env,
+            context_name=f"constructor of '{self.name}'",
+            token=constructor_def,
+        )
+        for pname, pval in bound.items():
+            constructor_env.define(pname, pval)
 
         self.interpreter.execute_block(constructor_def.body, constructor_env)
 
 
-BUILTIN_VAR_TYPES: dict[str, Type] = {
+BUILTIN_VAR_TYPES: dict[str, object] = {
     "string": str,
     "number": (int, float),
     "bool": bool,
@@ -1202,7 +1390,7 @@ class Tokenizer:
                 matched_operator = True
             else:
                 # Single-character operators that might be part of two-char ops, or stand alone
-                potential_single_ops = "=+-*/%^<>!.|"
+                potential_single_ops = "=+-*/%^<>!.|&"
                 if char in potential_single_ops:
                     tokens.append(Token("operator", char, file, line, start_col))
                     i += 1
@@ -1480,6 +1668,56 @@ class Tokenizer:
             result += "[]"
         return result
 
+    def parse_argument_list(self):
+        """Parse a comma-separated argument list (already inside the parentheses).
+
+        Supports three forms:
+          - unpack <expr>          → ExplodeExpr
+          - identifier : <expr>    → NamedArg
+          - <expr>                 → normal positional argument
+        """
+        args = []
+        if self.get_next_token() and self.get_next_token().value != ")":
+            while True:
+                nt = self.get_next_token()
+                if (
+                    nt
+                    and nt.type == "identifier"
+                    and self.current + 1 < len(self.tokens)
+                    and self.tokens[self.current + 1].value == ":"
+                ):
+                    # Named argument: name: value
+                    name_tok = self.consume_token()
+                    self.consume_token()  # consume ':'
+                    value = self.parse_expression()
+                    args.append(
+                        NamedArg(
+                            name_tok.value,
+                            value,
+                            name_tok.file,
+                            name_tok.line,
+                            name_tok.column,
+                        )
+                    )
+                elif nt and nt.value == "unpack":
+                    token = self.consume_token()
+                    args.append(
+                        ExplodeExpr(
+                            self.parse_expression(),
+                            token.file,
+                            token.line,
+                            token.column,
+                        )
+                    )
+                else:
+                    args.append(self.parse_expression())
+
+                if self.get_next_token() and self.get_next_token().value == ",":
+                    self.consume_token()
+                else:
+                    break
+        return args
+
     def build_fn(self, token):
         self.consume_token()
         func_name_token = self.expect_type("identifier")
@@ -1633,6 +1871,7 @@ class Tokenizer:
             member_token = self.get_next_token()
             is_static = False
             is_private = False
+            is_const = False
             # print(member_token)
             while True:
                 member_token = self.get_next_token()
@@ -1648,6 +1887,9 @@ class Tokenizer:
                         )
                     self.consume_token()  # consume 'private'
                     is_private = True
+                elif member_token.type == "keyword" and member_token.value == "const":
+                    self.consume_token()  # consume 'const'
+                    is_const = True
                 else:
                     break
 
@@ -1688,6 +1930,7 @@ class Tokenizer:
                         initializer,
                         is_static,
                         is_private,
+                        is_const,
                         prop_name_token.file,
                         prop_name_token.line,
                         prop_name_token.column,
@@ -1735,95 +1978,23 @@ class Tokenizer:
                 and self.get_next_token().value == "func"
             ):
                 # Method Definition
-                self.consume_token()  # consume 'func'
-                method_name_token = self.expect_type("identifier")
-                method_name = method_name_token.value
-                self.consume_token()
-
                 is_constructor = False
-                if method_name == "init":
+                method_token = self.get_next_token()
+                func = self.build_fn(method_token)
+                if func.name == "init":
                     is_constructor = True
-
-                self.expect_token("(")
-                self.consume_token()
-
-                parameters = []
-                if self.get_next_token() and self.get_next_token().value != ")":
-                    while True:
-                        is_compact = False
-                        if (
-                            self.get_next_token()
-                            and self.get_next_token().value == "compact"
-                        ):
-                            self.consume_token()  # consume 'compact'
-                            is_compact = True
-
-                        param_token = self.expect_type("identifier")
-                        param_name = param_token.value
-                        self.consume_token()
-
-                        annotation_type = None
-                        if (
-                            self.get_next_token()
-                            and self.get_next_token().type == "identifier"
-                        ):
-                            type_token = self.get_next_token()
-                            if (
-                                type_token.value in BUILTIN_VAR_TYPES
-                                or type_token.value in CUSTOM_TYPES
-                            ):
-                                annotation_type = type_token.value
-                                self.consume_token()
-                                annotation_type = self._consume_array_brackets(
-                                    annotation_type
-                                )
-                            else:
-                                raise NovaError(
-                                    type_token,
-                                    f"Invalid type annotation: {type_token.value}",
-                                )
-
-                        default_expr = None
-                        if self.get_next_token() and self.get_next_token().value == "=":
-                            self.consume_token()
-                            default_expr = self.parse_expression()
-
-                        parameters.append(
-                            Parameter(
-                                param_name,
-                                annotation_type,
-                                default_expr,
-                                is_compact,
-                                param_token.file,
-                                param_token.line,
-                                param_token.column,
-                                param_token.type,
-                                param_token.value,
-                            )
-                        )
-
-                        if self.get_next_token() and self.get_next_token().value == ",":
-                            self.consume_token()
-                        else:
-                            break
-                self.expect_token(")")
-                self.consume_token()
-
-                body_statements = self.parse_block_until(["end"])
-                self.expect_token("end")
-                self.consume_token()
 
                 body.append(
                     MethodDefinition(
-                        method_name,
-                        parameters,
-                        body_statements,
+                        func.name,
+                        func.parameters,
+                        func.body,
                         is_static,
                         is_constructor,
                         is_private,
-                        method_name_token.file,
-                        method_name_token.line,
-                        method_name_token.column,
+                        method_token.file,
+                        method_token.line,
+                        method_token.column,
                     )
                 )
             else:
@@ -2494,7 +2665,7 @@ class Tokenizer:
             self.get_next_token()
             and self.get_next_token().type == "operator"
             and self.get_next_token().value
-            in ["<", "<=", ">", ">=", "<<", ">>", "|", "between"]
+            in ["<", "<=", ">", ">=", "<<", ">>", "|", "&", "between"]
         ):
             operator_token = self.consume_token()
             operator = operator_token.value
@@ -2584,28 +2755,7 @@ class Tokenizer:
                 # Check for method call
                 if self.get_next_token() and self.get_next_token().value == "(":
                     self.consume_token()  # consume "("
-                    args = []
-                    if self.get_next_token() and self.get_next_token().value != ")":
-                        while True:
-                            if self.get_next_token().value == "unpack":
-                                token = self.consume_token()
-                                args.append(
-                                    ExplodeExpr(
-                                        self.parse_expression(),
-                                        token.file,
-                                        token.line,
-                                        token.column,
-                                    )
-                                )
-                            else:
-                                args.append(self.parse_expression())
-                            if (
-                                self.get_next_token()
-                                and self.get_next_token().value == ","
-                            ):
-                                self.consume_token()
-                            else:
-                                break
+                    args = self.parse_argument_list()
                     self.expect_token(")")
                     self.consume_token()  # consume ")"
                     expr = MethodCall(
@@ -2640,25 +2790,7 @@ class Tokenizer:
             elif next_token.value == "(" and isinstance(expr, Identifier):
                 # This handles direct function calls like `myFunc(arg)`
                 self.consume_token()  # consume "("
-                args = []
-                if self.get_next_token() and self.get_next_token().value != ")":
-                    while True:
-                        if self.get_next_token().value == "unpack":
-                            token = self.consume_token()
-                            args.append(
-                                ExplodeExpr(
-                                    self.parse_expression(),
-                                    token.file,
-                                    token.line,
-                                    token.column,
-                                )
-                            )
-                        else:
-                            args.append(self.parse_expression())
-                        if self.get_next_token() and self.get_next_token().value == ",":
-                            self.consume_token()
-                        else:
-                            break
+                args = self.parse_argument_list()
                 self.expect_token(")")
                 self.consume_token()  # consume ")"
                 expr = FuncCall(expr.name, args, expr.file, expr.line, expr.column)
@@ -2903,25 +3035,7 @@ class Tokenizer:
             # If followed by '(', it's a method call directly on self
             if self.get_next_token() and self.get_next_token().value == "(":
                 self.consume_token()  # consume '('
-                args = []
-                if self.get_next_token() and self.get_next_token().value != ")":
-                    while True:
-                        if self.get_next_token().value == "unpack":
-                            unpack_token = self.consume_token()
-                            args.append(
-                                ExplodeExpr(
-                                    self.parse_expression(),
-                                    unpack_token.file,
-                                    unpack_token.line,
-                                    unpack_token.column,
-                                )
-                            )
-                        else:
-                            args.append(self.parse_expression())
-                        if self.get_next_token() and self.get_next_token().value == ",":
-                            self.consume_token()
-                        else:
-                            break
+                args = self.parse_argument_list()
                 self.expect_token(")")
                 self.consume_token()  # consume ')'
 
@@ -2977,6 +3091,89 @@ class Interpreter:
         self.callStack = []
         self.errorStack = []
 
+        # ------------------------------------------------------------------
+        # Extensibility registries
+        # ------------------------------------------------------------------
+        # To add a new statement type:
+        #   1. Add the AST node in nodes.py
+        #   2. Implement a method `_stmt_YourType(self, stmt, env)`
+        #   3. Register it here: self._stmt_handlers["YourType"] = self._stmt_YourType
+        # Same pattern for expressions with `_expr_handlers`.
+        #
+        # The big if/elif chains remain for now for backward compatibility, but
+        # new features should prefer the registry path so the core dispatch stays
+        # clean and easy to maintain.
+        self._stmt_handlers = {}
+        self._expr_handlers = {}
+        self._register_default_handlers()
+
+    def _register_default_handlers(self):
+        """Populate the extensibility registries. Override or extend in subclasses."""
+        # Statement handlers (examples – full coverage still lives in execute_stmt)
+        # self._stmt_handlers["VarDecl"] = self._stmt_VarDecl
+        # ...
+        # Expression handlers
+        # self._expr_handlers["Literal"] = self._expr_Literal
+        pass
+
+    def _create_callable(
+        self, parameters, body, env, name=None, node=None, context_name=None
+    ):
+        """
+        Shared factory for both named functions (FuncDecl) and lambdas (LambdaDecl).
+        A lambda is simply an unnamed / uuid-named function.
+
+        - Captures the current class context (if any) so nested lambdas can still
+          touch private members of the enclosing class.
+        - Uses the common bind_parameters helper.
+        - Attaches __nova_ast__ so dynamic method binding continues to work.
+        """
+        captured_class = (
+            self.current_class_stack[-1] if self.current_class_stack else None
+        )
+        display_name = name or "lambda"
+        ctx = context_name or display_name
+
+        def func_wrapper(*args, **kwargs):
+            pushed = False
+            if captured_class is not None:
+                self.current_class_stack.append(captured_class)
+                pushed = True
+            try:
+                func_env = Environment(env)
+                bound = bind_parameters(
+                    parameters,
+                    args,
+                    kwargs,
+                    self,
+                    env,
+                    context_name=ctx,
+                    token=node,
+                )
+                for pname, pval in bound.items():
+                    func_env.define(pname, pval)
+                result = self.execute_block(body, func_env)
+                if isinstance(result, ReturnFlow):
+                    return result.value
+                return None
+            finally:
+                if pushed and self.current_class_stack:
+                    self.current_class_stack.pop()
+
+        wrapper = FuncWrapp(
+            func_wrapper,
+            (node.__repr__ if node else None),
+            (node.__str__ if node else None),
+            node,
+            name=display_name,
+        )
+        wrapper.__name__ = name if name is not None else str(uuid.uuid4())
+        if node is not None:
+            wrapper.__nova_ast__ = node
+        if captured_class is not None:
+            wrapper.__DefiningClass = captured_class
+        return wrapper
+
     def _check_private_access(self, obj, name, expr):
         """Raise NovaError if `name` is a private member of `obj` and access is not from inside its class."""
         if not isinstance(obj, dict) or "__DefiningClass" not in obj:
@@ -3026,6 +3223,11 @@ class Interpreter:
 
     def execute_stmt(self, stmt, env):
         dprint("stmt: ", stmt)
+
+        # Prefer registered handler when present (makes new features easy to plug in)
+        handler = self._stmt_handlers.get(stmt.type)
+        if handler is not None:
+            return handler(stmt, env)
 
         if stmt.type in ["VarDecl", "ConstDecl"]:
             value = self.evaluate_expr(stmt.initializer, env)
@@ -3207,8 +3409,9 @@ class Interpreter:
                         member.name,
                         member.type_annotation,
                         member.initializer,
-                        False,
-                        False,
+                        False,  # is_static
+                        False,  # is_private
+                        False,  # is_const
                         member.file,
                         member.line,
                         member.column,
@@ -3223,6 +3426,7 @@ class Interpreter:
                         member.initializer,
                         False,  # non‑static
                         False,  # non‑private
+                        getattr(member, "is_const", False),
                         member.file,
                         member.line,
                         member.column,
@@ -3238,7 +3442,7 @@ class Interpreter:
                     raise NovaError(member, "not supported")
 
             # 4. Instantiate and assign to the variable name provided
-            instance = temp_class.instantiate([], stmt)
+            instance = temp_class.instantiate([])
             env.define(stmt.name, instance)
         elif stmt.type == "WhileStmt":
             while self.evaluate_expr(stmt.condition, env):
@@ -3353,6 +3557,8 @@ class Interpreter:
                 )
 
         elif stmt.type == "ReturnStmt":
+            if not stmt.expression:
+                return ReturnFlow(None)
             value = self.evaluate_expr(stmt.expression, env)
             return ReturnFlow(value)
         elif stmt.type == "LocalFuncDecl":
@@ -3363,79 +3569,18 @@ class Interpreter:
                 stmt.fn.name, _env.get(stmt.fn.name).value, _env.get(stmt.fn.name).const
             )
         elif stmt.type == "FuncDecl":
+            # Named function – same machinery as a lambda, just with a name
+            # and stored in the environment.
+            func_wrapper = self._create_callable(
+                stmt.parameters,
+                stmt.body,
+                env,
+                name=stmt.name,
+                node=stmt,
+                context_name=f"function '{stmt.name}'",
+            )
+            env.define(stmt.name, func_wrapper)
 
-            def func_wrapper(*args, **kwargs):
-                func_env = Environment(env)
-                param_list = stmt.parameters  # list of Parameter objects
-
-                # --- identify compact parameter (if any) ---
-                compact_param = None
-                normal_params = []  # parameters before compact
-                for p in param_list:
-                    if p.is_compact:
-                        compact_param = p
-                        break
-                    normal_params.append(p)
-
-                num_normal = len(normal_params)
-
-                # 1. Assign positional arguments to normal parameters
-                values = {}
-                for i, param in enumerate(normal_params):
-                    if i < len(args):
-                        values[param.name] = args[i]
-                    # else: will be handled by defaults later
-
-                # 2. Assign remaining positional arguments to compact parameter
-                if compact_param:
-                    if len(args) > num_normal:
-                        values[compact_param.name] = list(args[num_normal:])
-                    else:
-                        values[compact_param.name] = []
-
-                # 3. Keyword arguments
-                param_names = {p.name for p in param_list}
-                for kw_name, kw_val in kwargs.items():
-                    if kw_name not in param_names:
-                        raise NovaError(
-                            stmt, f"Unexpected keyword argument '{kw_name}'"
-                        )
-                    if kw_name in values:
-                        raise NovaError(
-                            stmt,
-                            f"Parameter '{kw_name}' given both positionally and by keyword",
-                        )
-                    values[kw_name] = kw_val
-
-                # 4. Apply defaults & type check for all parameters
-                for param in param_list:
-                    if param.name in values:
-                        arg_val = values[param.name]
-                    elif param.is_compact:
-                        continue  # already handled (empty list)
-                    else:
-                        # missing normal parameter -> use default
-                        if param.default is not None:
-                            arg_val = self.evaluate_expr(param.default, env)
-                        else:
-                            raise NovaError(
-                                param, f"Missing argument for parameter '{param.name}'"
-                            )
-                    if param.annotation_type:
-                        check_type(param.annotation_type, arg_val, param)
-                    func_env.define(param.name, arg_val)
-
-                # 5. Execute body
-                result = self.execute_block(stmt.body, func_env)
-                if isinstance(result, ReturnFlow):
-                    return result.value
-                return None
-
-            func_wrapper.__name__ = stmt.name
-            func_wrapper.__repr__ = stmt.__repr__
-            func_wrapper.__str__ = stmt.__str__
-            fg = FuncWrapp(func_wrapper, stmt.__repr__, stmt.__str__)
-            env.define(stmt.name, fg)
         elif stmt.type == "ClassDefinition":
             class_def = stmt
             super_class = None
@@ -3483,11 +3628,15 @@ class Interpreter:
                 if member.type == "PropertyDefinition":
                     if member.is_private:
                         nova_class._private_properties.add(member.name)
+                    if getattr(member, "is_const", False):
+                        nova_class._const_properties.add(member.name)
                     if member.is_static:
                         prop_value = None
                         if member.initializer:
                             prop_value = self.evaluate_expr(member.initializer, env)
                         nova_class.static_members[member.name] = prop_value
+                        if getattr(member, "is_const", False):
+                            nova_class._static_const.add(member.name)
                     else:
                         nova_class.instance_properties[member.name] = member
                 elif member.type == "PropertyHandler":
@@ -3499,33 +3648,24 @@ class Interpreter:
                     if member.is_constructor:
                         nova_class.constructor_def = member
                     elif member.is_static:
-                        # Wrap static methods
-                        def static_method_wrapper(
-                            *args, _member=member
-                        ):  # Capture member
-                            method_env = Environment(
-                                env
-                            )  # Static methods run in the class's definition environment
-                            method_env.define(
-                                "self", nova_class.static_members
-                            )  # 'self' refers to the static members map
-                            # Handle parameters and execute body
-                            for i, param in enumerate(_member.parameters):
-                                arg_val = args[i] if i < len(args) else None
-                                if arg_val is None and param.default is not None:
-                                    arg_val = self.evaluate_expr(param.default, env)
-                                elif arg_val is None and param.default is None:
-                                    raise NovaError(
-                                        param,
-                                        f"Missing argument for parameter '{param.name}' in static method '{_member.name}'.",
-                                    )
-                                if param.annotation_type:
-                                    check_type(param.annotation_type, arg_val, param)
-                                method_env.define(param.name, arg_val)
+                        # Wrap static methods using shared bind helper
+                        def static_method_wrapper(*args, _member=member, **kwargs):
+                            method_env = Environment(env)
+                            method_env.define("self", nova_class.static_members)
+                            bound = bind_parameters(
+                                _member.parameters,
+                                args,
+                                kwargs,
+                                self,
+                                env,
+                                context_name=f"static method '{_member.name}'",
+                                token=_member,
+                            )
+                            for pname, pval in bound.items():
+                                method_env.define(pname, pval)
                             result = self.execute_block(_member.body, method_env)
                             if isinstance(result, ReturnFlow):
                                 return result.value
-
                             return None
 
                         nova_class.static_members[member.name] = static_method_wrapper
@@ -3677,6 +3817,11 @@ class Interpreter:
     def evaluate_expr(self, expr, env):
         dprint("expr: ", expr)
 
+        # Prefer registered handler when present (extension point for new expr types)
+        handler = self._expr_handlers.get(expr.type)
+        if handler is not None:
+            return handler(expr, env)
+
         if expr.type == "Literal":
             return expr.value
         elif expr.type == "Identifier":
@@ -3684,13 +3829,14 @@ class Interpreter:
 
         elif expr.type == "AssignmentExpr":
             target = expr.target
-            assigned_value = self.evaluate_expr(expr.value, env)
             op = expr.operator
 
             # Resolve where we are assigning to
             resolved = self.resolve_assignment_target(target, env)
             base = resolved["base"]
             final_key = resolved["final_key"]
+
+            assigned_value = self.evaluate_expr(expr.value, env)
 
             # === Compound assignment handling ===
             if op != "=":
@@ -3762,6 +3908,13 @@ class Interpreter:
                     base.assign(final_key, final_value_to_assign, target)
 
                 elif isinstance(base, dict):
+                    # Enforce const properties on Nova instances
+                    const_set = base.get("__const__")
+                    if const_set and final_key in const_set:
+                        raise NovaError(
+                            target,
+                            f"Cannot re-assign constant property '{final_key}'",
+                        )
                     # Resolve expected type for (possibly nested) property using root variable's type
                     if final_key in base and isinstance(base[final_key], Proxy):
                         proxy = base[final_key]
@@ -3778,6 +3931,55 @@ class Interpreter:
                                 self.current_class_stack.pop()
                         else:
                             proxy.set(final_value_to_assign)
+                    elif "__DefiningClass" in base and isinstance(
+                        assigned_value, Callable
+                    ):
+                        # === Dynamic method binding ===
+                        # Makes it easy to do: instance.foo = def() print(self.name) end
+                        # We prefer the original AST (LambdaDecl) when available so we
+                        # can reconstruct a proper MethodDefinition that receives `self`.
+                        # Extension point: if you add new callable AST nodes, just attach
+                        # .__nova_ast__ on the wrapper (see LambdaDecl evaluation).
+                        ast_node = getattr(assigned_value, "__nova_ast__", None)
+                        if (
+                            ast_node is not None
+                            and hasattr(ast_node, "parameters")
+                            and hasattr(ast_node, "body")
+                        ):
+                            meth = MethodDefinition(
+                                final_key,
+                                ast_node.parameters,
+                                ast_node.body,
+                                False,  # is_static
+                                False,  # is_constructor
+                                False,  # is_private
+                                expr.file,
+                                expr.line,
+                                expr.column,
+                            )
+                            bound = base["__DefiningClass"]._create_method(meth, base)
+                            base[final_key] = bound
+                        elif hasattr(expr.value, "parameters") and hasattr(
+                            expr.value, "body"
+                        ):
+                            # Fallback: RHS was still the raw AST (should not normally happen)
+                            meth = MethodDefinition(
+                                final_key,
+                                expr.value.parameters,
+                                expr.value.body,
+                                False,
+                                False,
+                                False,
+                                expr.file,
+                                expr.line,
+                                expr.column,
+                            )
+                            bound = base["__DefiningClass"]._create_method(meth, base)
+                            base[final_key] = bound
+                        else:
+                            # Plain Python callable or already-bound function – store as-is
+                            base[final_key] = final_value_to_assign
+
                     else:
                         expected_type = self.get_target_type(target, env)
                         if expected_type:
@@ -3833,6 +4035,8 @@ class Interpreter:
                 return left + right
             elif expr.operator == "|":
                 return left | right
+            elif expr.operator == "&":
+                return left & right
             elif expr.operator == "%":
                 if isinstance(left, str):
                     if isinstance(right, list):
@@ -3949,6 +4153,8 @@ class Interpreter:
                             args.extend(v)
                         else:
                             args.append(v)
+                    elif arg.type == "NamedArg":
+                        kwargs[arg.name] = self.evaluate_expr(arg.value, env)
                     else:
                         v = self.evaluate_expr(arg, env)
                         args.append(v)
@@ -3982,6 +4188,8 @@ class Interpreter:
                         args.extend(v)
                     else:
                         args.append(v)
+                elif arg.type == "NamedArg":
+                    kwargs[arg.name] = self.evaluate_expr(arg.value, env)
                 else:
                     v = self.evaluate_expr(arg, env)
                     args.append(v)
@@ -4021,6 +4229,7 @@ class Interpreter:
                     result = fn(*args, **kwargs)
                 finally:
                     self.current_class_stack.pop()
+                return result
             else:
                 try:
                     if hasattr(fn, "__DefiningClass"):
@@ -4140,7 +4349,7 @@ class Interpreter:
             args = [self.evaluate_expr(arg, env) for arg in expr.arguments]
             c = None
             if isinstance(target_class, NovaClass):
-                c = target_class.instantiate(args, expr)
+                c = target_class.instantiate(args)
             elif isinstance(target_class, type) and hasattr(
                 target_class, "__init__"
             ):  # It's a Python class
@@ -4165,78 +4374,17 @@ class Interpreter:
                 )
             return c
         elif expr.type == "LambdaDecl":
-
-            def func_wrapper(*args, **kwargs):
-                func_env = Environment(env)
-                param_list = expr.parameters  # list of Parameter objects
-
-                # --- identify compact parameter (if any) ---
-                compact_param = None
-                normal_params = []  # parameters before compact
-                for p in param_list:
-                    if p.is_compact:
-                        compact_param = p
-                        break
-                    normal_params.append(p)
-
-                num_normal = len(normal_params)
-
-                # 1. Assign positional arguments to normal parameters
-                values = {}
-                for i, param in enumerate(normal_params):
-                    if i < len(args):
-                        values[param.name] = args[i]
-                    # else: will be handled by defaults later
-
-                # 2. Assign remaining positional arguments to compact parameter
-                if compact_param:
-                    if len(args) > num_normal:
-                        values[compact_param.name] = list(args[num_normal:])
-                    else:
-                        values[compact_param.name] = []
-
-                # 3. Keyword arguments
-                param_names = {p.name for p in param_list}
-                for kw_name, kw_val in kwargs.items():
-                    if kw_name not in param_names:
-                        raise NovaError(
-                            stmt, f"Unexpected keyword argument '{kw_name}'"
-                        )
-                    if kw_name in values:
-                        raise NovaError(
-                            stmt,
-                            f"Parameter '{kw_name}' given both positionally and by keyword",
-                        )
-                    values[kw_name] = kw_val
-
-                # 4. Apply defaults & type check for all parameters
-                for param in param_list:
-                    if param.name in values:
-                        arg_val = values[param.name]
-                    elif param.is_compact:
-                        continue  # already handled (empty list)
-                    else:
-                        # missing normal parameter -> use default
-                        if param.default is not None:
-                            arg_val = self.evaluate_expr(param.default, env)
-                        else:
-                            raise NovaError(
-                                param, f"Missing argument for parameter '{param.name}'"
-                            )
-                    if param.annotation_type:
-                        check_type(param.annotation_type, arg_val, param)
-                    func_env.define(param.name, arg_val)
-
-                # 5. Execute body
-                result = self.execute_block(expr.body, func_env)
-                if isinstance(result, ReturnFlow):
-                    return result.value
-                return None
-
-            func_wrapper.__name__ = str(uuid.uuid4())
-            func_wrapper.__repr__ = expr.__repr__
-            func_wrapper.__str__ = expr.__str__
-            return func_wrapper
+            # A lambda is just an unnamed / uuid-named function.
+            # Same creation path as FuncDecl; class context is captured
+            # automatically by _create_callable.
+            return self._create_callable(
+                expr.parameters,
+                expr.body,
+                env,
+                name=None,  # → random uuid
+                node=expr,
+                context_name="lambda",
+            )
         elif expr.type == "DecoratorExpr":
             # print(expr.__dict__)
             value = self.evaluate_expr(expr.expr, env)

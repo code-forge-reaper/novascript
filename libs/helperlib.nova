@@ -1,3 +1,25 @@
+export func map(fn)
+  return def(values)
+    if Is.array(values)
+      const v = []
+      for value in values do
+        var vv = fn(value)
+        if vv != nil v.append(vv) end
+      end
+      return v
+    elseif Is.dict(values)
+      const v = {}
+      for key in values.keys() do
+        var vv = fn(key, values[key])
+        if vv != nil v[key] = vv end
+      end
+      return v
+    else
+      Runtime.panic("Can this value be mapped?: {} of type {}"%[values, Object.type(values)])
+    end
+  end
+end
+
 export func grid2D(width number, height number, initializer = 0)
   var grid = []
 
@@ -52,4 +74,11 @@ if __IS_MAIN__
   print(clamp(50,10,40))
   print(clamp(0,10,40))
   print(lerp(10,20,0.5))
+  grid->map(def(x) = x -> map(def(xx)=xx+24))->print
+  // map is kind-of a decorator
+  const c = @map
+  def (x)
+    return x + 24
+  end
+  print([24, 41,12]->c)
 end

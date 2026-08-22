@@ -1,0 +1,14 @@
+class Person
+    var name
+    func init(n)
+        self.name = n
+    end
+end
+
+var p = new Person("Alice")
+
+p.greet = def()
+    print("Hello, my name is " + self.name)
+end
+
+p.greet()
