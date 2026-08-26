@@ -1,10 +1,12 @@
-from .import helpers
+from typing import Any
+
 from .nodes import NovaError
 from .typechecker import BUILTIN_VAR_TYPES
 from .novaenv import Environment
 from .runtime import Interpreter
 from .conf import LIBS_PATH
 import importlib
+import pathlib
 impLib = importlib.import_module
 
 import sys
@@ -55,7 +57,7 @@ def init_globals(interpreter, globals_env):
         else:
             return ofWho[start:]
 
-    def shift(x: list):
+    def shift(x: list[Any]):
         v = x.pop(0)
         return v
 
@@ -188,10 +190,12 @@ def init_globals(interpreter, globals_env):
             return ord(s)
 
         @staticmethod
-        def toBytes(s, c=None):
-            if isinstance(s, str):
-                return bytes(s, c)
-            return bytes(s)
+        def toBytes(data, encoding:str|None=None):
+            if isinstance(data, str):
+                if not isinstance(encoding, str):
+                    raise ValueError("expected encoding to be string")
+                return bytes(data, encoding)
+            return bytes(data)
 
         @staticmethod
         def toByteArray(s, enc="utf8"):
@@ -239,18 +243,19 @@ def init_globals(interpreter, globals_env):
             return result
 
         # ── Try Nova first ──
-        nova_path = path if path.endswith(".nova") else path + ".nova"
+        nova_path = pathlib.Path(path if path.endswith(".nova") else path + ".nova")
 
         possible_locations = [
             nova_path,
-            os.path.join(os.path.dirname(interpreter.file), nova_path),
-            os.path.join(os.getcwd(), nova_path),
-            os.path.join(LIBS_PATH, nova_path),
+            pathlib.Path(interpreter.file).parent / nova_path,
+            pathlib.Path.cwd() / nova_path,
+            LIBS_PATH / nova_path
+
         ]
 
         file_path = None
         for candidate in possible_locations:
-            if os.path.isfile(candidate):
+            if candidate.is_file():
                 file_path = candidate
                 break
 
@@ -292,7 +297,7 @@ def init_globals(interpreter, globals_env):
             raise RuntimeError(
                 f"Cannot find module: {path}\n"
                 f"Tried Nova:\n  "
-                + "\n  ".join(possible_locations)
+                + "\n  ".join([str(x) for x in possible_locations])
                 + f"\nTried Python import: {py_path}\nError: {e}",
             )
 
@@ -332,45 +337,39 @@ def init_globals(interpreter, globals_env):
         showFunctionAst = False
 
 
+            # interpreter turns nova's objects into dicts when passing back to python, so this is safe
     class Fs:
         @staticmethod
-        def read(path, opts=None):
-            if not opts:
-                opts = opts = {"mode": "r", "encoding": "utf8"}
+        def read(path:str, opts:dict[str,Any]|None=None):
+            opts = opts or {"mode": "r", "encoding": "utf8"}
             with open(path, **opts) as f:
                 return f.read()
 
         @staticmethod
-        def open(path, opts=None):
-            if not opts:
-                opts = opts = {"mode": "r", "encoding": "utf8"}
-            return open(
-                path, **opts
-            )  # interpreter turns nova's objects into dicts when passing back to python, so this is safe
+        def open(path:str, opts:dict[str,Any]|None=None):
+            opts = opts or {"mode": "r", "encoding": "utf8"}
+            return open(path, **opts)
 
         @staticmethod
-        def write(path, contents, opts=None):
-            if not opts:
-                opts = opts = {"mode": "w", "encoding": "utf8"}
+        def write(path:str, contents, opts:dict[str,Any]|None=None):
+            opts = opts or {"mode": "w", "encoding": "utf8"}
             with open(path, **opts) as f:
                 f.write(contents)
+        @staticmethod
+        def exists(path:str):
+            return pathlib.Path(path).exists()
 
         @staticmethod
-        def join(*s):
-            return os.path.join(*s)
+        def isdir(path:str):
+            return pathlib.Path(path).is_dir()
 
         @staticmethod
-        def exists(path):
-            return os.path.exists(path)
+        def listdir(path:str="."):
+            return [p.name for p in pathlib.Path(path).iterdir()]
 
         @staticmethod
-        def listdir(path="."):
-            return os.listdir(path)
-
-        @staticmethod
-        def isdir(path):
-            return os.path.isdir(path)
-
+        def join(*parts):
+            return str(pathlib.Path(*parts))
     class Uri:
         @staticmethod
         def decode(s):
@@ -412,8 +411,6 @@ def init_globals(interpreter, globals_env):
                 return time.perf_counter_ns() / 1_000_000_000
             else:
                 raise ValueError(f"unknown {resolution = }")
-
-    Time.sleep = staticmethod(time.sleep)
 
     class Object:
         @staticmethod
@@ -460,7 +457,7 @@ def init_globals(interpreter, globals_env):
         def type(obj):
             return type(obj)
 
-    builtin_values = {
+    builtin_values: dict[str, object] = {
         name: obj
         for name, obj in vars(builtins).items()
         if isinstance(obj, type) and issubclass(obj, BaseException)

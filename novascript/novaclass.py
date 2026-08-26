@@ -1,5 +1,4 @@
 from typing import Any
-
 from .nodes import ReturnFlow, Token
 from .helpers import Proxy
 from .helpers import dprint
@@ -9,7 +8,7 @@ from .typechecker import check_type
 from .nodes import NovaError
 
 def bind_parameters(
-    parameters:list[Any], args:list[str], kwargs: dict[str, Any], interpreter: "Interpreter", env: Environment, context_name:str="function", token:Token|None=None
+    parameters:list[Any], args:tuple[str], kwargs: dict[str, Any], interpreter: "Interpreter", env: Environment, context_name:str="function", token:Token|None=None  # pyright: ignore[reportUndefinedVariable]
 ) -> dict[Any, Any]:
     """
     Common helper to bind positional + keyword + default + compact parameters.
@@ -97,7 +96,7 @@ class NovaClass:
         self._const_properties = set()  # instance const property names
         self.instance_properties = {}  # name -> PropertyDefinition AST
         self.instance_methods = {}  # name -> MethodDefinition AST
-        self.constructor_def = None
+        self.constructor_def: None|Token = None
 
         # Determine the top-most Python root, if any
         self._python_root = self._find_python_root()
@@ -146,7 +145,7 @@ class NovaClass:
     # ------------------------------------------------------------------
     def instantiate(self, args):
         if self._python_root is not None:
-            instance = self._python_root.__new__(self._python_root)
+            instance = self._python_root.__new__(self._python_root)  # pyright: ignore[reportCallIssue]
             setattr(instance, "__DefiningClass", self)
         else:
             instance = {}
@@ -311,9 +310,10 @@ class NovaClass:
                 if interpreter.current_class_stack:
                     interpreter.current_class_stack.pop()
 
-        bound_method.__DefiningClass = self  # store the class for access checks
+        # store the class for access checks
+        bound_method.__DefiningClass = self # pyright: ignore
         if method_def.is_private:
-            bound_method.__is_private__ = True
+            bound_method.__is_private__ = True # pyright: ignore
         return bound_method
 
     # ------------------------------------------------------------------

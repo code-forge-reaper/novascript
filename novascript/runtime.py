@@ -64,7 +64,7 @@ class Interpreter:
         self.current_env = None
 
         self.globals.define(
-            "__SCRIPT_PATH__", os.path.dirname(os.path.abspath(self.file))
+            "__SCRIPT_PATH__", pathlib.Path(self.file).parent
         )
         self.globals.define("__SCRIPT_NAME__", file_path)
         self.globals.define("__IS_MAIN__", True)
@@ -151,9 +151,9 @@ class Interpreter:
         )
         wrapper.__name__ = name if name is not None else str(uuid.uuid4())
         if node is not None:
-            wrapper.__nova_ast__ = node
+            wrapper.__nova_ast__ = node # pyright: ignore
         if captured_class is not None:
-            wrapper.__DefiningClass = captured_class
+            wrapper.__DefiningClass = captured_class # pyright: ignore
         return wrapper
 
     def _check_private_access(self, obj, name, expr):
@@ -312,7 +312,7 @@ class Interpreter:
             except Exception as e:
                 handled = False
                 if getattr(expression_val, "__exit__", None):
-                    handled = expression_val.__exit__(type(e), e, e.__traceback__)
+                    handled = expression_val.__exit__(type(e), e, e.__traceback__)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
                 elif isinstance(expression_val, dict) and "__exit__" in expression_val:
                     handled = expression_val["__exit__"](type(e), e, e.__traceback__)
 
@@ -320,7 +320,7 @@ class Interpreter:
                     raise
             else:
                 if getattr(expression_val, "__exit__", None):
-                    expression_val.__exit__(None, None, None)
+                    expression_val.__exit__(None, None, None)  # pyright: ignore[reportAttributeAccessIssue]
                 elif isinstance(expression_val, dict) and "__exit__" in expression_val:
                     expression_val["__exit__"](None, None, None)
 
