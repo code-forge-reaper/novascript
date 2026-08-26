@@ -331,8 +331,6 @@ def init_globals(interpreter, globals_env):
         # Toggle from Nova with:  Runtime.showFunctionAst = true
         showFunctionAst = False
 
-    
-    helpers._RUNTIME_REF = Runtime
 
     class Fs:
         @staticmethod

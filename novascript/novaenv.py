@@ -1,16 +1,16 @@
-
-from .helpers import _RUNTIME_REF
+from . import helpers
 from .typechecker import check_type
 from .nodes import NovaError
 
 class FuncWrapp:
     __name__:str = "FuncWrapp"
-    def __init__(self, func, desc_repr, desc_str, node, name=None):
+    def __init__(self, func, desc_repr, desc_str, node, interp, name=None):
         self.func = func
         self.desc_repr = desc_repr
         self.desc_str = desc_str
         self._name = name
         self._node = node
+        self.interp = interp
 
     def __call__(self, *args, **kw):
         return self.func(*args, **kw)
@@ -23,7 +23,7 @@ class FuncWrapp:
         return "lambda"
 
     def _want_ast(self):
-        rt = _RUNTIME_REF
+        rt = self.interp
         if rt is None:
             return False
         return bool(getattr(rt, "showFunctionAst", False))

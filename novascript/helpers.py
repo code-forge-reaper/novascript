@@ -41,12 +41,10 @@ class Proxy:
                 self.interpreter.current_class_stack.pop()
 
 
-def dprint(str: str, node: Token):
+def dprint(msg: str, node: Token):
     if os.environ.get("debugMode", "") == "Pretty":
-        pprint.pprint(" " * node.column + f"- {str} {node.to_dict()}")
+        pprint(" " * node.column + f"- {msg} {node.to_dict()}")
     elif os.environ.get("debugMode", "") == "Node":
-        pprint.pprint(" " * node.column + f"- {str} {node.to_json()}")
+        pprint(" " * node.column + f"- {msg} {node.to_json()}")
     elif os.environ.get("debugMode", "") == "Simple":
         print(" " * node.column + node.__str__())
-
-_RUNTIME_REF = None

@@ -1,8 +1,10 @@
-import os,sys
+from pathlib import Path
+import os
+import sys
 
-ROOT = os.path.dirname(os.path.realpath(__file__))
-LIBS_PATH = os.path.join(ROOT, "libs")
+ROOT = Path(__file__).resolve().parent.parent
+LIBS_PATH = ROOT / "libs"
 
-sys.path.insert(0, ROOT)
-sys.path.insert(0, LIBS_PATH)
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(LIBS_PATH))
 sys.path.insert(0, os.getcwd())

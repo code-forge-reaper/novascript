@@ -146,6 +146,7 @@ class Interpreter:
             (node.__repr__ if node else None),
             (node.__str__ if node else None),
             node,
+            self,
             name=display_name,
         )
         wrapper.__name__ = name if name is not None else str(uuid.uuid4())
