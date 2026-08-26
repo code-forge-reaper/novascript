@@ -3,8 +3,9 @@
 import argparse
 import sys
 
-from nodes import NovaError
-from novascript import Interpreter, init_globals
+from novascript.globals import init_globals
+from novascript.nodes import NovaError
+from novascript.runtime import Interpreter
 
 
 def main():

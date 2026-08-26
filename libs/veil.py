@@ -349,9 +349,11 @@ def main() -> None:
 
     # Apply transformations
     transformed = apply_rules(input_text, rules, args)
-
-    # Combine includes
-    full_code = "\n".join(python_includes) + "\n" + transformed
+    if len(python_includes):
+        # Combine includes
+        full_code = "\n".join(python_includes) + "\n" + transformed
+    else:
+        full_code = transformed
 
     # Format
     formatted = full_code
@@ -376,10 +378,6 @@ def main() -> None:
         print("🚫 Dry run – execution skipped")
         if args.print_code:
             print(formatted)
-        return
-
-    if args.print_code:
-        print(formatted)
         return
 
     # Execute (identical to original)
