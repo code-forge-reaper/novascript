@@ -375,7 +375,8 @@ def main() -> None:
         sys.exit(0)
 
     if args.dry_run:
-        print("🚫 Dry run – execution skipped")
+        if args.verbose:
+            print("🚫 Dry run – execution skipped")
         if args.print_code:
             print(formatted)
         return

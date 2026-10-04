@@ -1,5 +1,5 @@
 export func map(fn)
-  return def(values)
+  return func(values)
     if Is.array(values)
       const v = []
       for value in values do
@@ -74,10 +74,10 @@ if __IS_MAIN__
   print(clamp(50,10,40))
   print(clamp(0,10,40))
   print(lerp(10,20,0.5))
-  grid->map(def(x) = x -> map(def(xx)=xx+24))->print
+  grid->map(func(x) = x -> map(func(xx)=xx+24))->print
   // map is kind-of a decorator
   const c = @map
-  def (x)
+  func (x)
     return x + 24
   end
   print([24, 41,12]->c)

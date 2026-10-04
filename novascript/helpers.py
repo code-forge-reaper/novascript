@@ -1,9 +1,10 @@
-
 from pprint import pprint
 import os
 
 from .tokenizer import Token
 from .nodes import NovaError
+
+
 class Proxy:
     def __init__(self, set_func, get_func, instance, interpreter, cls):
         self._set = set_func
@@ -41,10 +42,17 @@ class Proxy:
                 self.interpreter.current_class_stack.pop()
 
 
+_DEBUG_MODE = os.environ.get("DEBUG", "")
+
+
 def dprint(msg: str, node: Token):
-    if os.environ.get("debugMode", "") == "Pretty":
+    if not _DEBUG_MODE:
+        return
+    if _DEBUG_MODE == "Dict":
         pprint(" " * node.column + f"- {msg} {node.to_dict()}")
-    elif os.environ.get("debugMode", "") == "Node":
+    elif _DEBUG_MODE == "Json":
         pprint(" " * node.column + f"- {msg} {node.to_json()}")
-    elif os.environ.get("debugMode", "") == "Simple":
+    elif _DEBUG_MODE == "Node":
         print(" " * node.column + node.__str__())
+    else:
+        raise ValueError("DEBUG must be 'Dict', 'Json' or 'Node'")

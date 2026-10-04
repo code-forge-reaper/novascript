@@ -7,7 +7,7 @@ end
 
 var p = new Person("Alice")
 
-p.greet = def()
+p.greet = func()
     print("Hello, my name is " + self.name)
 end
 

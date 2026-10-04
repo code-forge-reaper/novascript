@@ -1,10 +1,20 @@
 // novascript/libs/BoxBuilder
 // this is the most hacky lib i ever made
+//
+// extensible box drawing. everything the library does is a "handler":
+// a {compute, render} pair registered against a numeric type.
+// the four built-in Api_Handlers below are the same shape as any you add.
+// to extend, register a handler and push an instruction with its type:
+//
+//     bb = load("BoxBuilder")
+//     bb.Api_Handlers[42] = {
+//         compute: func(instr, ctx) ctx.local_max = math.max(ctx.local_max, instr.width) end,
+//         render:  func(instr, ctx) ctx.rendered_lines.append(bb.adjust(instr.line, ctx.max_width)) end
+//     }
+//     bb.newInstruction({type: 42, line: "hello"})
 
-// what i operate under: make it simple, and make it easy
-
-const mlib = load("helperlib") // mlib is simple math utils that python doesn't add to the math module
-const sys = load("py:sys")
+const mlib = load("helperlib")
+const sys  = load("py:sys")
 /*
 my entire reason for making this, is for a stupid bit in a web story i was writting,
 it was meant for like, one, maybe two scenes, that's it
@@ -12,166 +22,221 @@ it was meant for like, one, maybe two scenes, that's it
 Just gonna leave this in novascript's included lib so i can re-use it sometime later.
 */
 
-const PADDING = 4
 
-const ASCII = {
-    // Corners
-    TL: "┌",TR: "┐",
-    BL: "└",BR: "┘",
+// === extension registry ===
 
-    // Lines
+define Handler = {
+    compute: function,
+    render: function
+}
+
+// nova validates against `Handler` on assignment.
+// keys are ints; use InstrType.* or your own.
+export const Api_Handlers = {}
+
+// not an enum, so third-party types don't collide with ours
+const InstrType = {
+    Text: 0
+    Centered: 1
+    Newline: 2
+    Box: 3
+}
+export func GetApiHandler(type int)
+    var c Handler = Api_Handlers[type]
+    return c
+end
+export func RegisterHandler(type int, handler Handler)
+    Api_Handlers[type] = handler
+end
+
+// === primitives ===
+// Api_Handlers (built-in or otherwise) render into these.
+
+export const PADDING = 4
+
+export const ASCII = {
+    TL: "┌", TR: "┐",
+    BL: "└", BR: "┘",
     H:  "─",
     V:  "│",
-
-    // Junctions
-
             MT: "┬",
-    LT: "├",CR: "┼",RT: "┤",
+    LT: "├", CR: "┼", RT: "┤",
             MB: "┴"
 }
 
+export func Border(left, right, width)
+    return left + ASCII.H * (width - 2) + right
+end
+export func Center(text, width)
+    var remaining = width - #text
+    if remaining < 0 return text end
+    var left = math.floor(remaining / 2)
+    return " " * left + text + " " * (remaining - left)
+end
 
-export class BoxBuilder
-    var instructions = []  // List of dicts for ops
-    /*
-    This allows us to:
-    - Precompute the max_width by simulating all lines first.
-    - Apply transformations like centering during rendering, after knowing final widths.
-    - More flexibility for future features (e.g., right-align, colors if you extend to ANSI).
+export func adjust(s string, width)
+    return ASCII.V + " " + s.ljust(width) + " " + ASCII.V
+end
 
-    Instructions are stored as a list of dicts, like:
-    {type: "text", content: "foo"}
-    {type: "newline", sep: false}
-    {type: "centered", content: "bar"}
+export func flushLine(ctx)
+    ctx.rendered_lines.append(adjust(ctx.current_line, ctx.max_width))
+    ctx.current_line = ""
+end
 
-    In EndBox:
-    1. First pass: Simulate building lines to compute max_width.
-    2. Second pass: Build actual rendered lines with padding/centering.
-    */
-    var max_width = 0      // Computed in EndBox now
 
-    func AddText(content)
-        self.instructions.append({type: "text", content})
-        return self
+// === core ===
+// state is a plain dict. the stack is the only mutable global.
+export func newState()
+    return {instructions: [], max_width: 0}
+end
+export func compute_max_width()
+    var ctx = {current_line: "", local_max: 0}
+
+    for instr in topBox().instructions do
+        GetApiHandler(instr.type).compute(instr, ctx)
     end
 
-    func NewLine(sep = false)
-        self.instructions.append({type: "newline", sep})
-        return self
+    if ctx.current_line
+        ctx.local_max = math.max(ctx.local_max, #ctx.current_line)
+    end
+    return ctx.local_max
+end
+
+export func RenderBox()
+    var state = topBox()
+    state.max_width = math.max(compute_max_width(), 6)
+
+    var box_width = state.max_width + PADDING
+
+    var ctx = {
+        current_line: "",
+        rendered_lines: [Border(ASCII.TL, ASCII.TR, box_width)],
+        max_width: state.max_width,
+        sep_border: Border(ASCII.LT, ASCII.RT, box_width)
+    }
+
+    for instr in state.instructions do
+        GetApiHandler(instr.type).render(instr, ctx)
     end
 
-    func Sep() self.NewLine(true) return self end
-
-    func AddLine(text, sep = false)
-        self.AddText(text)
-        self.NewLine(sep)
-        return self
+    if ctx.current_line
+        flushLine(ctx)
     end
 
-    func AddCentered(content, sep = false)
-        self.instructions.append({type: "centered", content})
-        self.NewLine(sep)
-        return self
-    end
+    ctx.rendered_lines.append(Border(ASCII.BL, ASCII.BR, box_width))
 
-    func AddSpacer()
-        self.instructions.append({type: "newline", sep: false})
-        return self
-    end
+    var out = "\n".join(ctx.rendered_lines)
 
-    func Center(text, width)
-        var remaining = width - #text
-        if remaining < 0 return text end
-        var left = math.floor(remaining / 2)
-        var right = remaining - left
-        return " " * left + text + " " * right
-    end
+    state.instructions.clear()
+    state.max_width = 0
 
-    func _compute_max_width()
-        var current_line = ""
-        var local_max = 0
-        for instr in self.instructions do
-            if instr.type == "text" || instr.type == "centered"
-                current_line += instr.content
-            elseif instr.type == "box"
-                local_max = math.max(local_max, instr.width)
-            elseif instr.type == "newline"
-                local_max = math.max(local_max, #current_line)
-                current_line = ""
-            end
+    return out
+end
+
+
+// === stack ===
+
+const stack = []
+
+export func topBox() return stack[#stack - 1] end
+export func push(box) stack.append(box) end
+export func pop() stack.pop() end
+
+
+// === built-in Api_Handlers ===
+// these are the same shape as third-party extensions.
+
+Api_Handlers[InstrType.Text] = {
+    compute: func(instr, ctx)
+        ctx.current_line += instr.content
+    end,
+    render: func(instr, ctx)
+        ctx.current_line += instr.content
+    end
+}
+
+Api_Handlers[InstrType.Centered] = {
+    compute: func(instr, ctx)
+        ctx.current_line += instr.content
+    end,
+    render: func(instr, ctx)
+        ctx.current_line += Center(instr.content, ctx.max_width)
+    end
+}
+
+Api_Handlers[InstrType.Box] = {
+    compute: func(instr, ctx)
+        ctx.local_max = math.max(ctx.local_max, #ctx.current_line)
+        ctx.current_line = ""
+        ctx.local_max = math.max(ctx.local_max, instr.width)
+    end,
+    render: func(instr, ctx)
+        if ctx.current_line
+            flushLine(ctx)
         end
-        if current_line  // Last line if no final newline
-            local_max = math.max(local_max, #current_line)
+        for line in instr.lines do
+            ctx.rendered_lines.append(adjust(line, ctx.max_width))
         end
-        return local_max
     end
+}
 
-    func Border(left, right, width) return left + ASCII.H * (width - 2) + right end
-
-    func RenderBox()
-        self.max_width = math.max(self._compute_max_width(), 6)
-        var box_width = self.max_width + PADDING
-
-        var top_border = Border(ASCII.TL, ASCII.TR, box_width)
-        var bottom_border = Border(ASCII.BL, ASCII.BR, box_width)
-        var sep_border = Border(ASCII.LT, ASCII.RT, box_width)
-
-        var rendered_lines = [top_border]
-
-        var current_line = ""
-        for instr in self.instructions do
-            if instr.type == "text"
-                current_line += instr.content
-            elseif instr.type == "centered"
-                current_line += self.Center(instr.content, self.max_width)
-            elseif instr.type == "box"
-                if current_line
-                    rendered_lines.append(
-                        self.adjust(current_line)
-                    )
-                    current_line = ""
-                end
-
-                var rendered = instr.lines
-                for line in rendered do
-                    rendered_lines.append(self.adjust(line))
-                end
-            elseif instr.type == "newline"
-                if current_line
-                    rendered_lines.append(self.adjust(current_line))
-                    current_line = ""
-                else
-                    rendered_lines.append(self.adjust(""))
-                end
-                if instr.sep
-                    rendered_lines.append(sep_border)
-                end
-            end
+Api_Handlers[InstrType.Newline] = {
+    compute: func(instr, ctx)
+        ctx.local_max = math.max(ctx.local_max, #ctx.current_line)
+        ctx.current_line = ""
+    end,
+    render: func(instr, ctx)
+        flushLine(ctx)
+        if instr.sep
+            ctx.rendered_lines.append(ctx.sep_border)
         end
-
-        if current_line
-            rendered_lines.append(self.adjust(current_line))
-        end
-
-        rendered_lines.append(bottom_border)
-
-        var out = "\n".join(rendered_lines)
-
-        self.instructions.clear()
-        self.max_width = 0
-
-        return out
     end
-    func adjust(s string)
-        return ASCII.V+" " + s.ljust(self.max_width) + " "+ASCII.V
-    end
-    func EndBox(printTo = sys.stdout)
-        write(self.RenderBox(), printTo)
+}
+
+
+// === instruction API ===
+// sugar over `newInstruction`. each built-in handler gets a thin wrapper.
+
+export func newInstruction(inst)
+    topBox().instructions.append(inst)
+end
+
+export func AddText(content)
+    newInstruction({type: InstrType.Text, content})
+end
+
+export func AddCentered(content, sep = false)
+    newInstruction({type: InstrType.Centered, content})
+    NewLine(sep)
+end
+
+export func NewLine(sep = false)
+    newInstruction({type: InstrType.Newline, sep})
+end
+
+export func Sep() NewLine(true) end
+
+export func AddLine(text, sep = false)
+    AddText(text)
+    NewLine(sep)
+end
+
+export func AddSpacer()
+    NewLine(false)
+end
+
+export func AddMultiline(text)
+    for line in text.split("\n") do
+        AddLine(line)
     end
 end
 
-const _box = new BoxBuilder()
-using _box
+export func EndBox(printTo = sys.stdout)
+    write(RenderBox(), printTo)
+end
+
+
+// === standalone helpers ===
 
 export func Bar(current, max, maxWidth=0, display="#", empty="*")
     if maxWidth == 0
@@ -179,16 +244,8 @@ export func Bar(current, max, maxWidth=0, display="#", empty="*")
         return display * current + empty * (max - current)
     else
         current = mlib.clamp(current, 0, max)
-
         var filled = math.floor((current / max) * maxWidth)
-
         return display * filled + empty * (maxWidth - filled)
-    end
-end
-
-export func AddMultiline(text)
-    for line in text.split("\n") do
-        AddLine(line)
     end
 end
 
@@ -199,53 +256,49 @@ end
 export func Indent(text, spaces = 2)
     var pad = " " * spaces
     var out = []
-
     for line in text.split("\n") do
         out.append(pad + line)
     end
-
     return "\n".join(out)
 end
 
+
+// === composite builders ===
+
 export func Box(items, prepend = "")
-    var inner = new BoxBuilder()
+    var inner = newState()
+    push(inner)
+    defer pop() end
+
     for item in items do
         if Is.string(item) && Has.inside(item, "\n")
             for line in item.split("\n") do
-                inner.AddLine(prepend + line)
+                AddLine(prepend + line)
             end
         elseif Is.dict(item) && item.type
-            inner.instructions.append(item)
+            newInstruction(item)
         else
-            inner.AddLine(prepend + Convert.toStr(item))
+            AddLine(prepend + Convert.toStr(item))
         end
     end
-    // Render the inner box completely and capture its output
-    var rendered = inner.RenderBox()
+
+    var rendered = RenderBox()
     var lines = rendered.split("\n")
     var max_width = 0
     for line in lines do
         max_width = math.max(max_width, #line)
     end
+
     return {
-        type: 'box',
+        type: InstrType.Box,
         lines: lines,
-        width: max_width   // full width including borders and internal padding
+        width: max_width
     }
 end
 
-// instructions is visible(scopping stuff)
-// if your function just needs to do one thing, i recomend you do this
-export func BoxStr(items, prepend="") = instructions.append(Box(items, prepend))
-// same as
-/*
-func BoxStr(items, prepend="") return instructions.append(Box(items, prepend)) end
-
-but looks better
-*/
+export func BoxStr(items, prepend="") = topBox().instructions.append(Box(items, prepend))
 
 export func Table(props)
-    // Step 1: collect column names and compute widths
     var col_names = []
     var col_widths = []
     var max_rows = 0
@@ -261,11 +314,10 @@ export func Table(props)
         max_rows = math.max(max_rows, #rows)
     end
 
-    // Helper to build a border line (returns a string)
     func border_line(left, mid, right)
         var line = left
         for i = 0, #col_names - 1 do
-            line += ASCII.H * (col_widths[i] + 2)   // +2 for padding spaces
+            line += ASCII.H * (col_widths[i] + 2)
             if i < #col_names - 1
                 line += mid
             end
@@ -275,43 +327,36 @@ export func Table(props)
     end
 
     var out = ""
-
-    // Top border
     out += border_line(ASCII.TL, ASCII.MT, ASCII.TR) + "\n"
 
-    // Header row
     var header = ASCII.V
     for i = 0, #col_names - 1 do
-        var name = col_names[i]
-        var w = col_widths[i]
-        header += " " + name.ljust(w) + " " + ASCII.V
+        header += " " + col_names[i].ljust(col_widths[i]) + " " + ASCII.V
     end
     out += header + "\n"
-
-    // Separator
     out += border_line(ASCII.LT, ASCII.CR, ASCII.RT) + "\n"
 
-    // Data rows
     for r = 0, max_rows - 1 do
         var row = ASCII.V
         for i = 0, #col_names - 1 do
             var rows = props[col_names[i]]
             var cell = ""
             if r < #rows cell = rows[r] end
-
-            var w = col_widths[i]
-            row += " " + cell.ljust(w) + " " + ASCII.V
+            row += " " + cell.ljust(col_widths[i]) + " " + ASCII.V
         end
         out += row + "\n"
     end
 
-    // Bottom border
     out += border_line(ASCII.BL, ASCII.MB, ASCII.BR)
 
     return out
 end
 
+
+// === self-test ===
+
 if __IS_MAIN__
+    push(newState())
     AddText("Status")
     Sep()
     AddLine("hello, world", true)
@@ -327,8 +372,4 @@ if __IS_MAIN__
         ideas: ["another", "double pass", "system"]
     }) -> AddMultiline
     EndBox()
-else
-    for name in _box do
-        if Is.callable(Object.get(_box, name)) exports[name] = _box[name] end
-    end
 end

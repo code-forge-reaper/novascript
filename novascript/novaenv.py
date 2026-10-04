@@ -2,8 +2,10 @@ from . import helpers
 from .typechecker import check_type
 from .nodes import NovaError
 
+
 class FuncWrapp:
-    __name__:str = "FuncWrapp"
+    __name__: str = "FuncWrapp"
+
     def __init__(self, func, desc_repr, desc_str, node, interp, name=None):
         self.func = func
         self.desc_repr = desc_repr
@@ -98,7 +100,7 @@ class Environment:
 
     def define(self, name: str, value, const=False, typeAnnotation=None):
         if self.locked:
-            raise NovaError(None, "Cannot define variable in locked environment")
+            raise ValueError("Cannot define variable in locked environment")
         self.values[name] = Var(name, value, const, typeAnnotation)
 
     def has(self, name: str):
@@ -152,4 +154,3 @@ class Environment:
             if k not in ["true", "false"]:
                 v[k] = vv
         return str(v)
-

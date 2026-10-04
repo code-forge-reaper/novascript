@@ -68,12 +68,12 @@ class Win inherits QMainWindow
   
   func _setupConnections()
     // Update URL bar when navigation changes
-    $webView.urlChanged.connect(def(qUrl)
+    $webView.urlChanged.connect(func(qUrl)
       $urlInput.setText(qUrl.toString())
     end)
     
     // Navigate when Enter is pressed in the URL bar
-    $urlInput.returnPressed.connect(def()
+    $urlInput.returnPressed.connect(func()
       var url = $urlInput.text()
       if !url.startswith("http") && !url.startswith("https")
         url = 'https://' + url

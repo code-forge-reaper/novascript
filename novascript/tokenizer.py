@@ -1,8 +1,8 @@
-
 from .typechecker import BUILTIN_VAR_TYPES_INFER
 from .typechecker import CUSTOM_TYPES
 from .typechecker import BUILTIN_VAR_TYPES
 from .nodes import *
+
 
 class Tokenizer:
     keywords = [
@@ -33,7 +33,6 @@ class Tokenizer:
         "strict",
         "default",
         "using",
-        "def",
         "define",
         "enum",
         "assert",
@@ -203,21 +202,13 @@ class Tokenizer:
                 if i + 1 < length and source[i] == "0":
                     prefix = source[i + 1].lower()
 
-                    if prefix in ("x", "u", "b"):
+                    if prefix in ("x", "b"):
                         i += 2
                         col += 2
 
-                        if prefix in ("x", "u"):
+                        if prefix == "x":
                             value = read_digits("0123456789abcdefABCDEF", 16)
-
-                            if prefix == "x":
-                                tokens.append(
-                                    Token("number", value, file, line, start_col)
-                                )
-                            else:
-                                tokens.append(
-                                    Token("string", chr(value), file, line, start_col)
-                                )
+                            tokens.append(Token("number", value, file, line, start_col))
 
                         elif prefix == "b":
                             bits = ""
@@ -268,8 +259,21 @@ class Tokenizer:
                         Token("number", int(int_part, 10), file, line, start_col)
                     )
                 continue
-            if char in ['"', "'", "`"]:
+            # Module-level constants (hoisted out of the lexer loop)
+            string_quotes = ('"', "'", "`")
+            octal_digits = "01234567"
+
+            string_escapes = {
+                "n": "\n",
+                "t": "\t",
+                "r": "\r",
+                "\\": "\\",
+                '"': '"',
+                "'": "'",
+            }
+            if char in string_quotes:
                 quote = char
+                is_raw = quote == "`"
                 i += 1
                 value = []
 
@@ -289,53 +293,48 @@ class Tokenizer:
 
                         esc = source[i]
 
-                        # Check for octal escape (digit 0-7)
-                        if source[i] in "01234567":
-                            # Read up to 3 octal digits
-                            oct_digits = []
-                            for _ in range(3):
-                                if i < length and source[i] in "01234567":
-                                    oct_digits.append(source[i])
-                                    i += 1
-                                else:
-                                    break
-                            octal_str = "".join(oct_digits)
-                            value.append(chr(int(octal_str, 8)))
-                            # Continue the outer loop – do not increment i again here
-                            continue  # skip the final i+=1 of the loop
-
-                        escapes = {
-                            "n": "\n",
-                            "t": "\t",
-                            "r": "\r",
-                            "\\": "\\",
-                            '"': '"',
-                            "'": "'",
-                        }
-                        if quote != "`":
-                            if esc not in escapes:
-                                raise NovaError(
-                                    Token(
-                                        "error",
-                                        "Invalid escape sequence",
-                                        file,
-                                        line,
-                                        col,
-                                    ),
-                                    f"Invalid escape sequence \\{esc}",
-                                )
-                            value.append(escapes[esc])
+                        if is_raw:
+                            # Raw string: keep the backslash and the escaped char verbatim.
+                            value.append("\\")
+                            value.append(esc)
+                        elif esc in octal_digits:
+                            # Octal escape: \o, \oo, or \ooo
+                            start = i
+                            while (
+                                i < length
+                                and i - start < 3
+                                and source[i] in octal_digits
+                            ):
+                                i += 1
+                            value.append(chr(int(source[start:i], 8)))
+                            col += i - start
+                            continue
+                        elif esc in string_escapes:
+                            value.append(string_escapes[esc])
                         else:
-                            value.append("\\" + esc)
-                    else:
-                        value.append(c)
+                            raise NovaError(
+                                Token(
+                                    "error", "Invalid escape sequence", file, line, col
+                                ),
+                                f"Invalid escape sequence \\{esc}",
+                            )
+
+                        # We consumed one extra source character (the escaped one).
+                        if esc == "\n":
+                            line += 1
+                            col = 1
+                        else:
+                            col += 2
+                        i += 1
+                        continue
+
+                    value.append(c)
 
                     if c == "\n":
                         line += 1
                         col = 1
                     else:
                         col += 1
-
                     i += 1
 
                 if i >= length or source[i] != quote:
@@ -346,16 +345,8 @@ class Tokenizer:
 
                 i += 1
                 col += 1
-                if quote == "`":
-                    tokens.append(
-                        Token("string", "".join(value), file, line, start_col)
-                    )
-                else:
-                    tokens.append(
-                        Token("string", r"".join(value), file, line, start_col)
-                    )
+                tokens.append(Token("string", "".join(value), file, line, start_col))
                 continue
-
             # Identifiers, keywords, booleans.
             if char.isalpha() or char == "_":
                 id_str = ""
@@ -396,6 +387,9 @@ class Tokenizer:
             )
         return token
 
+    def peek(self, n=1):
+        return self.tokens[self.current + n]
+
     def expect_token(self, value):
         token = self.get_next_token()
         if not token:
@@ -405,9 +399,16 @@ class Tokenizer:
                 else Token("EOF", "EOF", self.file, 1, 1)
             )
             raise NovaError(last_token, f"Expected token '{value}', got EOF")
-        if token.value != value:
+        # Must be an operator (or keyword) with exact value; never match
+        # a string/number/identifier that happens to have the same .value
+        if token.type not in ("operator", "keyword") or token.value != value:
             raise NovaError(token, f"Expected token '{value}', got {token.value}")
         return token
+
+    def is_token(self, value, types=("operator",)):
+        """True if next token has the given value and is one of the allowed types."""
+        token = self.get_next_token()
+        return token is not None and token.type in types and token.value == value
 
     def _consume_array_brackets(self, base_type: str) -> str:
         """After consuming a type identifier, eat any trailing [] pairs.
@@ -417,8 +418,10 @@ class Tokenizer:
         result = base_type
         while (
             self.current < len(self.tokens)
+            and self.tokens[self.current].type == "operator"
             and self.tokens[self.current].value == "["
             and self.current + 1 < len(self.tokens)
+            and self.tokens[self.current + 1].type == "operator"
             and self.tokens[self.current + 1].value == "]"
         ):
             self.consume_token()  # [
@@ -435,7 +438,7 @@ class Tokenizer:
           - <expr>                 → normal positional argument
         """
         args = []
-        if self.get_next_token() and self.get_next_token().value != ")":
+        if self.get_next_token() and not self.is_token(")"):
             while True:
                 nt = self.get_next_token()
                 if (
@@ -470,101 +473,11 @@ class Tokenizer:
                 else:
                     args.append(self.parse_expression())
 
-                if self.get_next_token() and self.get_next_token().value == ",":
+                if self.is_token(","):
                     self.consume_token()
                 else:
                     break
         return args
-
-    def build_fn(self, token):
-        self.consume_token()
-        func_name_token = self.expect_type("identifier")
-        func_name = func_name_token.value
-        self.consume_token()
-        self.expect_token("(")
-        self.consume_token()
-
-        func_parameters = []
-        if self.get_next_token() and self.get_next_token().value != ")":
-            while True:
-                is_compact = False
-                if self.get_next_token() and self.get_next_token().value == "compact":
-                    self.consume_token()  # consume 'compact'
-                    is_compact = True
-
-                param_token = self.expect_type("identifier")
-                param_name = param_token.value
-                self.consume_token()
-                annotation_type = None
-                if self.get_next_token() and self.get_next_token().type == "identifier":
-                    if is_compact:
-                        raise NovaError(token, "'compact' does not support this")
-                    type_token = self.get_next_token()
-                    if (
-                        type_token.value in BUILTIN_VAR_TYPES
-                        or type_token.value in CUSTOM_TYPES
-                    ):
-                        annotation_type = type_token.value
-                        self.consume_token()
-                        annotation_type = self._consume_array_brackets(annotation_type)
-
-                default_expr = None
-                if self.get_next_token() and self.get_next_token().value == "=":
-                    if is_compact:
-                        raise NovaError(token, "'compact' does not support this")
-                    self.consume_token()
-                    default_expr = self.parse_expression()
-                    if annotation_type:
-                        raise NovaError(
-                            token,
-                            "Cannot have both explicit type annotation and a default value. Consider removing the type annotation to allow type inference from the default value.",
-                        )
-
-                    if default_expr.type == "Literal":
-                        inferred_type = type(default_expr.value).__name__
-                        annotation_type = BUILTIN_VAR_TYPES_INFER.get(
-                            inferred_type, None
-                        )
-                    else:
-                        annotation_type = None
-
-                func_parameters.append(
-                    Parameter(
-                        param_name,
-                        annotation_type,
-                        default_expr,
-                        is_compact,
-                        param_token.file,
-                        param_token.line,
-                        param_token.column,
-                        param_token.type,
-                        param_token.value,
-                    )
-                )
-
-                if self.get_next_token() and self.get_next_token().value == ",":
-                    self.consume_token()
-                else:
-                    break
-
-        self.expect_token(")")
-        self.consume_token()
-        if self.get_next_token().value == "=":
-            t = self.consume_token()
-            func_body = [ReturnStmt(self.parse_expression(), t.file, t.line, t.column)]
-        else:
-            func_body = self.parse_block_until(["end"])
-            self.expect_token("end")
-            self.consume_token()
-
-        return FuncDecl(
-            func_name,
-            func_parameters,
-            func_body,
-            token.file,
-            token.line,
-            token.column,
-        )
 
     # --- Parsing Helpers ---
     def parse_block_until(self, terminators=None):
@@ -1281,7 +1194,7 @@ class Tokenizer:
                     # It must either be a non-keyword, or be one of the keywords that can begin an expression.
                     if not (
                         next_token.type == "keyword"
-                        and next_token.value not in ("new", "def", "enum")
+                        and next_token.value not in ("new", "func", "enum")
                     ):
                         return_expression = self.parse_expression()
                 return ReturnStmt(
@@ -1511,7 +1424,7 @@ class Tokenizer:
                 self.consume_token()  # consume identifier
 
                 # Check for method call
-                if self.get_next_token() and self.get_next_token().value == "(":
+                if self.is_token("("):
                     self.consume_token()  # consume "("
                     args = self.parse_argument_list()
                     self.expect_token(")")
@@ -1545,7 +1458,11 @@ class Tokenizer:
                     bracket_token.line,
                     bracket_token.column,
                 )
-            elif next_token.value == "(" and isinstance(expr, Identifier):
+            elif (
+                next_token.type == "operator"
+                and next_token.value == "("
+                and isinstance(expr, Identifier)
+            ):
                 # This handles direct function calls like `myFunc(arg)`
                 self.consume_token()  # consume "("
                 args = self.parse_argument_list()
@@ -1556,14 +1473,11 @@ class Tokenizer:
                 break  # No more chained access/calls
         return expr
 
-    def parse_def(self):
-        self.expect_token("def")
-        token = self.consume_token()
-        self.expect_token("(")
-        self.consume_token()
-
-        parameters = []
-        if self.get_next_token() and self.get_next_token().value != ")":
+    def _parse_parameters(self, token):
+        """Parse a comma-separated parameter list. Assumes '(' already consumed;
+        leaves cursor on the closing ')'. Shared by build_fn and parse_def."""
+        func_parameters = []
+        if self.get_next_token() and not self.is_token(")"):
             while True:
                 is_compact = False
                 if self.get_next_token() and self.get_next_token().value == "compact":
@@ -1587,7 +1501,7 @@ class Tokenizer:
                         annotation_type = self._consume_array_brackets(annotation_type)
 
                 default_expr = None
-                if self.get_next_token() and self.get_next_token().value == "=":
+                if self.is_token("="):
                     if is_compact:
                         raise NovaError(token, "'compact' does not support this")
                     self.consume_token()
@@ -1606,7 +1520,7 @@ class Tokenizer:
                     else:
                         annotation_type = None
 
-                parameters.append(
+                func_parameters.append(
                     Parameter(
                         param_name,
                         annotation_type,
@@ -1620,20 +1534,67 @@ class Tokenizer:
                     )
                 )
 
-                if self.get_next_token() and self.get_next_token().value == ",":
+                if self.is_token(","):
                     self.consume_token()
                 else:
                     break
+        return func_parameters
+
+    def _parse_function_body(self):
+        """Parse the body of a function/lambda after the closing ')' has been
+        consumed. Handles both single-expression (=) and block forms."""
+        if self.get_next_token().value == "=":
+            t = self.consume_token()
+            return [ReturnStmt(self.parse_expression(), t.file, t.line, t.column)]
+
+        body = self.parse_block_until(["end"])
+        self.expect_token("end")
+        self.consume_token()
+        return body
+
+    def build_fn(self, token):
+        if (
+            self.current + 1 < len(self.tokens)
+            and self.tokens[self.current + 1].type == "operator"
+            and self.tokens[self.current + 1].value == "("
+        ):
+            return self.parse_def()
+
+        self.consume_token()
+        func_name_token = self.expect_type("identifier")
+        func_name = func_name_token.value
+        self.consume_token()
+        self.expect_token("(")
+        self.consume_token()
+
+        func_parameters = self._parse_parameters(token)
 
         self.expect_token(")")
         self.consume_token()
-        if self.get_next_token().value == "=":
-            t = self.consume_token()
-            body = [ReturnStmt(self.parse_expression(), t.file, t.line, t.column)]
-        else:
-            body = self.parse_block_until(["end"])
-            self.expect_token("end")
-            self.consume_token()
+
+        func_body = self._parse_function_body()
+
+        return FuncDecl(
+            func_name,
+            func_parameters,
+            func_body,
+            token.file,
+            token.line,
+            token.column,
+        )
+
+    def parse_def(self):
+        self.expect_token("func")
+        token = self.consume_token()
+        self.expect_token("(")
+        self.consume_token()
+
+        parameters = self._parse_parameters(token)
+
+        self.expect_token(")")
+        self.consume_token()
+
+        body = self._parse_function_body()
 
         return LambdaDecl(parameters, body, token.file, token.line, token.column)
 
@@ -1655,10 +1616,10 @@ class Tokenizer:
         elif token.value == "[":
             self.consume_token()
             elements = []
-            if self.get_next_token() and self.get_next_token().value != "]":
+            if self.get_next_token() and not self.is_token("]"):
                 while True:
                     elements.append(self.parse_expression())
-                    if self.get_next_token() and self.get_next_token().value == ",":
+                    if self.is_token(","):
                         self.consume_token()
                     else:
                         break
@@ -1668,8 +1629,8 @@ class Tokenizer:
         elif token.value == "{":
             self.consume_token()
             properties = []
-            while self.get_next_token() and self.get_next_token().value != "}":
-                if self.get_next_token().value == "}":
+            while self.get_next_token() and not self.is_token("}"):
+                if self.is_token("}"):
                     self.consume_token()
                     break
                 key_token = self.get_next_token()
@@ -1702,7 +1663,7 @@ class Tokenizer:
                     self.consume_token()
                     value = self.parse_expression()
                     properties.append({"key": key, "value": value})
-                if self.get_next_token() and self.get_next_token().value == ",":
+                if self.is_token(","):
                     self.consume_token()
             self.expect_token("}")
             self.consume_token()
@@ -1715,7 +1676,7 @@ class Tokenizer:
             self.expect_token("{")
             self.consume_token()
             values = []
-            while self.get_next_token() and self.get_next_token().value != "}":
+            while self.get_next_token() and not self.is_token("}"):
                 v = self.expect_type("identifier").value
                 if v in values:
                     raise NovaError(token, "Enum values must be unique.")
@@ -1753,10 +1714,10 @@ class Tokenizer:
             self.consume_token()
 
             args = []
-            if self.get_next_token() and self.get_next_token().value != ")":
+            if self.get_next_token() and not self.is_token(")"):
                 while True:
                     args.append(self.parse_expression())
-                    if self.get_next_token() and self.get_next_token().value == ",":
+                    if self.is_token(","):
                         self.consume_token()
                     else:
                         break
@@ -1791,7 +1752,7 @@ class Tokenizer:
             )
 
             # If followed by '(', it's a method call directly on self
-            if self.get_next_token() and self.get_next_token().value == "(":
+            if self.is_token("("):
                 self.consume_token()  # consume '('
                 args = self.parse_argument_list()
                 self.expect_token(")")
@@ -1814,7 +1775,7 @@ class Tokenizer:
                     identifier_token.line,
                     identifier_token.column,
                 )
-        elif token.value == "def":  # Lambda expression (def (...) ... end)
+        elif token.value == "func":  # Lambda expression (def (...) ... end)
             return self.parse_def()
 
         elif token.value == "(":
@@ -1822,8 +1783,9 @@ class Tokenizer:
             node = self.parse_expression()
             self.expect_token(")")
             self.consume_token()
+        elif token.value == "compact":
+            raise NovaError(token, "cannot use 'compact' here, did you mean 'unpack'?")
         else:
             raise NovaError(token, f"Unexpected token: {token.value}")
 
         return node
-

@@ -23,7 +23,7 @@ record p
   end
 end
 
-@mainloop def(dt)
+@mainloop func(dt)
   if isKeyPressed(KEY_ESC) quit() end
   p.move(dt)
   clearBackground("black")

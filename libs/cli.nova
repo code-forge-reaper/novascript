@@ -3,26 +3,52 @@
 // instead of going [local -> "<NS>/libs/" -> python fallback]
 
 const sys = load("py:sys")
+const re = load("py:re")
 
 export const ESC = "\033"
 
 // cursed object literals :)
 export const cursor = {
-  up: def (n=1)      = sys.stdout.write(ESC + "[{}A".format(n))
-  down: def (n=1)    = sys.stdout.write(ESC + "[{}B".format(n))
-  forward: def (n=1) = sys.stdout.write(ESC + "[{}C".format(n))
-  back: def (n=1)    = sys.stdout.write(ESC + "[{}D".format(n))
-  home: def ()       = sys.stdout.write(ESC + "[H")
-  save: def ()       = sys.stdout.write(ESC + "[s")
-  restore: def ()    = sys.stdout.write(ESC + "[u")
-  hide: def ()       = sys.stdout.write(ESC + "[?25l")
-  show: def ()       = sys.stdout.write(ESC + "[?25h")
+  up: func (n=1)      = sys.stdout.write(ESC + "[{}A".format(n))
+  down: func (n=1)    = sys.stdout.write(ESC + "[{}B".format(n))
+  forward: func (n=1) = sys.stdout.write(ESC + "[{}C".format(n))
+  back: func (n=1)    = sys.stdout.write(ESC + "[{}D".format(n))
+  home: func ()       = sys.stdout.write(ESC + "[H")
+  save: func ()       = sys.stdout.write(ESC + "[s")
+  restore: func ()    = sys.stdout.write(ESC + "[u")
+  hide: func ()       = sys.stdout.write(ESC + "[?25l")
+  show: func ()       = sys.stdout.write(ESC + "[?25h")
   // Move cursor to specific row, col (1‑based)
-  goto : def(row, col)      = sys.stdout.write(ESC + "[{};{}H".format(row, col))
+  goto : func(row, col)      = sys.stdout.write(ESC + "[{};{}H".format(row, col))
 }
 
 export const clear = {
-  line: def()        = sys.stdout.write(ESC + "[2K")
-  screen: def()      = sys.stdout.write(ESC + "[2J")
-  to_end: def()      = sys.stdout.write(ESC + "[J")
+  line: func()        = sys.stdout.write(ESC + "[2K")
+  screen: func()      = sys.stdout.write(ESC + "[2J")
+  to_end: func()      = sys.stdout.write(ESC + "[J")
 }
+
+export const colorPattern = re.compile(`\[(.*)\](.*)\[\/\1\]`, flags:re.DOTALL)
+export func rgb(r int, g int, b int)
+  return "{}[38;2;{};{};{}m" %[
+    ESC, r, g, b
+  ]
+end
+
+export const replacements = {
+  red: rgb(255,0,0)
+  green: rgb(0,255,0)
+  blue: rgb(0,0,255)
+  reset: '{}[0m'%[ESC]
+}
+
+// this only works for front-ground
+export func color(txt)
+  var t = colorPattern.subn(func(x)
+    var v = replacements[x.group(1)]
+    if Is.callable(v) v = v(x.group(2))
+    else v = v+x.group(2)+replacements.reset end
+    return v
+  end,txt)
+  if t[1] == 0 return t[0] else return color(t[0]) end
+end

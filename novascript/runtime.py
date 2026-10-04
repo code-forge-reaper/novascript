@@ -63,9 +63,7 @@ class Interpreter:
         self.modules_loaded = {}
         self.current_env = None
 
-        self.globals.define(
-            "__SCRIPT_PATH__", pathlib.Path(self.file).parent
-        )
+        self.globals.define("__SCRIPT_PATH__", self.file.parent)
         self.globals.define("__SCRIPT_NAME__", file_path)
         self.globals.define("__IS_MAIN__", True)
         self.current_class_stack = []
@@ -151,9 +149,9 @@ class Interpreter:
         )
         wrapper.__name__ = name if name is not None else str(uuid.uuid4())
         if node is not None:
-            wrapper.__nova_ast__ = node # pyright: ignore
+            wrapper.__nova_ast__ = node  # pyright: ignore
         if captured_class is not None:
-            wrapper.__DefiningClass = captured_class # pyright: ignore
+            wrapper.__DefiningClass = captured_class  # pyright: ignore
         return wrapper
 
     def _check_private_access(self, obj, name, expr):
@@ -174,15 +172,16 @@ class Interpreter:
         statements = self.tk.parse_block()
         try:
             self.execute_block(statements, self.globals)
-        except Exception as err:
+        except BaseException as err:
             # Ensure deferred statements still execute
             self.globals.execute_deferred(self)
-            print("\n".join(reversed(self.errorStack)))
+            if self.errorStack:
+                print("\n".join(reversed(self.errorStack)), file=sys.stderr)
             if isinstance(err, NovaError):
                 print(f"{err.message}", file=sys.stderr)
             else:
                 print(
-                    f"{err.__class__.__name__}:{err}"
+                    f"{err.__class__.__name__}: {err}"
                 )  # trying to print the name and what caused it
             exit(1)
 
@@ -305,14 +304,17 @@ class Interpreter:
                 var = expression_val
 
             nenv.define(stmt.alias, var)
+            returnedVal = None
             try:
                 result = self.execute_block(stmt.body, nenv)
                 if isinstance(result, ControlFlow):
-                    return result
+                    returnedVal = result
             except Exception as e:
                 handled = False
                 if getattr(expression_val, "__exit__", None):
-                    handled = expression_val.__exit__(type(e), e, e.__traceback__)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+                    handled = expression_val.__exit__(
+                        type(e), e, e.__traceback__
+                    )  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
                 elif isinstance(expression_val, dict) and "__exit__" in expression_val:
                     handled = expression_val["__exit__"](type(e), e, e.__traceback__)
 
@@ -320,9 +322,12 @@ class Interpreter:
                     raise
             else:
                 if getattr(expression_val, "__exit__", None):
-                    expression_val.__exit__(None, None, None)  # pyright: ignore[reportAttributeAccessIssue]
+                    expression_val.__exit__(
+                        None, None, None
+                    )  # pyright: ignore[reportAttributeAccessIssue]
                 elif isinstance(expression_val, dict) and "__exit__" in expression_val:
                     expression_val["__exit__"](None, None, None)
+            return returnedVal
 
         elif stmt.type == "IfStmt":
             condition = self.evaluate_expr(stmt.condition, env)
@@ -1028,7 +1033,9 @@ class Interpreter:
                     else:
                         raise NovaError(
                             expr,
-                            "'%' formatting is only available when right side is an array or object",
+                            "'%' formatting requires a list or object on the right, got {}".format(
+                                type(right).__name__
+                            ),
                         )
                     return left
                 return left % right

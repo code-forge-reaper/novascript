@@ -6,7 +6,10 @@ from .novaenv import Environment
 from .runtime import Interpreter
 from .conf import LIBS_PATH
 import importlib
+import importlib.util
 import pathlib
+import sys
+
 impLib = importlib.import_module
 
 import sys
@@ -19,6 +22,7 @@ from urllib.parse import unquote, quote
 import struct, builtins
 
 from collections.abc import Iterable
+
 
 def _format(obj):
     # Custom string overload
@@ -190,7 +194,7 @@ def init_globals(interpreter, globals_env):
             return ord(s)
 
         @staticmethod
-        def toBytes(data, encoding:str|None=None):
+        def toBytes(data, encoding: str | None = None):
             if isinstance(data, str):
                 if not isinstance(encoding, str):
                     raise ValueError("expected encoding to be string")
@@ -230,76 +234,111 @@ def init_globals(interpreter, globals_env):
     mmath["min"] = min
 
     def load(path: str, env=None):  # const <modname> = load("modname")
-        if not env:
-            env = {}
+        env = env or {}
+        ignore_cache = "ignore loaded module" in env
+
         # ── FORCE Python import ──
         if path.startswith("py:"):
-            py_path = path[3:].replace("/", ".")
-            if py_path in interpreter.modules_loaded:
-                return interpreter.modules_loaded[py_path]
-
-            result = impLib(py_path)
-            interpreter.modules_loaded[py_path] = result
-            return result
+            return _load_python(path[3:].replace("/", "."))
 
         # ── Try Nova first ──
-        nova_path = pathlib.Path(path if path.endswith(".nova") else path + ".nova")
+        # Keep `raw` *relative* here; resolve only after joining to a root.
+        raw = pathlib.Path(path if path.endswith(".nova") else path + ".nova")
+        interp_dir = pathlib.Path(interpreter.file).resolve().parent
 
-        possible_locations = [
-            nova_path,
-            pathlib.Path(interpreter.file).parent / nova_path,
-            pathlib.Path.cwd() / nova_path,
-            LIBS_PATH / nova_path
-
+        candidates = [
+            raw,  # as-given (resolved against CWD)
+            interp_dir / raw,  # sibling of the currently-executing file
+            pathlib.Path.cwd() / raw,
+            LIBS_PATH / raw,
         ]
 
-        file_path = None
-        for candidate in possible_locations:
-            if candidate.is_file():
-                file_path = candidate
-                break
+        # Resolve + dedupe, preserving order
+        possible_locations = []
+        seen = set()
+        for c in candidates:
+            r = c.resolve()
+            if r not in seen:
+                seen.add(r)
+                possible_locations.append(r)
+
+        file_path = next((p for p in possible_locations if p.is_file()), None)
 
         # ── If Nova module found → load it ──
-        if file_path:
-            if (
-                file_path in interpreter.modules_loaded
-                and "ignore loaded module" not in env
-            ):
+        if file_path is not None:
+            if not ignore_cache and file_path in interpreter.modules_loaded:
                 return interpreter.modules_loaded[file_path]
+
             with open(file_path) as f:
                 source = f.read()
-            imported_interpreter = Interpreter(source, file_path)
-            imported_env = Environment(globals_env)
-            imported_env.define("exports", {})
+
+            imported = Interpreter(source, file_path)
+            imported.globals.define("exports", {})
+            imported.modules_loaded = interpreter.modules_loaded
             for k, v in env.items():
-                imported_env.define(k, v)
-            imported_env.localsOnly = True
+                imported.globals.define(k, v)
+            imported.globals.localsOnly = True
 
-            imported_interpreter.globals = imported_env
-            imported_interpreter.globals.define("__IS_MAIN__", False, True)
-            imported_interpreter.interpret()
+            imported.globals.define("__IS_MAIN__", False, True)
+            init_globals(imported, imported.globals)
+            imported.interpret()
 
-            result = {k: v for k, v in imported_env.get("exports").value.items()}
-            if "ignore loaded module" not in env:
+            result = dict(imported.globals.get("exports").value)
+            if not ignore_cache:
                 interpreter.modules_loaded[file_path] = result
             return result
 
-        # ── Fallback: Python import (LAST RESORT) ──
-        py_path = path.replace("/", ".")
+        py_path = (path[:-5] if path.endswith(".nova") else path).replace("/", ".")
+        try:
+            return _load_python(
+                py_path,
+                search_dirs=[interp_dir, pathlib.Path.cwd(), LIBS_PATH],
+            )
+        except Exception as e:
+            tried = "\n  ".join(str(x) for x in possible_locations)
+            raise RuntimeError(
+                f"Cannot find module: {path}\n"
+                f"Tried Nova:\n  {tried}\n"
+                f"Tried Python import: {py_path}\n"
+                f"Error: {e}",
+            )
+
+    def _load_python(py_path: str, search_dirs=()):
         if py_path in interpreter.modules_loaded:
             return interpreter.modules_loaded[py_path]
 
+        # Fast path: normal import (installed packages, anything already on sys.path)
         try:
             result = impLib(py_path)
             interpreter.modules_loaded[py_path] = result
             return result
-        except Exception as e:
-            raise RuntimeError(
-                f"Cannot find module: {path}\n"
-                f"Tried Nova:\n  "
-                + "\n  ".join([str(x) for x in possible_locations])
-                + f"\nTried Python import: {py_path}\nError: {e}",
-            )
+        except ImportError:
+            pass
+
+        # Fallback: find a matching .py alongside the loading Nova module
+        rel = pathlib.Path(*py_path.split("."))
+        for d in search_dirs:
+            for candidate in (
+                (pathlib.Path(d) / rel).with_suffix(".py"),
+                pathlib.Path(d) / rel / "__init__.py",
+            ):
+                candidate = candidate.resolve()
+                if not candidate.is_file():
+                    continue
+                spec = importlib.util.spec_from_file_location(py_path, candidate)
+                if spec is None or spec.loader is None:
+                    continue
+                mod = importlib.util.module_from_spec(spec)
+                sys.modules[py_path] = mod
+                try:
+                    spec.loader.exec_module(mod)
+                except Exception:
+                    sys.modules.pop(py_path, None)
+                    raise
+                interpreter.modules_loaded[py_path] = mod
+                return mod
+
+        raise ImportError(f"No module named {py_path!r}")
 
     class Runtime:
         @staticmethod
@@ -336,40 +375,42 @@ def init_globals(interpreter, globals_env):
         # Toggle from Nova with:  Runtime.showFunctionAst = true
         showFunctionAst = False
 
+        # interpreter turns nova's objects into dicts when passing back to python, so this is safe
 
-            # interpreter turns nova's objects into dicts when passing back to python, so this is safe
     class Fs:
         @staticmethod
-        def read(path:str, opts:dict[str,Any]|None=None):
+        def read(path: str, opts: dict[str, Any] | None = None):
             opts = opts or {"mode": "r", "encoding": "utf8"}
             with open(path, **opts) as f:
                 return f.read()
 
         @staticmethod
-        def open(path:str, opts:dict[str,Any]|None=None):
+        def open(path: str, opts: dict[str, Any] | None = None):
             opts = opts or {"mode": "r", "encoding": "utf8"}
             return open(path, **opts)
 
         @staticmethod
-        def write(path:str, contents, opts:dict[str,Any]|None=None):
+        def write(path: str, contents, opts: dict[str, Any] | None = None):
             opts = opts or {"mode": "w", "encoding": "utf8"}
             with open(path, **opts) as f:
                 f.write(contents)
+
         @staticmethod
-        def exists(path:str):
+        def exists(path: str):
             return pathlib.Path(path).exists()
 
         @staticmethod
-        def isdir(path:str):
+        def isdir(path: str):
             return pathlib.Path(path).is_dir()
 
         @staticmethod
-        def listdir(path:str="."):
+        def listdir(path: str = "."):
             return [p.name for p in pathlib.Path(path).iterdir()]
 
         @staticmethod
         def join(*parts):
             return str(pathlib.Path(*parts))
+
     class Uri:
         @staticmethod
         def decode(s):

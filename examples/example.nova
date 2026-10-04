@@ -354,12 +354,12 @@ undefined
 1.3333333333333333
 >
 */
-const div = def(a number, b number) = a / b
+const div = func(a number, b number) = a / b
 print("div(20,15):", div(20,15))
 
 // the "=" after the params is a short-hand for "return (expr) end"
 /*
-const div = def(a,b)
+const div = func(a,b)
     return a / b
 end
 */
@@ -589,7 +589,6 @@ print(z) // 1008
 // these are 'copies', the original object is unmutated
 
 // numerical stuff
-print(0u41) // A
 print(0b11000) // 24
 print(0x12) // 18
 
@@ -617,10 +616,10 @@ simpl(unpack {age: 18, name: "cross"})
 bag("simple", "bag", "of", "words")
 
 const obj = {
-    hi: def()
+    hi: func()
         print("Me and my cursed ObjectLiteral parser, somehow makes this work")
     end
-    bye: def()
+    bye: func()
         print("pretty neat")
     end
 }
@@ -632,7 +631,7 @@ func sample() = nil
 func text() = nil
 
 const obj2 = { // only required if you do this, aparently
-    why: def() end sample, text
+    why: func() end sample, text
 }
 print(obj2)
 /*
@@ -705,14 +704,14 @@ print(IsolatedBlock)
 IsolatedBlock.names()
 const random = load("py:random")
 func decorator(fn)=
-    def (compact args)
+    func(compact args)
         print("random:",random.randint(0, 200))
         return fn(unpack args)
     end
 
 var sampleDeco=
 @decorator
-def()
+func()
     print(random.randint(0, 200))
 end
 sampleDeco()
@@ -738,25 +737,25 @@ end
         return clone
 */
 print(stuff)
-stuff = stuff => def(val)=val*=2
+stuff = stuff => func(val)=val*=2
 
 const data = [24,512,21,124]
 var x = data.copy()
-x = x => def(value, index) = value *= (index + 1)
+x = x => func(value, index) = value *= (index + 1)
 print(x)
 print("--"*4)
 
 var y = data.copy()
-y => def(value, index) = value *= (index + 1)
+y => func(value, index) = value *= (index + 1)
 print(y)
 print("--"*4)
 
-print(data.copy() => def(value, index) = value *= (index + 1))
+print(data.copy() => func(value, index) = value *= (index + 1))
 print("--"*4)
 
-data => def(value, index) = print(value, index)
+data => func(value, index) = print(value, index)
 print("--"*4)
-data => def(value) = print(value)
+data => func(value) = print(value)
 /*
 [24, 1024, 63, 496]
 --------
@@ -777,7 +776,7 @@ data => def(value) = print(value)
 
 var data2 = [{x:1}, {x:2}]
 print(data2)
-data2 => def(v)= v.x *= 2
+data2 => func(v)= v.x *= 2
 print(data2)
 
 print(stuff, "number of stuff:", #stuff)
