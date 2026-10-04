@@ -1,0 +1,40 @@
+// tests/test_index_compound.nova — focused coverage for the $name[i] op= fix
+
+// Basic list compound ops
+var a = [100, 200, 300]
+a[0] += 1
+a[1] -= 50
+a[2] *= 2
+assert a[0] == 101, "list +="
+assert a[1] == 150, "list -="
+assert a[2] == 600, "list *="
+
+// Dict compound
+var d = {"x": 10, "y": 20}
+d["x"] += 5
+d.y -= 3
+assert d["x"] == 15, "dict +="
+assert d.y == 17, "dict property -="
+
+// Nested
+var m = [[0, 0], [0, 0]]
+m[1][0] += 9
+assert m[1][0] == 9, "nested list +="
+assert m[0][0] == 0, "other cell unchanged"
+
+// Chained property + index
+var rows = [{"v": 1}, {"v": 2}]
+rows[0].v *= 10
+assert rows[0].v == 10, "index then property *="
+
+// Out-of-range read on compound should error (caught)
+var boom = false
+test
+    var short = [1]
+    short[5] += 1
+failed e
+    boom = true
+end
+assert boom == true, "out-of-range compound raises"
+
+print("test_index_compound: OK")

@@ -1,0 +1,55 @@
+// tests/test_classes.nova — class, record, methods, properties, new
+
+class Point
+    var x
+    var y
+    func init(x, y)
+        self.x = x
+        self.y = y
+    end
+    func move(dx, dy)
+        self.x += dx
+        self.y += dy
+    end
+    func dist()
+        return math.sqrt(self.x * self.x + self.y * self.y)
+    end
+end
+
+var p = new Point(3, 4)
+assert p.x == 3, "class init x"
+assert p.y == 4, "class init y"
+p.move(1, 1)
+assert p.x == 4, "method mutates x"
+assert p.y == 5, "method mutates y"
+
+// record = singleton instance
+record origin
+    var x = 0
+    var y = 0
+    func move(dx, dy)
+        self.x += dx
+        self.y += dy
+    end
+end
+assert origin.x == 0, "record default"
+origin.move(10, 20)
+assert origin.x == 10, "record method"
+assert origin.y == 20, "record method y"
+
+// Property with getter/setter
+class Counter
+    private var n = 0
+    property value
+        func get() = $n
+        func set(v) = $n = v
+end
+
+var c = new Counter()
+assert c.value == 0, "property get"
+c.value = 42
+assert c.value == 42, "property set"
+c.value += 8
+assert c.value == 50, "property compound +="
+
+print("test_classes: OK")

@@ -1,0 +1,76 @@
+// tests/test_control.nova — if / while / for / break / continue / switch-style
+
+// --- If / elseif / else ---
+var temp = 25
+var msg = ""
+if (temp > 30)
+    msg = "hot"
+elseif (temp > 20)
+    msg = "warm"
+else
+    msg = "cold"
+end
+assert msg == "warm", "if-elseif-else"
+
+temp = 10
+if (temp > 30)
+    msg = "hot"
+elseif (temp > 20)
+    msg = "warm"
+else
+    msg = "cold"
+end
+assert msg == "cold", "else branch"
+
+// --- While ---
+var i = 0
+var sum = 0
+while (i < 5)
+    sum += i
+    i += 1
+end
+assert sum == 10, "while sum 0..4"
+assert i == 5, "while exit condition"
+
+// --- For numeric ---
+var acc = 0
+for j = 1, 5 do
+    acc += j
+end
+assert acc == 15, "for 1..5"
+
+acc = 0
+for k = 10, 2, -2 do
+    acc += k
+end
+assert acc == 30, "for step -2"  // 10+8+6+4+2
+
+// --- For-in ---
+var fruits = ["a", "b", "c"]
+var joined = ""
+for f in fruits do
+    joined += f
+end
+assert joined == "abc", "for-in array"
+
+// --- Break ---
+var n = 0
+while (true)
+    n += 1
+    if (n >= 3)
+        break
+    end
+end
+assert n == 3, "break from while"
+
+// --- Continue ---
+var even_sum = 0
+for x = 1, 6 do
+    if (x % 2 != 0)
+        continue
+    end
+    even_sum += x
+end
+assert even_sum == 12, "continue skips odds"  // 2+4+6
+
+print("test_control: OK")

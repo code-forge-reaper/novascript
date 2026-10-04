@@ -1,0 +1,49 @@
+// tests/test_functions.nova — functions, lambdas, return, higher-order
+
+func add(a, b)
+    return a + b
+end
+assert add(2, 3) == 5, "named func"
+
+func factorial(n)
+    if (n <= 1)
+        return 1
+    end
+    return n * factorial(n - 1)
+end
+assert factorial(5) == 120, "recursion"
+
+// Short-hand return style (from examples)
+const mul = func(a, b) = a * b
+assert mul(4, 5) == 20, "short func"
+
+// Nested / local
+func outer(x)
+    func inner(y)
+        return x + y
+    end
+    return inner(10)
+end
+assert outer(5) == 15, "closure"
+
+// Higher-order
+func apply(fn, v)
+    return fn(v)
+end
+assert apply(func(n) = n * 2, 7) == 14, "higher-order"
+
+// Multiple returns / early return
+func classify(n)
+    if (n < 0)
+        return "neg"
+    end
+    if (n == 0)
+        return "zero"
+    end
+    return "pos"
+end
+assert classify(-1) == "neg", "early return neg"
+assert classify(0) == "zero", "early return zero"
+assert classify(9) == "pos", "early return pos"
+
+print("test_functions: OK")

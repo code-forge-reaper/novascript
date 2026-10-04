@@ -15,7 +15,7 @@ from . import conf
 
 
 import uuid
-from collections.abc import Iterable, Callable
+from collections.abc import Iterable, Callable, Sequence, Mapping
 
 import copy
 
@@ -829,8 +829,24 @@ class Interpreter:
             if op != "=":
                 if isinstance(base, Environment):
                     current_value = base.get(final_key, target).value
-                elif isinstance(base, dict):
-                    current_value = base.get(final_key)
+                elif isinstance(base, Mapping):
+                    # dict and other mappings (supports str/int keys)
+                    try:
+                        current_value = base[final_key]
+                    except KeyError as e:
+                        raise NovaError(
+                            target,
+                            f"Cannot read key '{final_key}' for compound assignment: {e}",
+                        )
+                elif isinstance(base, Sequence) or hasattr(base, "__getitem__"):
+                    # lists, tuples, strings, custom indexable objects
+                    try:
+                        current_value = base[final_key]
+                    except (IndexError, KeyError, TypeError) as e:
+                        raise NovaError(
+                            target,
+                            f"Cannot read index/key '{final_key}' for compound assignment: {e}",
+                        )
                 else:
                     current_value = getattr(base, final_key, None)
                 if isinstance(current_value, Proxy):

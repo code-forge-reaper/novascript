@@ -1,0 +1,38 @@
+// tests/test_errors.nova — assert, test/failed, raise
+
+// Successful assert does nothing
+assert true, "should not fire"
+assert 1 == 1, "equality assert"
+
+// Intentional failure caught by test/failed
+var caught = false
+test
+    assert false, "expected failure"
+failed e
+    caught = true
+end
+assert caught == true, "test/failed caught assert"
+
+// raise()
+caught = false
+test
+    raise("boom")
+failed e
+    caught = true
+end
+assert caught == true, "caught raise"
+
+// Nested: outer succeeds even if inner fails and is handled
+var outer_ok = true
+test
+    test
+        assert false, "inner"
+    failed e
+        // swallowed
+    end
+failed e
+    outer_ok = false
+end
+assert outer_ok == true, "inner failure does not leak"
+
+print("test_errors: OK")

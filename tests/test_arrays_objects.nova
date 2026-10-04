@@ -1,0 +1,56 @@
+// tests/test_arrays_objects.nova — arrays, objects, indexing, compound index ops
+
+// --- Array literals & access ---
+var nums = [10, 20, 30, 40]
+assert len(nums) == 4, "array length"
+assert nums[0] == 10, "array index 0"
+assert nums[3] == 40, "array index 3"
+
+// Simple assignment into index
+nums[1] = 25
+assert nums[1] == 25, "array simple assign"
+
+// Compound assignment into index (the bug that was fixed)
+nums[1] -= 5
+assert nums[1] == 20, "array -= "
+nums[0] += 5
+assert nums[0] == 15, "array += "
+nums[2] *= 2
+assert nums[2] == 60, "array *= "
+nums[3] /= 2
+assert nums[3] == 20, "array /= "
+nums[1] %= 7
+assert nums[1] == 6, "array %= "
+
+// Nested arrays
+var nested = [[1, 2], [3, 4]]
+nested[0][1] += 5
+assert nested[0][1] == 7, "nested array compound"
+assert nested[1][0] == 3, "nested unchanged"
+
+// --- Object / dict style ---
+var obj = {"a": 5, "b": 10, "c": 15}
+assert obj["a"] == 5, "dict string key"
+assert obj.b == 10, "dict property access"
+
+obj["a"] -= 2
+assert obj["a"] == 3, "dict compound -="
+obj.b += 3
+assert obj.b == 13, "dict property compound +="
+obj["c"] *= 2
+assert obj["c"] == 30, "dict compound *="
+
+// --- Array of objects / mixed ---
+var people = [{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}]
+people[0].age += 1
+assert people[0].age == 31, "object-in-array compound"
+assert people[1]["name"] == "Bob", "mixed access"
+
+// --- Destructuring-ish / iteration helpers ---
+var total = 0
+for v in [1, 2, 3, 4] do
+    total += v
+end
+assert total == 10, "for-in array sum"
+
+print("test_arrays_objects: OK")

@@ -1,0 +1,72 @@
+// tests/test_misc.nova — matches, between, enum, map (=>), defer
+
+// --- between ---
+var count = 25
+assert count between [10, 40], "between inclusive range"
+assert !(count between [30, 40]), "between outside"
+
+// --- enum + matches ---
+const Color = enum {
+    Red
+    Green
+    Blue
+}
+using Color
+
+var chosen = Green
+var label = ""
+matches chosen do
+    Red:
+        label = "r"
+    end
+    Green:
+        label = "g"
+    end
+    Blue:
+        label = "b"
+    end
+    default
+        label = "?"
+    end
+end
+assert label == "g", "matches enum"
+
+// string matches
+var day = "Monday"
+var kind = ""
+matches day do
+    "Monday", "Tuesday":
+        kind = "early"
+    end
+    "Friday":
+        kind = "late"
+    end
+    default
+        kind = "other"
+    end
+end
+assert kind == "early", "matches string multi-case"
+
+// --- map operator => ---
+var data = [1, 2, 3]
+var doubled = data => func(v) = v * 2
+assert doubled[0] == 2, "map first"
+assert doubled[1] == 4, "map second"
+assert doubled[2] == 6, "map third"
+// original should be unchanged if => copies
+assert data[0] == 1, "map does not mutate source"
+
+// --- defer ---
+var order = ""
+test
+    order += "A"
+    defer
+        order += "C"
+    end
+    order += "B"
+failed e
+    // none
+end
+assert order == "ABC", "defer runs on scope exit"
+
+print("test_misc: OK")
