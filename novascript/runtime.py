@@ -1139,11 +1139,16 @@ class Interpreter:
                 raise NovaError(expr, f"Unknown unary operator: {expr.operator}")
 
         elif expr.type == "FuncCall":
-            self.callStack.append(expr.name)
+            # Evaluate the callee expression (Identifier, ArrayAccess, etc.)
+            callee = self.evaluate_expr(expr.callee, env)
+            name_for_stack = getattr(expr.callee, "name", str(expr.callee))
+            self.callStack.append(name_for_stack)
             try:
-                func = env.get(expr.name, expr).value
-                if not callable(func):
-                    raise NovaError(expr, f"{expr.name} is not a function")
+                if not callable(callee):
+                    raise NovaError(
+                        expr,
+                        f"{name_for_stack} is not a function (got {type(callee).__name__})",
+                    )
                 args = []
                 kwargs = {}
                 for arg in expr.arguments:
@@ -1163,13 +1168,13 @@ class Interpreter:
                     else:
                         v = self.evaluate_expr(arg, env)
                         args.append(v)
-                return func(*args, **kwargs)
+                return callee(*args, **kwargs)
             except Exception as E:
                 self.errorStack.append(
                     " " * len(self.callStack)
                     + f"- {expr.file}:{expr.line}:{expr.column}: "
                     + "Error while executing: "
-                    + expr.name
+                    + str(name_for_stack)
                 )
                 raise E
             finally:

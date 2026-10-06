@@ -1458,17 +1458,15 @@ class Tokenizer:
                     bracket_token.line,
                     bracket_token.column,
                 )
-            elif (
-                next_token.type == "operator"
-                and next_token.value == "("
-                and isinstance(expr, Identifier)
-            ):
-                # This handles direct function calls like `myFunc(arg)`
-                self.consume_token()  # consume "("
+            elif next_token.type == "operator" and next_token.value == "(":
+                # Call any expression: foo(…), some[thing](…), (expr)(…), etc.
+                call_token = self.consume_token()  # consume "("
                 args = self.parse_argument_list()
                 self.expect_token(")")
                 self.consume_token()  # consume ")"
-                expr = FuncCall(expr.name, args, expr.file, expr.line, expr.column)
+                expr = FuncCall(
+                    expr, args, call_token.file, call_token.line, call_token.column
+                )
             else:
                 break  # No more chained access/calls
         return expr
