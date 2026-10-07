@@ -91,10 +91,6 @@ contexts:
     - match: \b0[xX][0-9a-fA-F_]+\b
       scope: constant.numeric.hex.nova
 
-    # unicode literals: 0u41, 0u1F600
-    - match: \b0[uU][0-9a-fA-F_]+\b
-      scope: constant.character.unicode.nova
-
     # decimal / float
     - match: \b-?\d+(\.\d+)?\b
       scope: constant.numeric.nova
